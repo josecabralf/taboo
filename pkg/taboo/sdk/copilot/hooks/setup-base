@@ -1,0 +1,6 @@
+set -eux
+# Shell installer fetches the standalone executable from GitHub releases (no npm).
+# As root PREFIX defaults to /usr/local, so the binary lands in /usr/local/bin.
+export PREFIX=/usr/local
+curl -fsSL https://gh.io/copilot-install | bash
+copilot --version

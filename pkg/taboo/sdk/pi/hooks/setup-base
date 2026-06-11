@@ -1,0 +1,19 @@
+set -eux
+# Standalone release tarball (the curl installer is npm-backed, so we fetch the
+# prebuilt bundle directly). It unpacks to a self-contained pi/ dir whose binary
+# references sibling assets, so install the whole dir and symlink the launcher.
+arch=$(uname -m)
+case "$arch" in
+  x86_64 | amd64) asset=pi-linux-x64.tar.gz ;;
+  aarch64 | arm64) asset=pi-linux-arm64.tar.gz ;;
+  *)
+    echo "unsupported arch: $arch" >&2
+    exit 1
+    ;;
+esac
+curl -fsSL "https://github.com/earendil-works/pi/releases/latest/download/$asset" -o /tmp/pi.tar.gz
+mkdir -p /opt
+tar -xzf /tmp/pi.tar.gz -C /opt
+rm -f /tmp/pi.tar.gz
+ln -sf /opt/pi/pi /usr/local/bin/pi
+pi --version

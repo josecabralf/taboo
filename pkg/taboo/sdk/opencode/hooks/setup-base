@@ -1,0 +1,4 @@
+set -eux
+curl -fsSL https://opencode.ai/install | bash
+install -m 0755 "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
+opencode --version

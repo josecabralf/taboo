@@ -1,0 +1,5 @@
+set -eux
+# Native installer (npm package is deprecated); drops the launcher in ~/.local/bin.
+curl -fsSL https://claude.ai/install.sh | bash
+ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude
+claude --version
