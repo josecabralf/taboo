@@ -14,13 +14,27 @@ import (
 // fakeCommander records every invocation and can be programmed to fail
 // specific commands via errFn.
 type fakeCommander struct {
-	calls    []Cmd
-	errFn    func(c Cmd) error
-	stdoutFn func(c Cmd) string // programmed stdout for a matched call
+	calls     []Cmd
+	errFn     func(c Cmd) error
+	stdoutFn  func(c Cmd) string  // programmed stdout for a matched call
+	worktrees map[string]struct{} // branches already added, to model git's statefulness
 }
 
 func (f *fakeCommander) Run(_ context.Context, c Cmd) error {
 	f.calls = append(f.calls, c)
+	// Model the one piece of git statefulness the orchestrator depends on: a
+	// second `worktree add -b <branch>` for a branch already added fails, as
+	// real git does. Without this the fake would silently accept a re-add and
+	// hide a loop that re-creates the worktree every iteration.
+	if branch, ok := worktreeAddBranch(c); ok {
+		if _, exists := f.worktrees[branch]; exists {
+			return fmt.Errorf("fatal: a branch named %q already exists", branch)
+		}
+		if f.worktrees == nil {
+			f.worktrees = map[string]struct{}{}
+		}
+		f.worktrees[branch] = struct{}{}
+	}
 	if f.stdoutFn != nil && c.Stdout != nil {
 		if s := f.stdoutFn(c); s != "" {
 			_, _ = io.WriteString(c.Stdout, s)
@@ -62,6 +76,21 @@ func verbOf(c Cmd) string {
 		return c.Args[0]
 	}
 	return c.Name
+}
+
+// worktreeAddBranch reports the branch of a `git ... worktree add -b <branch>
+// <path>` invocation, matching worktreeAddArgs. The ok result is false for any
+// other call.
+func worktreeAddBranch(c Cmd) (string, bool) {
+	if c.Name != "git" {
+		return "", false
+	}
+	for i := 0; i+1 < len(c.Args); i++ {
+		if c.Args[i] == "-b" {
+			return c.Args[i+1], true
+		}
+	}
+	return "", false
 }
 
 func failOnVerb(verb string) func(Cmd) error {

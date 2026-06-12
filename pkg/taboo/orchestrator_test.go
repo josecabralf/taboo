@@ -22,7 +22,9 @@ func TestOrchestrator_SingleIterationByDefault(t *testing.T) {
 	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
-	res, err := o.Run(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest: RunRequest{Branch: "agent/x", Prompt: "go"},
+	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -44,9 +46,8 @@ func TestOrchestrator_LoopsToMaxIterations(t *testing.T) {
 	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
-	res, err := o.Run(context.Background(), RunRequest{
-		Branch:           "agent/x",
-		Prompt:           "go",
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:       RunRequest{Branch: "agent/x", Prompt: "go"},
 		MaxIterations:    3,
 		CompletionSignal: "DONE",
 	})
@@ -60,9 +61,15 @@ func TestOrchestrator_LoopsToMaxIterations(t *testing.T) {
 	if res.StopReason != StopMaxIterations {
 		t.Errorf("StopReason = %q, want %q", res.StopReason, StopMaxIterations)
 	}
-	// Each iteration is a full Runner.Run, so the agent execs once per loop.
+	// The agent re-execs once per iteration...
 	if got := fc.countVerb("exec"); got != 3 {
 		t.Errorf("exec count = %d, want 3 (one per iteration)", got)
+	}
+	// ...but the worktree is created ONCE and reused. A second `worktree add`
+	// would fail against real git (the fake now enforces this), so this guards
+	// against a loop that re-runs the full per-run setup every iteration.
+	if got := fc.countVerb("worktree"); got != 1 {
+		t.Errorf("worktree add count = %d, want 1 (Setup runs once, then Exec loops)", got)
 	}
 }
 
@@ -81,9 +88,8 @@ func TestOrchestrator_StopsEarlyOnSignal(t *testing.T) {
 	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
-	res, err := o.Run(context.Background(), RunRequest{
-		Branch:           "agent/x",
-		Prompt:           "go",
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:       RunRequest{Branch: "agent/x", Prompt: "go"},
 		MaxIterations:    5,
 		CompletionSignal: "TASK-DONE",
 	})
@@ -117,9 +123,8 @@ func TestOrchestrator_SignalMustMatchConfigured(t *testing.T) {
 	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
-	res, err := o.Run(context.Background(), RunRequest{
-		Branch:           "agent/x",
-		Prompt:           "go",
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:       RunRequest{Branch: "agent/x", Prompt: "go"},
 		MaxIterations:    2,
 		CompletionSignal: "TASK-DONE",
 	})
@@ -143,9 +148,8 @@ func TestOrchestrator_StopsOnRunnerError(t *testing.T) {
 	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
-	res, err := o.Run(context.Background(), RunRequest{
-		Branch:        "agent/x",
-		Prompt:        "go",
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:    RunRequest{Branch: "agent/x", Prompt: "go"},
 		MaxIterations: 3,
 	})
 	if err == nil {

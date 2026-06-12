@@ -1,12 +1,15 @@
 package taboo
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // StopReason explains why an orchestrated run's iteration loop ended.
 type StopReason string
 
 const (
-	// StopMaxIterations means the loop exhausted RunRequest.MaxIterations
+	// StopMaxIterations means the loop exhausted OrchestratedRequest.MaxIterations
 	// without seeing the completion signal.
 	StopMaxIterations StopReason = "max-iterations"
 	// StopSignal means the agent emitted the completion signal and the loop
@@ -14,8 +17,23 @@ const (
 	StopSignal StopReason = "signal"
 )
 
+// OrchestratedRequest describes a looped run: a single-run RunRequest plus the
+// loop's own knobs. These knobs live here rather than on RunRequest so the
+// single-run primitive (Runner.Run) keeps a clean contract.
+type OrchestratedRequest struct {
+	RunRequest
+	// MaxIterations bounds how many times the agent is re-run in the worktree
+	// (zero or negative = a single run).
+	MaxIterations int
+	// CompletionSignal is the sentinel watched for in the agent's stdout to stop
+	// the loop early (empty = no early stop).
+	CompletionSignal string
+}
+
 // OrchestratedResult reports the outcome of a looped run: the final iteration's
-// RunResult plus the loop's own bookkeeping.
+// RunResult plus the loop's own bookkeeping. Because every iteration shares one
+// worktree and the agent commits in place, the final Commit is the branch HEAD
+// after the last iteration.
 type OrchestratedResult struct {
 	RunResult
 	// Iterations is how many times the agent was run.
@@ -24,10 +42,10 @@ type OrchestratedResult struct {
 	StopReason StopReason
 }
 
-// Orchestrator composes a Runner into an iteration loop. Runner.Run remains the
-// single-iteration primitive; the Orchestrator re-runs it up to
-// RunRequest.MaxIterations, teeing each run's stdout through a SignalScanner so
-// it can stop early when the agent emits its completion signal.
+// Orchestrator composes a Runner into an iteration loop. It prepares the
+// worktree once via Runner.Setup, then re-runs the agent with Runner.Exec up to
+// MaxIterations, stopping early once the completion signal appears in the
+// agent's stdout.
 type Orchestrator struct {
 	runner *Runner
 }
@@ -37,27 +55,29 @@ func NewOrchestrator(runner *Runner) *Orchestrator {
 	return &Orchestrator{runner: runner}
 }
 
-// Run executes the agent up to req.MaxIterations times, stopping early once the
+// Run prepares the worktree once, then re-execs the agent up to
+// req.MaxIterations times in that same worktree, stopping early once the
 // completion signal appears in the agent's stdout.
-func (o *Orchestrator) Run(ctx context.Context, req RunRequest) (OrchestratedResult, error) {
+func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (OrchestratedResult, error) {
 	maxIter := req.MaxIterations
 	if maxIter < 1 {
 		maxIter = 1
 	}
 
-	var res OrchestratedResult
-	for i := 0; i < maxIter; i++ {
-		scanner := NewSignalScanner(req.CompletionSignal, req.Stdout)
-		iterReq := req
-		iterReq.Stdout = scanner
+	base, err := o.runner.Setup(ctx, req.RunRequest)
+	if err != nil {
+		return OrchestratedResult{RunResult: base}, err
+	}
 
-		rr, err := o.runner.Run(ctx, iterReq)
+	res := OrchestratedResult{RunResult: base}
+	for i := 0; i < maxIter; i++ {
+		rr, err := o.runner.Exec(ctx, req.RunRequest, base)
 		res.RunResult = rr
 		res.Iterations = i + 1
 		if err != nil {
 			return res, err
 		}
-		if scanner.Found() {
+		if req.CompletionSignal != "" && strings.Contains(rr.Output, req.CompletionSignal) {
 			res.StopReason = StopSignal
 			return res, nil
 		}
