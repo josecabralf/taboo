@@ -16,16 +16,11 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
 
-      - name: Set up LXD
-        uses: canonical/setup-lxd@main
-
-      - name: Install workshop
-        run: sudo snap install workshop --classic
-
-      - name: Launch workshop
-        run: workshop launch taboo
+      - name: Setup environment
+        uses: ./.github/actions/setup-env
 
       - name: Lint
         run: workshop run -- make lint

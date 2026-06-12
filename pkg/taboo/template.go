@@ -51,7 +51,7 @@ type plug struct {
 const workspaceTarget = "/workspace"
 
 // projectSDKRef returns the name used to reference an in-project SDK (one
-// shipped under .workshop/<name>/) in a definition's `sdks:` list. workshop
+// shipped under .workshop/<name>/) in a definition's `sdks:` list. Workshop
 // resolves "project-<name>" to the bare "<name>" used for remount qualifiers
 // and `info` output.
 func projectSDKRef(name string) string { return "project-" + name }

@@ -1,0 +1,24 @@
+name: Setup environment
+description: Installs dependencies and launches the workshop environment.
+
+runs:
+  using: composite
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: |
+        sudo snap install --channel=6/stable lxd
+        sudo snap install --classic workshop
+    - name: Initialise LXD
+      shell: bash
+      run: |
+        sudo lxd waitready --timeout=60
+        sudo lxd init --auto
+        # Docker (preinstalled on ubuntu-latest) sets the iptables FORWARD
+        # policy to DROP, which silently kills egress from LXD containers.
+        # Without this, apt/curl inside the workshop can't reach the network.
+        sudo iptables -P FORWARD ACCEPT
+    - name: Launch workshop
+      shell: bash
+      run: |
+        workshop launch --verbose

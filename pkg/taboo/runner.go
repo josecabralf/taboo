@@ -66,10 +66,10 @@ func (r *Runner) writeDefinition() error {
 		return err
 	}
 	path := r.definitionPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(out), 0o644)
+	return os.WriteFile(path, []byte(out), 0o600)
 }
 
 // seedSDK writes taboo's embedded agent SDK(s) into the project's .workshop
@@ -87,7 +87,7 @@ func (r *Runner) seedSDK() error {
 		}
 		dst := filepath.Join(r.cfg.ProjectDir, ".workshop", rel)
 		if d.IsDir() {
-			return os.MkdirAll(dst, 0o755)
+			return os.MkdirAll(dst, 0o750)
 		}
 		data, err := sdkFS.ReadFile(p)
 		if err != nil {
@@ -97,7 +97,7 @@ func (r *Runner) seedSDK() error {
 		if strings.Contains(rel, "/hooks/") {
 			mode = 0o755 // hook scripts must be executable
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 			return err
 		}
 		return os.WriteFile(dst, data, mode)
