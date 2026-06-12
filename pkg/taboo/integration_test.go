@@ -166,6 +166,13 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
+	// The runner captures the agent's exec stdout on RunResult.Output even when
+	// the caller supplies no Stdout writer of its own (the slice-2 feature).
+	if res.Output == "" {
+		t.Error("RunResult.Output is empty; agent stdout was not captured")
+	}
+	t.Logf("captured agent output (%d bytes):\n%s", len(res.Output), res.Output)
+
 	// The agent should have produced at least one commit beyond the seed.
 	out, err := exec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
 	if err != nil {

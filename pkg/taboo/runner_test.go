@@ -241,6 +241,62 @@ func TestRun_StreamsExecOutputToRequestWriters(t *testing.T) {
 	}
 }
 
+func TestRun_CapturesAgentOutput(t *testing.T) {
+	// The runner retains the agent's exec stdout on RunResult even when the
+	// caller supplies no Stdout writer of its own.
+	fc := &fakeCommander{
+		stdoutFn: func(c Cmd) string {
+			if verbOf(c) == "exec" {
+				return "agent did stuff\n"
+			}
+			return ""
+		},
+	}
+	cfg := testConfig(t)
+	cfg.AgentCmd = []string{"opencode", "run"}
+	r := New(cfg, fc)
+
+	res, err := r.Run(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if res.Output != "agent did stuff\n" {
+		t.Errorf("Output = %q, want %q", res.Output, "agent did stuff\n")
+	}
+}
+
+func TestRun_CapturesAndStreamsOutput(t *testing.T) {
+	// With a caller-supplied Stdout, the runner tees: the caller's writer and
+	// RunResult.Output both receive the agent's exec stdout.
+	var out strings.Builder
+	fc := &fakeCommander{
+		stdoutFn: func(c Cmd) string {
+			if verbOf(c) == "exec" {
+				return "tee me\n"
+			}
+			return ""
+		},
+	}
+	cfg := testConfig(t)
+	cfg.AgentCmd = []string{"opencode", "run"}
+	r := New(cfg, fc)
+
+	res, err := r.Run(context.Background(), RunRequest{
+		Branch: "agent/x", Prompt: "go", Stdout: &out,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if out.String() != "tee me\n" {
+		t.Errorf("streamed stdout = %q, want %q", out.String(), "tee me\n")
+	}
+	if res.Output != "tee me\n" {
+		t.Errorf("Output = %q, want %q", res.Output, "tee me\n")
+	}
+}
+
 func TestRun_CapturesCommit(t *testing.T) {
 	fc := &fakeCommander{
 		stdoutFn: func(c Cmd) string {
