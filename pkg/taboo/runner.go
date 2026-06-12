@@ -192,7 +192,7 @@ func (r *Runner) gitCapture(ctx context.Context, args []string) (string, error) 
 
 // ensureWorkshop launches the workshop if it does not already exist, otherwise
 // reuses it. Existence is probed with `workshop info`: a non-error means the
-// workshop is present and is reused (the launch is expensive — minutes — so it
+// workshop is present and is reused (the launch is expensive (minutes), so it
 // is amortized across runs).
 func (r *Runner) ensureWorkshop(ctx context.Context) error {
 	if err := r.workshop(ctx, infoArgs(r.cfg.ProjectDir, r.cfg.Workshop)); err == nil {

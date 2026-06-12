@@ -136,7 +136,7 @@ func TestEnsureWorkshop_PresentReuses(t *testing.T) {
 	}
 }
 
-// findCall returns the first recorded Cmd whose verb matches, or fails.
+// findCallN returns the nth (0-based) recorded Cmd whose verb matches, or fails.
 func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) Cmd {
 	t.Helper()
 	seen := 0

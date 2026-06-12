@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration tests exercise the real `workshop` CLI and LXD. They launch a
-// fresh workshop (which installs the agent SDK — minutes) and remove it after.
+// fresh workshop (which installs the agent SDK, taking minutes) and remove it after.
 //
 //	go test -tags integration ./pkg/taboo/ -run Integration -v
 //
@@ -24,7 +24,7 @@ import (
 // It deliberately avoids t.TempDir() (which lives under /tmp): taboo mounts the
 // repo's .git at its identical host path inside the workshop, and a target
 // under /tmp resolves to the container's tmpfs, where the bind mount silently
-// fails (the same class of problem as /run — see CONTEXT.md).
+// fails (the same class of problem as /run; see CONTEXT.md).
 func nonTmpDir(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
