@@ -120,11 +120,22 @@ func (r *Runner) worktreePath(branch string) string {
 	return filepath.Join(r.cfg.ProjectDir, "worktrees", safe)
 }
 
-// Run executes one agent run end-to-end: ensure the workshop exists, create a
-// fresh worktree on req.Branch, swap it (and the repo's .git) into the workshop
-// via stop/remount/start, then exec the agent. The agent commits in place, so
-// its commits land directly on the host branch through the bind-mount.
+// Run executes one agent run end-to-end: Setup the worktree, then Exec the
+// agent once in it. It is the single-run primitive. The Orchestrator splits
+// these steps to Setup once and Exec repeatedly into the same worktree.
 func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
+	res, err := r.Setup(ctx, req)
+	if err != nil {
+		return res, err
+	}
+	return r.Exec(ctx, req, res)
+}
+
+// Setup ensures the workshop exists, creates a fresh worktree on req.Branch, and
+// swaps it (and the repo's .git) into the workshop via stop/remount/start. It
+// runs once per worktree; the returned RunResult carries Branch + WorktreePath
+// for the subsequent Exec call(s).
+func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	res := RunResult{Branch: req.Branch}
 
 	if err := r.ensureWorkshop(ctx); err != nil {
@@ -154,10 +165,23 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 
 	// The workshop is ready with the worktree mounted: run caller-supplied
-	// setup hooks before handing control to the agent.
+	// setup hooks before handing control to the agent. This is the end of
+	// Setup, so hooks run once per worktree, before any Exec.
 	if err := r.runHooks(ctx, wt, req.Timeout, req.Stderr, req.Hooks.OnWorkshopReady); err != nil {
 		return res, fmt.Errorf("on-workshop-ready hook: %w", err)
 	}
+
+	return res, nil
+}
+
+// Exec runs the agent once in the worktree Setup prepared (res.WorktreePath),
+// then records the agent's stdout and the resulting branch HEAD on the returned
+// result. Calling it more than once re-runs the agent in place; because the
+// agent commits through the bind-mount, each Exec continues from the prior
+// iteration's commit. The base argument supplies Branch + WorktreePath from Setup.
+func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunResult, error) {
+	res := base
+	proj, ws := r.cfg.ProjectDir, r.cfg.Workshop
 
 	// Tee the agent's stdout into a runner-owned buffer so it is retained on
 	// RunResult, while still forwarding live to the caller's writer if any.
@@ -182,7 +206,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	// The agent committed in place through the bind-mount; capture the branch
 	// HEAD from the host worktree.
-	commit, err := r.gitCapture(ctx, revParseHeadArgs(wt))
+	commit, err := r.gitCapture(ctx, revParseHeadArgs(res.WorktreePath))
 	if err != nil {
 		return res, fmt.Errorf("rev-parse HEAD: %w", err)
 	}
