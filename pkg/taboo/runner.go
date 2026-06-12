@@ -155,7 +155,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	// The workshop is ready with the worktree mounted: run caller-supplied
 	// setup hooks before handing control to the agent.
-	if err := r.runHooks(ctx, req.Hooks.OnWorkshopReady); err != nil {
+	if err := r.runHooks(ctx, wt, req.Timeout, req.Stderr, req.Hooks.OnWorkshopReady); err != nil {
 		return res, fmt.Errorf("on-workshop-ready hook: %w", err)
 	}
 

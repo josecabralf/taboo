@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // indexOfVerb returns the index of the first recorded call whose verb matches,
@@ -43,21 +44,111 @@ func indexOfName(fc *fakeCommander, name string) int {
 }
 
 func TestHookCmd(t *testing.T) {
-	// Host hook: the bare executable, no workshop wrapping.
-	host := hookCmd("/proj", "ws", []string{"OPENROUTER_API_KEY"},
+	// Host hook: the bare executable, no workshop wrapping, run in the worktree.
+	host := hookCmd("/proj", "ws", "/wt", []string{"OPENROUTER_API_KEY"}, 0,
 		Hook{Command: []string{"make", "deps"}})
 	if host.Name != "make" || !slices.Equal(host.Args, []string{"deps"}) {
 		t.Errorf("host hook = %+v, want make [deps]", host)
 	}
+	if host.Dir != "/wt" {
+		t.Errorf("host hook Dir = %q, want /wt (the run's worktree)", host.Dir)
+	}
 
-	// In-workshop hook: a `workshop exec` carrying cwd and the env keys.
-	in := hookCmd("/proj", "ws", []string{"OPENROUTER_API_KEY"},
+	// In-workshop hook: a `workshop exec` carrying cwd, timeout, and the env keys.
+	in := hookCmd("/proj", "ws", "/wt", []string{"OPENROUTER_API_KEY"}, 30*time.Second,
 		Hook{Command: []string{"go", "build"}, InWorkshop: true})
 	want := execArgs("/proj", "ws",
-		execOptions{cwd: workspaceTarget, envKeys: []string{"OPENROUTER_API_KEY"}},
+		execOptions{cwd: workspaceTarget, timeout: 30 * time.Second, envKeys: []string{"OPENROUTER_API_KEY"}},
 		[]string{"go", "build"})
 	if in.Name != "workshop" || !slices.Equal(in.Args, want) {
 		t.Errorf("in-workshop hook = %+v, want workshop %v", in, want)
+	}
+}
+
+func TestRun_OnWorkshopReadyEmptyHookSkipped(t *testing.T) {
+	// A hook with no command is skipped, not run, and must not panic on the
+	// empty Command slice. A following non-empty hook still runs.
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	cfg.AgentCmd = []string{"opencode", "run"}
+	r := New(cfg, fc)
+
+	_, err := r.Run(context.Background(), RunRequest{
+		Branch: "agent/x",
+		Prompt: "do the task",
+		Hooks: Hooks{
+			OnWorkshopReady: []Hook{
+				{Command: nil},                   // skipped
+				{Command: []string{"real-hook"}}, // runs
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if idx := indexOfName(fc, "real-hook"); idx < 0 {
+		t.Errorf("non-empty hook after an empty one did not run; verbs=%v", fc.verbs())
+	}
+}
+
+func TestRun_OnWorkshopReadyHookOutputWiredToRunStderr(t *testing.T) {
+	// Hook stdout/stderr are wired to the run's Stderr so setup output and
+	// failures are diagnosable rather than discarded.
+	var errBuf strings.Builder
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	cfg.AgentCmd = []string{"opencode", "run"}
+	r := New(cfg, fc)
+
+	_, err := r.Run(context.Background(), RunRequest{
+		Branch: "agent/x",
+		Prompt: "do the task",
+		Stderr: &errBuf,
+		Hooks: Hooks{
+			OnWorkshopReady: []Hook{{Command: []string{"setup"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	idx := indexOfName(fc, "setup")
+	if idx < 0 {
+		t.Fatalf("hook not run; verbs=%v", fc.verbs())
+	}
+	if got := fc.calls[idx]; got.Stdout != &errBuf || got.Stderr != &errBuf {
+		t.Errorf("hook output not wired to run Stderr: stdout=%v stderr=%v", got.Stdout, got.Stderr)
+	}
+}
+
+func TestRun_OnWorkshopReadyInWorkshopHookHonorsTimeout(t *testing.T) {
+	// When the run is time-bounded, an in-workshop hook carries --timeout so it
+	// cannot hang the run before the agent execs.
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	cfg.AgentCmd = []string{"opencode", "run"}
+	r := New(cfg, fc)
+
+	_, err := r.Run(context.Background(), RunRequest{
+		Branch:  "agent/x",
+		Prompt:  "do the task",
+		Timeout: 30 * time.Second,
+		Hooks: Hooks{
+			OnWorkshopReady: []Hook{
+				{Command: []string{"go", "mod", "download"}, InWorkshop: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	idx := indexOfExecContaining(fc, "download")
+	if idx < 0 {
+		t.Fatalf("in-workshop hook not run; verbs=%v", fc.verbs())
+	}
+	if !slices.Contains(fc.calls[idx].Args, "--timeout") {
+		t.Errorf("in-workshop hook missing --timeout: %v", fc.calls[idx].Args)
 	}
 }
 

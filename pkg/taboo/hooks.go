@@ -3,6 +3,8 @@ package taboo
 import (
 	"context"
 	"fmt"
+	"io"
+	"time"
 )
 
 // Hook is a single setup command run at a lifecycle point. By default it runs
@@ -18,34 +20,49 @@ type Hook struct {
 
 // Hooks groups the lifecycle hook points a run can supply.
 type Hooks struct {
-	// OnWorkshopReady run after the workshop is started with the run's worktree
-	// mounted, but before the agent execs — the point to prepare the
+	// OnWorkshopReady hooks run after the workshop is started with the run's
+	// worktree mounted, but before the agent execs. Use them to prepare the
 	// environment the agent will see.
 	OnWorkshopReady []Hook
 }
 
 // hookCmd builds the Cmd that runs h, either on the host or inside the
-// workshop. In-workshop hooks inherit cwd /workspace and the agent's credential
-// env keys so setup commands run with the same context as the agent. Pure.
-func hookCmd(proj, ws string, envKeys []string, h Hook) Cmd {
+// workshop. In-workshop hooks inherit cwd /workspace, the run's timeout, and the
+// agent's credential env keys so setup commands run with the same context as the
+// agent. Host hooks run in the run's worktree. Pure.
+func hookCmd(proj, ws, worktree string, envKeys []string, timeout time.Duration, h Hook) Cmd {
 	if h.InWorkshop {
-		opts := execOptions{cwd: workspaceTarget, envKeys: envKeys}
+		opts := execOptions{cwd: workspaceTarget, timeout: timeout, envKeys: envKeys}
 		return Cmd{Name: "workshop", Args: execArgs(proj, ws, opts, h.Command)}
 	}
-	return Cmd{Name: h.Command[0], Args: h.Command[1:]}
+	return Cmd{Name: h.Command[0], Args: h.Command[1:], Dir: worktree}
 }
 
-// runHooks runs hooks in order through the Commander seam. A failure stops the
-// sequence and is returned with context identifying the offending hook.
-func (r *Runner) runHooks(ctx context.Context, hooks []Hook) error {
+// runHooks runs hooks in order through the Commander seam, host hooks in the
+// run's worktree and each hook bounded by the run timeout. Hook output goes to
+// out (typically the run's stderr) so setup failures are diagnosable. A failure
+// stops the sequence and is returned with context identifying the offending hook.
+func (r *Runner) runHooks(ctx context.Context, worktree string, timeout time.Duration, out io.Writer, hooks []Hook) error {
 	for i, h := range hooks {
 		if len(h.Command) == 0 {
 			continue
 		}
-		cmd := hookCmd(r.cfg.ProjectDir, r.cfg.Workshop, r.cfg.EnvKeys, h)
-		if err := r.cmd.Run(ctx, cmd); err != nil {
+		cmd := hookCmd(r.cfg.ProjectDir, r.cfg.Workshop, worktree, r.cfg.EnvKeys, timeout, h)
+		cmd.Stdout, cmd.Stderr = out, out
+		if err := r.runHook(ctx, timeout, cmd); err != nil {
 			return fmt.Errorf("hook %d %v: %w", i, h.Command, err)
 		}
 	}
 	return nil
+}
+
+// runHook runs a single hook command, bounding it by timeout when set so a
+// hanging hook cannot stall the run before the agent execs.
+func (r *Runner) runHook(ctx context.Context, timeout time.Duration, cmd Cmd) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	return r.cmd.Run(ctx, cmd)
 }
