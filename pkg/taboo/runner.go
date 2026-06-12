@@ -38,6 +38,7 @@ type RunResult struct {
 	Branch       string
 	WorktreePath string
 	Commit       string // HEAD of the branch after the agent ran (set in slice 6)
+	Output       string // captured agent exec stdout (stderr is not retained)
 }
 
 // Runner orchestrates agent runs in a taboo-managed workshop.
@@ -150,17 +151,26 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		return res, fmt.Errorf("start: %w", err)
 	}
 
+	// Tee the agent's stdout into a runner-owned buffer so it is retained on
+	// RunResult, while still forwarding live to the caller's writer if any.
+	var captured strings.Builder
+	stdout := io.Writer(&captured)
+	if req.Stdout != nil {
+		stdout = io.MultiWriter(&captured, req.Stdout)
+	}
+
 	command := append(slices.Clone(r.cfg.AgentCmd), req.Prompt)
 	opts := execOptions{cwd: workspaceTarget, timeout: req.Timeout, envKeys: r.cfg.EnvKeys}
 	execCmd := Cmd{
 		Name:   "workshop",
 		Args:   execArgs(proj, ws, opts, command),
-		Stdout: req.Stdout,
+		Stdout: stdout,
 		Stderr: req.Stderr,
 	}
 	if err := r.cmd.Run(ctx, execCmd); err != nil {
 		return res, fmt.Errorf("exec agent: %w", err)
 	}
+	res.Output = captured.String()
 
 	// The agent committed in place through the bind-mount; capture the branch
 	// HEAD from the host worktree.

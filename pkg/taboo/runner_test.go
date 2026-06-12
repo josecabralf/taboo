@@ -241,6 +241,49 @@ func TestRun_StreamsExecOutputToRequestWriters(t *testing.T) {
 	}
 }
 
+func TestRun_CapturesExecStdout(t *testing.T) {
+	// The runner retains the agent's exec stdout on RunResult.Output. When the
+	// caller also supplies a Stdout writer, it tees: both the caller's writer
+	// and RunResult.Output receive the output.
+	for _, tc := range []struct {
+		name   string
+		stream bool
+	}{
+		{"no caller writer", false},
+		{"tees to caller writer", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			fc := &fakeCommander{
+				stdoutFn: func(c Cmd) string {
+					if verbOf(c) == "exec" {
+						return "agent did stuff\n"
+					}
+					return ""
+				},
+			}
+			cfg := testConfig(t)
+			cfg.AgentCmd = []string{"opencode", "run"}
+
+			req := RunRequest{Branch: "agent/x", Prompt: "go"}
+			if tc.stream {
+				req.Stdout = &out
+			}
+			res, err := New(cfg, fc).Run(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			if res.Output != "agent did stuff\n" {
+				t.Errorf("Output = %q, want %q", res.Output, "agent did stuff\n")
+			}
+			if tc.stream && out.String() != "agent did stuff\n" {
+				t.Errorf("streamed stdout = %q, want %q", out.String(), "agent did stuff\n")
+			}
+		})
+	}
+}
+
 func TestRun_CapturesCommit(t *testing.T) {
 	fc := &fakeCommander{
 		stdoutFn: func(c Cmd) string {
