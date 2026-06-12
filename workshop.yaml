@@ -1,0 +1,9 @@
+name: taboo
+base: ubuntu@24.04
+sdks:
+  - name: go
+    channel: 1.26/stable
+  - name: project-taboo
+actions:
+  make: |
+    make "$@"

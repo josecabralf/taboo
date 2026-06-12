@@ -136,7 +136,7 @@ func TestEnsureWorkshop_PresentReuses(t *testing.T) {
 	}
 }
 
-// findCall returns the first recorded Cmd whose verb matches, or fails.
+// findCallN returns the nth (0-based) recorded Cmd whose verb matches, or fails.
 func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) Cmd {
 	t.Helper()
 	seen := 0
@@ -175,17 +175,18 @@ func TestRun_PerRunSequence(t *testing.T) {
 	}
 
 	// Two-mount rule: workspace -> the worktree; gitcommon -> the repo's .git.
-	wsRemount := fc.findCallN(t, "remount", 0)
-	if src := wsRemount.Args[len(wsRemount.Args)-1]; src != res.WorktreePath {
-		t.Errorf("workspace remount source = %q, want worktree path %q", src, res.WorktreePath)
+	// Assert the whole remount argv against the builder the production path uses
+	// (its flag layout is pinned by TestWorkshopArgs), so this test stays about
+	// wiring the right plug+source rather than positional argument shape.
+	wantWs := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.SDK, "workspace", res.WorktreePath)
+	if got := fc.findCallN(t, "remount", 0).Args; !slices.Equal(got, wantWs) {
+		t.Errorf("workspace remount args =\n  %v\nwant\n  %v", got, wantWs)
 	}
-	if tgt := wsRemount.Args[len(wsRemount.Args)-2]; tgt != "taboo-run/opencode:workspace" {
-		t.Errorf("workspace remount target = %q", tgt)
-	}
-	gcRemount := fc.findCallN(t, "remount", 1)
-	wantGit := "/home/dev/repos/myproject/.git"
-	if src := gcRemount.Args[len(gcRemount.Args)-1]; src != wantGit {
-		t.Errorf("gitcommon remount source = %q, want %q", src, wantGit)
+	// The gitcommon source is the host .git absolute path, hard-coded here as
+	// the load-bearing half of the two-mount rule.
+	wantGc := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.SDK, "gitcommon", "/home/dev/repos/myproject/.git")
+	if got := fc.findCallN(t, "remount", 1).Args; !slices.Equal(got, wantGc) {
+		t.Errorf("gitcommon remount args =\n  %v\nwant\n  %v", got, wantGc)
 	}
 
 	// The worktree is created on the requested branch.

@@ -33,7 +33,9 @@ type execCommander struct{}
 func NewExecCommander() Commander { return execCommander{} }
 
 func (execCommander) Run(ctx context.Context, c Cmd) error {
-	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	// Running caller-supplied commands is this type's entire purpose; the
+	// command and args originate from trusted definition config, not end users.
+	cmd := exec.CommandContext(ctx, c.Name, c.Args...) // #nosec G204
 	cmd.Dir = c.Dir
 	cmd.Stdin = c.Stdin
 	cmd.Stdout = c.Stdout

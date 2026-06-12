@@ -1,0 +1,73 @@
+# .golangci.yml
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+output:
+  formats:
+    text:
+      colors: true
+  sort-order:
+    - linter
+    - severity
+    - file
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/josecabralf/taboo
+
+linters:
+  enable:
+    - misspell        # Catches common spelling mistakes in comments/strings
+    - cyclop          # Cyclomatic complexity
+    - gocognit        # Cognitive complexity
+    - maintidx        # Maintainability index
+    - gosec           # Security-oriented checks (G*)
+    - bodyclose       # Ensures HTTP response bodies are closed
+    - godot           # Checks comment punctuation
+    - whitespace      # Flags unnecessary blank lines
+    - thelper         # Enforces t.Helper() in test helpers
+    - tparallel       # Detects missing t.Parallel() calls
+
+  settings:
+    misspell:
+      locale: US
+
+    cyclop:
+      max-complexity: 15
+
+    gocognit:
+      min-complexity: 20
+
+    gosec:
+      config:
+        global:
+          audit: true
+
+    godot:
+      scope: declarations
+      capital: true
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - cyclop
+          - gocognit
+          - gosec
+          - errcheck
+          - maintidx
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 10
+  fix: false

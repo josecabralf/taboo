@@ -1,13 +1,13 @@
 # taboo
 
 A Go library that orchestrates AI coding agents inside Canonical **workshop**
-environments — giving each agent an isolated, reproducible dev sandbox, with the
-agent's commits landing back on the host git repository.
+environments. Each agent gets an isolated, reproducible dev sandbox, and its
+commits land back on the host git repository.
 
 taboo is to [workshop](../workshop) roughly what
 [sandcastle](../sandcastle) is to Docker/Firecracker: a thin orchestration layer
 that handles sandbox lifecycle, the agent's working directory, agent invocation,
-and result capture. The difference is the substrate — taboo builds on workshop's
+and result capture. The difference is the substrate. taboo builds on workshop's
 LXD-backed, SDK-driven environments instead of containers/microVMs, and is
 written in Go instead of TypeScript.
 
@@ -32,8 +32,8 @@ still pending.
 
 ### Integration: shell out to the `workshop` snap CLI
 
-taboo drives workshop by invoking the `workshop` binary installed by its snap —
-**not** by importing workshop's Go `client/` package, and **not** by speaking the
+taboo drives workshop by invoking the `workshop` binary installed by its snap. It
+does **not** import workshop's Go `client/` package, and does **not** speak the
 REST socket directly.
 
 Rationale:
@@ -44,7 +44,7 @@ Rationale:
 - **The CLI is the most stable, documented contract** workshop offers (it
   auto-generates CLI reference docs). It is *more* stable than the raw REST
   socket, not less.
-- **Decoupled release trains** — taboo follows workshop's published CLI, nothing
+- **Decoupled release trains.** taboo follows workshop's published CLI, nothing
   internal.
 
 The load-bearing command is `workshop exec`, which provides everything an agent
@@ -92,7 +92,7 @@ the worktree for host-side git — rejected.) Implication: the git-common mount'
 `workshop-target` is **per-repo** (it equals the host `.git` path), so it is
 templated into `workshop.yaml` per repo, not fixed. This couples a persistent
 workshop to one repo unless all managed repos live under a single host parent
-that is mounted at its identical path — revisit when persistent-reuse-across-repos
+that is mounted at its identical path. Revisit this when persistent-reuse-across-repos
 is built.
 
 **Mount-plug mechanics (verified — risk #2).** A `mount` plug is declared
@@ -103,8 +103,8 @@ then repoints. taboo owns this `workshop.yaml` template. Two `remount` caveats:
 
 - `remount` is atomic **only** when the new source is empty / non-existent and on
   the same filesystem as the current source. A worktree is non-empty, so the
-  per-run swap is **`stop → remount → start`** (seconds, not the minutes a launch
-  costs) — not a live swap.
+  per-run swap is **`stop → remount → start`**, not a live swap. It takes seconds,
+  not the minutes a launch costs.
 - Adding a new plug to a running workshop requires a `refresh`.
 - **Mount targets must not resolve to a volatile tmpfs inside the workshop.** A
   target under `/run` *or* `/tmp` silently fails to mount. Because the
@@ -149,7 +149,7 @@ be baked in via an SDK (or otherwise survive reprovisioning), not installed at
 runtime. Only bind-mounts (worktree, git-common, sessions, secrets) survive a
 `stop`/`refresh`. *(The spike proved the agent path end-to-end by installing
 OpenCode immediately after the final `start`, with no further `stop`/`refresh`;
-that is a spike shortcut, not the product shape — the product ships an agent
+that is a spike shortcut, not the product shape. The product ships an agent
 SDK.)*
 
 **Confirmed agent (spike):** OpenCode (`opencode run -m <provider/model>`,
@@ -159,7 +159,7 @@ authenticates from `OPENROUTER_API_KEY` in the env alone (no `auth login`). Two
 operational notes: opencode's auto-title feature makes a side call to a small
 model (failed harmlessly under an OpenRouter privacy-policy guardrail without
 blocking the run), and qwen occasionally emits a malformed tool call that opencode
-rejects and retries — neither blocked completion.
+rejects and retries. Neither blocked completion.
 
 ### Agent auth: env at exec time, never persisted
 
@@ -191,7 +191,7 @@ The **full sandcastle feature set is the target spec**, built iteratively. See
 
 ## Build order
 
-Tracer-bullet first — the walking skeleton proves the entire risk surface before
+Tracer-bullet first. The walking skeleton proves the entire risk surface before
 any feature work.
 
 1. ✅ **Walking skeleton — PROVEN (CLI spike).** Templated a `workshop.yaml`
@@ -204,7 +204,7 @@ any feature work.
    real Go library `pkg/taboo`** (deep `Runner.Run`, `Commander` seam, embedded
    agent SDK), test-first: 17 unit tests on a fake `Commander`, plus a build-tagged
    integration test (`go test -tags integration`) that runs the whole path against
-   real workshop — a deterministic shell agent's commit lands on the host branch.
+   real workshop: a deterministic shell agent's commit lands on the host branch.
    A second integration test exercises the real OpenCode agent when
    `OPENROUTER_API_KEY` is set.
 2. **Iteration loop + completion-signal** early stop.
@@ -243,7 +243,7 @@ the walking skeleton (build step 1) exists to prove.
      used for the `remount <ws>/opencode:<plug>` qualifier and in `info`.
    - **Survives the per-run loop (the whole point of agent-as-SDK):** the baked
      binary is still present after `stop → start`. Measured: **stop ≈ 2 s, start
-     ≈ 3.6 s** — the per-run swap really is seconds, as assumed.
+     ≈ 3.6 s**. The per-run swap really is seconds, as assumed.
 3. **Configurable session/home path.** Session redirect depends on each agent
    honoring a configurable session/home location (e.g. `CLAUDE_CONFIG_DIR`).
    Verify per agent.

@@ -51,7 +51,7 @@ type plug struct {
 const workspaceTarget = "/workspace"
 
 // projectSDKRef returns the name used to reference an in-project SDK (one
-// shipped under .workshop/<name>/) in a definition's `sdks:` list. workshop
+// shipped under .workshop/<name>/) in a definition's `sdks:` list. Workshop
 // resolves "project-<name>" to the bare "<name>" used for remount qualifiers
 // and `info` output.
 func projectSDKRef(name string) string { return "project-" + name }
@@ -59,7 +59,7 @@ func projectSDKRef(name string) string { return "project-" + name }
 // gitCommonTarget is the in-workshop mount target for the repo's main .git.
 // It must equal the host .git absolute path so a linked worktree's .git
 // pointer resolves identically inside and outside the workshop (the two-mount
-// rule — see CONTEXT.md).
+// rule; see CONTEXT.md).
 func gitCommonTarget(repoPath string) string {
 	return filepath.Join(repoPath, ".git")
 }
