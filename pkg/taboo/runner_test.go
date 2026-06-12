@@ -78,9 +78,9 @@ func verbOf(c Cmd) string {
 	return c.Name
 }
 
-// worktreeAddBranch reports the branch of a `git ... worktree add -b <branch>
-// <path>` invocation, matching worktreeAddArgs. The ok result is false for any
-// other call.
+// worktreeAddBranch reports the branch of a `git -C <repo> worktree add -b
+// <branch> <path>` invocation, matching worktreeAddArgs. The ok result is
+// false for any other call.
 func worktreeAddBranch(c Cmd) (string, bool) {
 	if c.Name != "git" {
 		return "", false
