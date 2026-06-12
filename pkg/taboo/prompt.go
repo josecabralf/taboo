@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -17,10 +18,12 @@ var placeholderRe = regexp.MustCompile(`\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 func Substitute(tmpl string, vars map[string]string) (string, error) {
 	var missing []string
 	out := placeholderRe.ReplaceAllStringFunc(tmpl, func(match string) string {
-		name := placeholderRe.FindStringSubmatch(match)[1]
+		name := match[2 : len(match)-2] // the regex guarantees the {{ }} wrapper
 		val, ok := vars[name]
 		if !ok {
-			missing = append(missing, name)
+			if !slices.Contains(missing, name) {
+				missing = append(missing, name)
+			}
 			return match
 		}
 		return val
@@ -49,6 +52,11 @@ func NewPromptTemplate(cmd Commander, project, ws string) *PromptTemplate {
 // Resolve produces the final prompt the agent receives: it substitutes {{VAR}}
 // placeholders (pure) and then expands shell expressions inside the workshop. A
 // substitution error short-circuits before any workshop call.
+//
+// Substitution happens before expansion, so a substituted value is itself
+// subject to the shell: a value containing $, a backtick, or a quote is
+// interpreted, not inserted literally (e.g. {{P}}="$100" expands $1, not the
+// literal "$100"). Pass vars that are trusted, literal text.
 func (p *PromptTemplate) Resolve(ctx context.Context, tmpl string, vars map[string]string) (string, error) {
 	substituted, err := Substitute(tmpl, vars)
 	if err != nil {
@@ -83,6 +91,11 @@ func (p *PromptTemplate) Expand(ctx context.Context, prompt string) (string, err
 // escaped so the literal text cannot break out of the quoting, while `$` is
 // deliberately left intact so expansion happens.
 func shellExpandLine(prompt string) string {
-	esc := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(prompt)
-	return `printf '%s' "` + esc + `"`
+	return `printf '%s' "` + shellQuoteEscaper.Replace(prompt) + `"`
 }
+
+// shellQuoteEscaper neutralizes the two characters that could break literal
+// text out of the double-quoted printf argument: a backslash (doubled so it
+// stays literal) and a double-quote (escaped so it cannot close the string).
+// `$` and backtick are deliberately left untouched so expansion still happens.
+var shellQuoteEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`)

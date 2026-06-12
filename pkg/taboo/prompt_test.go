@@ -122,6 +122,24 @@ func TestExpand_EscapesQuotesButKeepsExpansion(t *testing.T) {
 	}
 }
 
+func TestExpand_EscapesTrailingBackslash(t *testing.T) {
+	fc := &fakeCommander{}
+	pt := NewPromptTemplate(fc, "/proj", "taboo-run")
+
+	// A prompt ending in a backslash is the breakout case: unescaped, the
+	// trailing \ would escape the closing quote and let the literal text run on
+	// past it. Doubling \ -> \\ keeps it literal and the quoting intact.
+	if _, err := pt.Expand(context.Background(), `path\`); err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+
+	line := fc.findCallN(t, "exec", 0).Args
+	shellLine := line[len(line)-1]
+	if want := `printf '%s' "path\\"`; shellLine != want {
+		t.Errorf("shell line = %q, want %q (trailing backslash doubled)", shellLine, want)
+	}
+}
+
 func TestResolve_SubstitutionErrorSkipsWorkshop(t *testing.T) {
 	fc := &fakeCommander{}
 	pt := NewPromptTemplate(fc, "/proj", "taboo-run")
