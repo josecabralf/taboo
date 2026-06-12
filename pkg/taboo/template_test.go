@@ -25,7 +25,7 @@ func TestRenderDefinition_ProducesTwoMountPlugsOnAgentSDK(t *testing.T) {
 	cfg := Config{
 		Workshop: "taboo-run",
 		Base:     "ubuntu@24.04",
-		SDK:      "opencode",
+		Agent:    OpenCode(openCodeModel),
 		RepoPath: "/home/dev/repos/myproject",
 	}
 

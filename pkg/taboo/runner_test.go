@@ -107,7 +107,7 @@ func testConfig(t *testing.T) Config {
 	return Config{
 		Workshop:   "taboo-run",
 		Base:       "ubuntu@24.04",
-		SDK:        "opencode",
+		Agent:      OpenCode(openCodeModel),
 		RepoPath:   "/home/dev/repos/myproject",
 		ProjectDir: t.TempDir(),
 	}
@@ -139,11 +139,11 @@ func TestEnsureWorkshop_AbsentLaunches(t *testing.T) {
 	}
 
 	// The agent SDK must be seeded so the "project-opencode" reference resolves.
-	sdkYAML := filepath.Join(cfg.ProjectDir, ".workshop", cfg.SDK, "sdk.yaml")
+	sdkYAML := filepath.Join(cfg.ProjectDir, ".workshop", cfg.Agent.Name(), "sdk.yaml")
 	if _, err := os.Stat(sdkYAML); err != nil {
 		t.Errorf("agent SDK not seeded: %v", err)
 	}
-	hook := filepath.Join(cfg.ProjectDir, ".workshop", cfg.SDK, "hooks", "setup-base")
+	hook := filepath.Join(cfg.ProjectDir, ".workshop", cfg.Agent.Name(), "hooks", "setup-base")
 	if info, err := os.Stat(hook); err != nil {
 		t.Errorf("setup-base hook not seeded: %v", err)
 	} else if info.Mode().Perm()&0o111 == 0 {
@@ -184,8 +184,6 @@ func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) Cmd {
 func TestRun_PerRunSequence(t *testing.T) {
 	fc := &fakeCommander{errFn: failOnVerb("info")} // workshop absent -> launches
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run", "--log-level", "ERROR", "-m", "openrouter/qwen/qwen3-coder-plus"}
-	cfg.EnvKeys = []string{"OPENROUTER_API_KEY"}
 	r := New(cfg, fc)
 
 	res, err := r.Run(context.Background(), RunRequest{
@@ -207,13 +205,13 @@ func TestRun_PerRunSequence(t *testing.T) {
 	// Assert the whole remount argv against the builder the production path uses
 	// (its flag layout is pinned by TestWorkshopArgs), so this test stays about
 	// wiring the right plug+source rather than positional argument shape.
-	wantWs := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.SDK, "workspace", res.WorktreePath)
+	wantWs := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.Agent.Name(), "workspace", res.WorktreePath)
 	if got := fc.findCallN(t, "remount", 0).Args; !slices.Equal(got, wantWs) {
 		t.Errorf("workspace remount args =\n  %v\nwant\n  %v", got, wantWs)
 	}
 	// The gitcommon source is the host .git absolute path, hard-coded here as
 	// the load-bearing half of the two-mount rule.
-	wantGc := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.SDK, "gitcommon", "/home/dev/repos/myproject/.git")
+	wantGc := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.Agent.Name(), "gitcommon", "/home/dev/repos/myproject/.git")
 	if got := fc.findCallN(t, "remount", 1).Args; !slices.Equal(got, wantGc) {
 		t.Errorf("gitcommon remount args =\n  %v\nwant\n  %v", got, wantGc)
 	}
@@ -251,7 +249,6 @@ func TestRun_StreamsExecOutputToRequestWriters(t *testing.T) {
 		},
 	}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -293,7 +290,6 @@ func TestRun_CapturesExecStdout(t *testing.T) {
 				},
 			}
 			cfg := testConfig(t)
-			cfg.AgentCmd = []string{"opencode", "run"}
 
 			req := RunRequest{Branch: "agent/x", Prompt: "go"}
 			if tc.stream {
@@ -324,7 +320,6 @@ func TestRun_CapturesCommit(t *testing.T) {
 		},
 	}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	res, err := r.Run(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
@@ -344,5 +339,48 @@ func TestRun_CapturesCommit(t *testing.T) {
 	verbs := fc.verbs()
 	if verbs[len(verbs)-1] != "rev-parse" {
 		t.Errorf("rev-parse should be last; sequence = %v", verbs)
+	}
+}
+
+// stdinProfile is a minimal AgentProfile that delivers the prompt on stdin (as
+// the Claude/Codex/Pi agents do), used to exercise the Exec stdin path that
+// OpenCode — which delivers the prompt in argv — leaves untaken.
+type stdinProfile struct{}
+
+func (stdinProfile) Name() string { return "opencode" }
+func (stdinProfile) BuildCommand(o CommandOptions) AgentCommand {
+	return AgentCommand{Argv: []string{"claude", "--print", "-p", "-"}, Stdin: o.Prompt}
+}
+func (stdinProfile) CredentialEnvKeys() []string   { return nil }
+func (stdinProfile) Sessions() (SessionSpec, bool) { return SessionSpec{}, false }
+
+// A stdin-delivery agent has its prompt piped to the exec's stdin, and the
+// prompt must not also appear in argv. This pins the ac.Stdin wiring in Exec,
+// the whole reason AgentCommand carries a Stdin field (see ADR 0001).
+func TestExec_StdinDeliveryAgentPipesPromptToStdin(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	cfg.Agent = stdinProfile{}
+	r := New(cfg, fc)
+
+	const prompt = "do the task"
+	if _, err := r.Run(context.Background(), RunRequest{Branch: "agent/x", Prompt: prompt}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	exec := fc.findCallN(t, "exec", 0)
+	if exec.Stdin == nil {
+		t.Fatal("exec Cmd.Stdin not wired for a stdin-delivery agent")
+	}
+	got, err := io.ReadAll(exec.Stdin)
+	if err != nil {
+		t.Fatalf("read exec stdin: %v", err)
+	}
+	if string(got) != prompt {
+		t.Errorf("exec stdin = %q, want %q", got, prompt)
+	}
+	// The prompt rides stdin, so it must not leak into argv.
+	if slices.Contains(exec.Args, prompt) {
+		t.Errorf("prompt leaked into argv for a stdin-delivery agent: %v", exec.Args)
 	}
 }

@@ -49,7 +49,7 @@ func (r *Runner) runHooks(ctx context.Context, worktree string, timeout time.Dur
 		if len(h.Command) == 0 {
 			continue
 		}
-		cmd := hookCmd(r.cfg.ProjectDir, r.cfg.Workshop, worktree, r.cfg.EnvKeys, timeout, h)
+		cmd := hookCmd(r.cfg.ProjectDir, r.cfg.Workshop, worktree, r.cfg.Agent.CredentialEnvKeys(), timeout, h)
 		cmd.Stdout, cmd.Stderr = out, out
 		if err := r.runHook(ctx, timeout, cmd); err != nil {
 			return fmt.Errorf("hook %d %v: %w", i, h.Command, err)

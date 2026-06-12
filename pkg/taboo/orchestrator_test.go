@@ -19,7 +19,6 @@ func (f *fakeCommander) countVerb(verb string) int {
 func TestOrchestrator_SingleIterationByDefault(t *testing.T) {
 	fc := &fakeCommander{} // info succeeds -> workshop present
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
 	res, err := o.Run(context.Background(), OrchestratedRequest{
@@ -43,7 +42,6 @@ func TestOrchestrator_SingleIterationByDefault(t *testing.T) {
 func TestOrchestrator_LoopsToMaxIterations(t *testing.T) {
 	fc := &fakeCommander{} // no stdout -> signal never seen
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
 	res, err := o.Run(context.Background(), OrchestratedRequest{
@@ -85,7 +83,6 @@ func TestOrchestrator_StopsEarlyOnSignal(t *testing.T) {
 		},
 	}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
 	res, err := o.Run(context.Background(), OrchestratedRequest{
@@ -120,7 +117,6 @@ func TestOrchestrator_SignalMustMatchConfigured(t *testing.T) {
 		},
 	}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
 	res, err := o.Run(context.Background(), OrchestratedRequest{
@@ -145,7 +141,6 @@ func TestOrchestrator_StopsOnRunnerError(t *testing.T) {
 	// iterations run.
 	fc := &fakeCommander{errFn: failOnVerb("exec")}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	o := NewOrchestrator(New(cfg, fc))
 
 	res, err := o.Run(context.Background(), OrchestratedRequest{

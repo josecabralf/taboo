@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,20 +65,37 @@ func initSeedRepo(t *testing.T) string {
 	return repo
 }
 
+// scriptProfile is a deterministic stand-in AgentProfile for integration tests
+// that need a predictable "agent" (a shell script) rather than a live LLM. It
+// reports Name() "opencode" so the real opencode SDK environment is still
+// launched and remounted, while BuildCommand runs the supplied argv with the
+// prompt appended.
+type scriptProfile struct {
+	argv []string
+}
+
+func (scriptProfile) Name() string { return "opencode" }
+
+func (p scriptProfile) BuildCommand(opts CommandOptions) AgentCommand {
+	return AgentCommand{Argv: append(slices.Clone(p.argv), opts.Prompt)}
+}
+
+func (scriptProfile) CredentialEnvKeys() []string { return nil }
+
+func (scriptProfile) Sessions() (SessionSpec, bool) { return SessionSpec{}, false }
+
 // newIntegrationRunner builds a Runner against the real workshop CLI and
 // registers cleanup that removes the workshop and prunes the worktree.
-func newIntegrationRunner(t *testing.T, repo string, agentCmd []string, envKeys []string) (*Runner, Config) {
+func newIntegrationRunner(t *testing.T, repo string, agent AgentProfile) (*Runner, Config) {
 	t.Helper()
 	proj := nonTmpDir(t)
 	ws := fmt.Sprintf("taboo-it-%d", os.Getpid())
 	cfg := Config{
 		Workshop:   ws,
 		Base:       "ubuntu@24.04",
-		SDK:        "opencode",
+		Agent:      agent,
 		RepoPath:   repo,
 		ProjectDir: proj,
-		AgentCmd:   agentCmd,
-		EnvKeys:    envKeys,
 	}
 	t.Cleanup(func() {
 		// Runs before nonTmpDir's RemoveAll (LIFO), so the project dir still
@@ -94,7 +112,7 @@ func newIntegrationRunner(t *testing.T, repo string, agentCmd []string, envKeys 
 // and UID write-through end-to-end.
 func TestIntegration_CommitLandsOnHostBranch(t *testing.T) {
 	repo := initSeedRepo(t)
-	r, cfg := newIntegrationRunner(t, repo, []string{"bash", "-lc"}, nil)
+	r, cfg := newIntegrationRunner(t, repo, scriptProfile{argv: []string{"bash", "-lc"}})
 
 	const script = `set -eux
 git config user.email agent@example.com
@@ -148,11 +166,7 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		t.Skip("OPENROUTER_API_KEY not set; skipping live-agent integration test")
 	}
 	repo := initSeedRepo(t)
-	agentCmd := []string{
-		"opencode", "run", "--log-level", "ERROR",
-		"-m", "openrouter/qwen/qwen3-coder-plus",
-	}
-	r, _ := newIntegrationRunner(t, repo, agentCmd, []string{"OPENROUTER_API_KEY"})
+	r, _ := newIntegrationRunner(t, repo, OpenCode("openrouter/qwen/qwen3-coder-plus"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()

@@ -1,0 +1,58 @@
+package taboo
+
+import (
+	"slices"
+	"testing"
+)
+
+// The model OpenCode is configured with, reused across the assertions below.
+const openCodeModel = "openrouter/qwen/qwen3-coder-plus"
+
+func TestOpenCode_Name(t *testing.T) {
+	if got := OpenCode(openCodeModel).Name(); got != "opencode" {
+		t.Errorf("Name() = %q, want %q", got, "opencode")
+	}
+}
+
+func TestOpenCode_BuildCommand(t *testing.T) {
+	ac := OpenCode(openCodeModel).BuildCommand(CommandOptions{Prompt: "do the thing"})
+
+	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", openCodeModel, "do the thing"}
+	if !slices.Equal(ac.Argv, want) {
+		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
+	}
+	// OpenCode delivers the prompt positionally in argv, so Stdin stays empty;
+	// the stdin path exists in the contract for the stdin-delivery agents.
+	if ac.Stdin != "" {
+		t.Errorf("Stdin = %q, want empty (OpenCode delivers the prompt in argv)", ac.Stdin)
+	}
+}
+
+// The model is interpolated into argv so distinct models produce distinct
+// commands; nothing else is parameterized this slice.
+func TestOpenCode_BuildCommand_UsesModel(t *testing.T) {
+	ac := OpenCode("anthropic/claude").BuildCommand(CommandOptions{Prompt: "go"})
+	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", "anthropic/claude", "go"}
+	if !slices.Equal(ac.Argv, want) {
+		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
+	}
+}
+
+func TestOpenCode_CredentialEnvKeys(t *testing.T) {
+	got := OpenCode(openCodeModel).CredentialEnvKeys()
+	want := []string{"OPENROUTER_API_KEY"}
+	if !slices.Equal(got, want) {
+		t.Errorf("CredentialEnvKeys() = %v, want %v", got, want)
+	}
+}
+
+func TestOpenCode_Sessions(t *testing.T) {
+	spec, ok := OpenCode(openCodeModel).Sessions()
+	if !ok {
+		t.Fatal("Sessions() ok = false, want true (OpenCode has a session store)")
+	}
+	want := SessionSpec{DirEnv: "XDG_DATA_HOME", Subdir: "opencode"}
+	if spec != want {
+		t.Errorf("Sessions() spec = %+v, want %+v", spec, want)
+	}
+}
