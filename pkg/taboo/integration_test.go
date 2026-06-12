@@ -44,34 +44,50 @@ func nonTmpDir(t *testing.T) string {
 	return dir
 }
 
+// seedRepo creates a git repo with one seed commit at the given path. Shared by
+// initSeedRepo (per-test, fresh dir) and initSharedSeedRepo (fixed shared dir)
+// so the seed recipe lives in one place.
+func seedRepo(repo string) error {
+	git := func(args ...string) error {
+		c := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if out, err := c.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %v: %w\n%s", args, err, out)
+		}
+		return nil
+	}
+	for _, step := range [][]string{
+		{"init", "-q"},
+		{"config", "user.email", "seed@example.com"},
+		{"config", "user.name", "seed"},
+	} {
+		if err := git(step...); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# seed\n"), 0o644); err != nil {
+		return err
+	}
+	if err := git("add", "-A"); err != nil {
+		return err
+	}
+	return git("commit", "-qm", "seed")
+}
+
 // initSeedRepo creates a host git repo with one seed commit and returns its path.
 func initSeedRepo(t *testing.T) string {
 	t.Helper()
 	repo := nonTmpDir(t)
-	run := func(args ...string) {
-		c := exec.Command("git", append([]string{"-C", repo}, args...)...)
-		if out, err := c.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-q")
-	run("config", "user.email", "seed@example.com")
-	run("config", "user.name", "seed")
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# seed\n"), 0o644); err != nil {
+	if err := seedRepo(repo); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "-A")
-	run("commit", "-qm", "seed")
 	return repo
 }
 
-// newIntegrationRunner builds a Runner against the real workshop CLI and
-// registers cleanup that removes the workshop and prunes the worktree.
-func newIntegrationRunner(t *testing.T, repo string, agentCmd []string, envKeys []string) (*Runner, Config) {
-	t.Helper()
-	proj := nonTmpDir(t)
-	ws := fmt.Sprintf("taboo-it-%d", os.Getpid())
-	cfg := Config{
+// integrationConfig builds the Config shared by the per-test and shared-fixture
+// runners; only the workshop name and the two paths vary between them, so the
+// image (Base) and SDK live in one place.
+func integrationConfig(ws, repo, proj string, agentCmd, envKeys []string) Config {
+	return Config{
 		Workshop:   ws,
 		Base:       "ubuntu@24.04",
 		SDK:        "opencode",
@@ -80,6 +96,15 @@ func newIntegrationRunner(t *testing.T, repo string, agentCmd []string, envKeys 
 		AgentCmd:   agentCmd,
 		EnvKeys:    envKeys,
 	}
+}
+
+// newIntegrationRunner builds a Runner against the real workshop CLI and
+// registers cleanup that removes the workshop and prunes the worktree.
+func newIntegrationRunner(t *testing.T, repo string, agentCmd []string, envKeys []string) (*Runner, Config) {
+	t.Helper()
+	proj := nonTmpDir(t)
+	ws := fmt.Sprintf("taboo-it-%d", os.Getpid())
+	cfg := integrationConfig(ws, repo, proj, agentCmd, envKeys)
 	t.Cleanup(func() {
 		// Runs before nonTmpDir's RemoveAll (LIFO), so the project dir still
 		// exists here for `workshop remove` to resolve the workshop.
@@ -113,12 +138,13 @@ var sharedMu sync.Mutex
 // sharedBase is the fixed root holding the shared seed repo and project dir. It
 // lives under $HOME (never /tmp) so the gitcommon mount target resolves inside
 // the workshop — see nonTmpDir. It takes no *testing.T so TestMain's setup and
-// teardown (which have none) can use it too; a failed home lookup is implausible
-// and falls back to a deterministic path rather than panicking.
+// teardown (which have none) can use it too. A failed home lookup is implausible
+// and we panic rather than fall back to /tmp, which the bind-mount design
+// forbids (a silent mount failure is worse than a loud abort).
 func sharedBase() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), ".taboo-it-shared") // unreachable in practice
+		panic(fmt.Sprintf("shared fixture: home dir: %v", err))
 	}
 	return filepath.Join(home, ".taboo-it-shared")
 }
@@ -168,42 +194,20 @@ func cleanShared() {
 	_ = os.RemoveAll(sharedBase())
 }
 
-// initSharedSeedRepo creates the shared seed repo (one commit) at the fixed
-// path. Mirrors initSeedRepo's git steps but at a fixed, freshly-wiped location.
+// initSharedSeedRepo creates the shared seed repo (one commit) at the fixed,
+// freshly-wiped path, reusing the shared seedRepo recipe.
 func initSharedSeedRepo() error {
 	repo := sharedRepoPath()
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		return err
 	}
-	git := func(args ...string) error {
-		c := exec.Command("git", append([]string{"-C", repo}, args...)...)
-		if out, err := c.CombinedOutput(); err != nil {
-			return fmt.Errorf("git %v: %w\n%s", args, err, out)
-		}
-		return nil
-	}
-	for _, step := range [][]string{
-		{"init", "-q"},
-		{"config", "user.email", "seed@example.com"},
-		{"config", "user.name", "seed"},
-	} {
-		if err := git(step...); err != nil {
-			return err
-		}
-	}
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# seed\n"), 0o644); err != nil {
-		return err
-	}
-	if err := git("add", "-A"); err != nil {
-		return err
-	}
-	return git("commit", "-qm", "seed")
+	return seedRepo(repo)
 }
 
 // sharedBranch derives a unique, ref-safe branch name from the test name, so
-// worktrees and refs never collide between shared-fixture tests. Both
-// sharedRunner (for cleanup) and the test body (for RunRequest.Branch) call it,
-// so they agree without threading state.
+// worktrees and refs never collide between shared-fixture tests. sharedRunner
+// returns this value to the test body, so the Run and its cleanup agree without
+// each caller re-deriving it.
 func sharedBranch(t *testing.T) string {
 	t.Helper()
 	return "agent/" + sanitizeRef(t.Name())
@@ -223,23 +227,18 @@ func sanitizeRef(name string) string {
 }
 
 // sharedRunner returns a Runner bound to the shared warm workshop + seed repo,
-// running the given agent. It takes the package mutex for the test's duration
-// (released last, after this test's worktree cleanup) and registers cleanup of
-// only this test's branch + worktree, so -count=N and re-runs stay green.
-func sharedRunner(t *testing.T, agentCmd []string, envKeys []string) (*Runner, Config) {
+// running the given agent, plus the branch the caller must pass as
+// RunRequest.Branch. Returning the branch (rather than re-deriving it in the
+// test body) guarantees the Run and this test's cleanup target the same
+// worktree. It takes the package mutex for the test's duration (released last,
+// after this test's worktree cleanup) and registers cleanup of only this test's
+// branch + worktree, so -count=N and re-runs stay green.
+func sharedRunner(t *testing.T, agentCmd []string, envKeys []string) (*Runner, Config, string) {
 	t.Helper()
 	sharedMu.Lock()
 	t.Cleanup(sharedMu.Unlock) // registered first => runs last (lock held through worktree cleanup)
 
-	cfg := Config{
-		Workshop:   sharedWorkshop,
-		Base:       "ubuntu@24.04",
-		SDK:        "opencode",
-		RepoPath:   sharedRepoPath(),
-		ProjectDir: sharedProjectPath(),
-		AgentCmd:   agentCmd,
-		EnvKeys:    envKeys,
-	}
+	cfg := integrationConfig(sharedWorkshop, sharedRepoPath(), sharedProjectPath(), agentCmd, envKeys)
 	r := New(cfg, NewExecCommander())
 
 	branch := sharedBranch(t)
@@ -250,7 +249,7 @@ func sharedRunner(t *testing.T, agentCmd []string, envKeys []string) (*Runner, C
 		_ = exec.Command("git", "-C", cfg.RepoPath, "worktree", "remove", "--force", wt).Run()
 		_ = exec.Command("git", "-C", cfg.RepoPath, "branch", "-D", branch).Run()
 	})
-	return r, cfg
+	return r, cfg, branch
 }
 
 // TestIntegration_CommitLandsOnHostBranch drives the full taboo orchestration
@@ -319,13 +318,13 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 	// Route through the shared warm workshop: only the first shared run pays the
 	// launch; this test reuses it via ensureWorkshop. Isolation is its own
 	// per-test branch + worktree (cleaned by sharedRunner).
-	r, _ := sharedRunner(t, agentCmd, []string{"OPENROUTER_API_KEY"})
+	r, _, branch := sharedRunner(t, agentCmd, []string{"OPENROUTER_API_KEY"})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
 	res, err := r.Run(ctx, RunRequest{
-		Branch:  sharedBranch(t),
+		Branch:  branch,
 		Prompt:  "Create a file named HELLO.md containing the single line 'hello from taboo', then commit it with the message 'add HELLO.md'.",
 		Timeout: 10 * time.Minute,
 	})
