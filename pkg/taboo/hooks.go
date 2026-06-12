@@ -24,7 +24,7 @@ type Hooks struct {
 	// worktree mounted, but before the agent execs. Use them to prepare the
 	// environment the agent will see. They run on every run (the worktree is
 	// swapped in per run), not once per workshop, so keep them idempotent and
-	// cheap rather than modelling expensive one-time provisioning here.
+	// cheap rather than modeling expensive one-time provisioning here.
 	OnWorkshopReady []Hook
 }
 

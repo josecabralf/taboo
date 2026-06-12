@@ -171,7 +171,8 @@ func TestRun_OnWorkshopReadyHooksRunInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if a, b := indexOfName(fc, "first"), indexOfName(fc, "second"); !(a >= 0 && a < b) {
+	a, b := indexOfName(fc, "first"), indexOfName(fc, "second")
+	if ordered := a >= 0 && a < b; !ordered {
 		t.Errorf("hooks out of order: first=%d second=%d", a, b)
 	}
 }
@@ -206,7 +207,7 @@ func TestRun_OnWorkshopReadyHostHookRunsOnHost(t *testing.T) {
 	// It still lands after start and before the agent exec.
 	startIdx := indexOfVerb(fc, "start")
 	agentIdx := indexOfExecContaining(fc, "do the task")
-	if !(startIdx < idx && idx < agentIdx) {
+	if ordered := startIdx < idx && idx < agentIdx; !ordered {
 		t.Errorf("want start(%d) < hook(%d) < agent exec(%d)", startIdx, idx, agentIdx)
 	}
 }
@@ -306,7 +307,7 @@ func TestRun_OnWorkshopReadyHookRunsAfterStartBeforeExec(t *testing.T) {
 	if startIdx < 0 || hookIdx < 0 || agentIdx < 0 {
 		t.Fatalf("missing call: start=%d hook=%d agent=%d; verbs=%v", startIdx, hookIdx, agentIdx, fc.verbs())
 	}
-	if !(startIdx < hookIdx && hookIdx < agentIdx) {
+	if ordered := startIdx < hookIdx && hookIdx < agentIdx; !ordered {
 		t.Fatalf("want start(%d) < hook(%d) < agent exec(%d); verbs=%v", startIdx, hookIdx, agentIdx, fc.verbs())
 	}
 }
