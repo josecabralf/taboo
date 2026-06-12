@@ -247,6 +247,17 @@ the walking skeleton (build step 1) exists to prove.
 3. **Configurable session/home path.** Session redirect depends on each agent
    honoring a configurable session/home location (e.g. `CLAUDE_CONFIG_DIR`).
    Verify per agent.
+   - ✅ **OpenCode — VERIFIED (docs).** OpenCode resolves its data dir from
+     `XDG_DATA_HOME` (via `xdg-basedir`); sessions live under
+     `$XDG_DATA_HOME/opencode/project/<project-slug>/storage/` (default
+     `~/.local/share/opencode/`). Setting `XDG_DATA_HOME` to the mounted host
+     dir redirects session storage through the bind-mount. **Caveat for the
+     sessions slice:** OpenCode stores sessions in a **SQLite DB** (`OPENCODE_DB`,
+     the "channel db"), not loose JSONL like Claude/Codex. Write-through over a
+     bind-mount is fine, but resume/fork semantics over a DB are harder than
+     file-copy — almost certainly why sandcastle leaves OpenCode non-resumable.
+     The `AgentProfile.Sessions()` accessor returns `({XDG_DATA_HOME, "opencode"},
+     true)` for OpenCode; the DB-vs-JSONL question is deferred to the sessions slice.
 4. **Table-parsing fragility.** `list` / `changes` / `tasks` emit human tables
    (no JSON). Prefer `info` / `actions` (real YAML) and minimize reliance on
    table output; watch for breakage across workshop versions.
@@ -272,3 +283,13 @@ Not workshop-specific; follow sandcastle's proven design when reached:
 - **worktree** — a host git worktree, one per agent run, bind-mounted into a
   workshop as the agent's working directory.
 - **sandcastle** — the TypeScript reference product taboo is modeled on.
+- **AgentProfile** — taboo's per-agent abstraction (mirrors sandcastle's
+  *AgentProvider*; renamed *Profile* in taboo). One value fully describes an
+  agent: how to build its exec argv from a prompt (`BuildCommand`), which host
+  env vars carry its credentials (`CredentialEnvKeys`, passed `--env NAME`,
+  value inherited never persisted), how to redirect its session storage onto a
+  mounted host dir (`Sessions` → env var + on-disk subpath), and the name of the
+  workshop **SDK** that bakes its CLI in (`Name`, which doubles as the SDK
+  qualifier). The model is baked in at construction (`OpenCode(model)`). `Config`
+  references one `AgentProfile` instead of a raw agent command. OpenCode is the
+  first concrete profile.

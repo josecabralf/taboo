@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 )
@@ -24,7 +23,8 @@ var sdkFS embed.FS
 type RunRequest struct {
 	// Branch is the new branch created for this run's worktree.
 	Branch string
-	// Prompt is appended to Config.AgentCmd as the agent's instruction.
+	// Prompt is the agent's instruction, delivered via Config.Agent's command
+	// (in argv or on stdin, per the agent).
 	Prompt string
 	// Timeout bounds the agent exec (zero = no timeout).
 	Timeout time.Duration
@@ -150,7 +150,7 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	// Swap the worktree + the repo's .git into the workshop. A worktree is a
 	// non-empty source, so remount is not atomic: stop -> remount -> start.
-	proj, ws, sdk := r.cfg.ProjectDir, r.cfg.Workshop, r.cfg.SDK
+	proj, ws, sdk := r.cfg.ProjectDir, r.cfg.Workshop, r.cfg.Agent.Name()
 	if err := r.workshop(ctx, stopArgs(proj, ws)); err != nil {
 		return res, fmt.Errorf("stop: %w", err)
 	}
@@ -191,13 +191,18 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 		stdout = io.MultiWriter(&captured, req.Stdout)
 	}
 
-	command := append(slices.Clone(r.cfg.AgentCmd), req.Prompt)
-	opts := execOptions{cwd: workspaceTarget, timeout: req.Timeout, envKeys: r.cfg.EnvKeys}
+	ac := r.cfg.Agent.BuildCommand(CommandOptions{Prompt: req.Prompt})
+	opts := execOptions{cwd: workspaceTarget, timeout: req.Timeout, envKeys: r.cfg.Agent.CredentialEnvKeys()}
 	execCmd := Cmd{
 		Name:   "workshop",
-		Args:   execArgs(proj, ws, opts, command),
+		Args:   execArgs(proj, ws, opts, ac.Argv),
 		Stdout: stdout,
 		Stderr: req.Stderr,
+	}
+	// Stdin-delivery agents (Claude/Codex/Pi) carry the prompt here instead of
+	// in argv; OpenCode leaves it empty. See ADR 0001.
+	if ac.Stdin != "" {
+		execCmd.Stdin = strings.NewReader(ac.Stdin)
 	}
 	if err := r.cmd.Run(ctx, execCmd); err != nil {
 		return res, fmt.Errorf("exec agent: %w", err)

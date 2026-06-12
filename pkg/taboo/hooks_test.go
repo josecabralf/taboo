@@ -70,7 +70,6 @@ func TestRun_OnWorkshopReadyEmptyHookSkipped(t *testing.T) {
 	// empty Command slice. A following non-empty hook still runs.
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -97,7 +96,6 @@ func TestRun_OnWorkshopReadyHookOutputWiredToRunStderr(t *testing.T) {
 	var errBuf strings.Builder
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -126,7 +124,6 @@ func TestRun_OnWorkshopReadyInWorkshopHookHonorsTimeout(t *testing.T) {
 	// cannot hang the run before the agent execs.
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -155,7 +152,6 @@ func TestRun_OnWorkshopReadyInWorkshopHookHonorsTimeout(t *testing.T) {
 func TestRun_OnWorkshopReadyHooksRunInOrder(t *testing.T) {
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -180,7 +176,6 @@ func TestRun_OnWorkshopReadyHooksRunInOrder(t *testing.T) {
 func TestRun_OnWorkshopReadyHostHookRunsOnHost(t *testing.T) {
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -215,8 +210,6 @@ func TestRun_OnWorkshopReadyHostHookRunsOnHost(t *testing.T) {
 func TestRun_OnWorkshopReadyInWorkshopHookInheritsCwdAndEnvKeys(t *testing.T) {
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
-	cfg.EnvKeys = []string{"OPENROUTER_API_KEY"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -237,7 +230,7 @@ func TestRun_OnWorkshopReadyInWorkshopHookInheritsCwdAndEnvKeys(t *testing.T) {
 	// whole argv against the builder the production path uses.
 	idx := indexOfExecContaining(fc, "download")
 	want := execArgs(cfg.ProjectDir, cfg.Workshop,
-		execOptions{cwd: workspaceTarget, envKeys: cfg.EnvKeys},
+		execOptions{cwd: workspaceTarget, envKeys: cfg.Agent.CredentialEnvKeys()},
 		[]string{"go", "mod", "download"})
 	if got := fc.calls[idx].Args; !slices.Equal(got, want) {
 		t.Errorf("in-workshop hook args =\n  %v\nwant\n  %v", got, want)
@@ -255,7 +248,6 @@ func TestRun_OnWorkshopReadyHookFailureAbortsBeforeAgent(t *testing.T) {
 		},
 	}
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{
@@ -283,7 +275,6 @@ func TestRun_OnWorkshopReadyHookFailureAbortsBeforeAgent(t *testing.T) {
 func TestRun_OnWorkshopReadyHookRunsAfterStartBeforeExec(t *testing.T) {
 	fc := &fakeCommander{errFn: failOnVerb("info")} // workshop absent -> launches
 	cfg := testConfig(t)
-	cfg.AgentCmd = []string{"opencode", "run"}
 	r := New(cfg, fc)
 
 	_, err := r.Run(context.Background(), RunRequest{

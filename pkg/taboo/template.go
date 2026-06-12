@@ -12,22 +12,16 @@ type Config struct {
 	Workshop string
 	// Base is the workshop base image, e.g. "ubuntu@24.04".
 	Base string
-	// SDK is the name of the agent SDK that carries the mount plugs and bakes
-	// in the agent CLI.
-	SDK string
+	// Agent is the agent profile run inside the workshop: it names the SDK that
+	// carries the mount plugs and bakes in the agent CLI, builds the run
+	// invocation, and lists the credential env keys the agent needs.
+	Agent AgentProfile
 	// RepoPath is the absolute path to the host git repository whose worktrees
 	// the agent operates on.
 	RepoPath string
 	// ProjectDir is the host directory taboo owns: it holds the rendered
 	// workshop definition and is passed to every `workshop --project` call.
 	ProjectDir string
-	// AgentCmd is the agent CLI invocation, e.g.
-	// {"opencode","run","-m","openrouter/qwen/qwen3-coder-plus"}. The run
-	// prompt is appended as the final argument at exec time.
-	AgentCmd []string
-	// EnvKeys are host environment variable names whose values are passed into
-	// the agent via `workshop exec --env NAME` (value never enters argv).
-	EnvKeys []string
 }
 
 // definition is the on-disk workshop definition taboo renders and owns.
@@ -70,7 +64,7 @@ func renderDefinition(cfg Config) (string, error) {
 		Name: cfg.Workshop,
 		Base: cfg.Base,
 		SDKs: []sdkDef{{
-			Name: projectSDKRef(cfg.SDK),
+			Name: projectSDKRef(cfg.Agent.Name()),
 			Plugs: map[string]plug{
 				"workspace": {Interface: "mount", WorkshopTarget: workspaceTarget},
 				"gitcommon": {Interface: "mount", WorkshopTarget: gitCommonTarget(cfg.RepoPath)},
