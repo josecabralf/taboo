@@ -1,0 +1,22 @@
+#!/bin/bash
+# setup-base provisions the workshop's base image. It runs as root before the
+# project is mounted. The go SDK supplies the Go toolchain; this hook adds the
+# few extra tools the make targets shell out to:
+#
+#   - make            drives the targets (CI calls `workshop run make <target>`)
+#   - git             commander unit tests run `git version`
+#   - golangci-lint   `make lint` (not bundled by the go SDK)
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y make git curl
+
+# --- golangci-lint ---------------------------------------------------------
+# Pin the same version CI uses (see .github/workflows/ci.yml).
+GOLANGCI_VERSION="v2.11.4"
+if ! command -v golangci-lint >/dev/null 2>&1; then
+  curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+    | sh -s -- -b /usr/local/bin "${GOLANGCI_VERSION}"
+fi

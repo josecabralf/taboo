@@ -30,3 +30,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Workshop (the .workshop/ definition is committed; the lock is per-checkout)
+.workshop.lock
