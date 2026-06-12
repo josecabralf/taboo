@@ -38,7 +38,7 @@ type RunResult struct {
 	Branch       string
 	WorktreePath string
 	Commit       string // HEAD of the branch after the agent ran (set in slice 6)
-	Output       string // captured agent exec stdout
+	Output       string // captured agent exec stdout (stderr is not retained)
 }
 
 // Runner orchestrates agent runs in a taboo-managed workshop.
