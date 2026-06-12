@@ -31,6 +31,8 @@ type RunRequest struct {
 	// Stdout and Stderr receive the agent exec's live output (nil = discard).
 	Stdout io.Writer
 	Stderr io.Writer
+	// Hooks are lifecycle commands run at defined points during the run.
+	Hooks Hooks
 }
 
 // RunResult reports the outcome of a run.
@@ -160,6 +162,13 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 	if err := r.workshop(ctx, startArgs(proj, ws)); err != nil {
 		return res, fmt.Errorf("start: %w", err)
+	}
+
+	// The workshop is ready with the worktree mounted: run caller-supplied
+	// setup hooks before handing control to the agent. This is the end of
+	// Setup, so hooks run once per worktree, before any Exec.
+	if err := r.runHooks(ctx, wt, req.Timeout, req.Stderr, req.Hooks.OnWorkshopReady); err != nil {
+		return res, fmt.Errorf("on-workshop-ready hook: %w", err)
 	}
 
 	return res, nil
