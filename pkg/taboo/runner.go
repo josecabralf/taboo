@@ -31,6 +31,12 @@ type RunRequest struct {
 	// Stdout and Stderr receive the agent exec's live output (nil = discard).
 	Stdout io.Writer
 	Stderr io.Writer
+	// MaxIterations bounds how many times the Orchestrator re-runs the agent
+	// (zero or negative = a single run). Ignored by Runner.Run itself.
+	MaxIterations int
+	// CompletionSignal is the sentinel the Orchestrator watches for in the
+	// agent's stdout to stop the loop early (empty = no early stop).
+	CompletionSignal string
 }
 
 // RunResult reports the outcome of a run.
