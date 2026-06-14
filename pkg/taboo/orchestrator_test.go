@@ -8,6 +8,8 @@ import (
 
 // countVerb returns how many recorded calls have the given workshop/git verb.
 func (f *fakeCommander) countVerb(verb string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	n := 0
 	for _, c := range f.calls {
 		if verbOf(c) == verb {
