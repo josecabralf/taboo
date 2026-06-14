@@ -44,8 +44,11 @@ func indexOfName(fc *fakeCommander, name string) int {
 }
 
 func TestHookCmd(t *testing.T) {
+	sessionEnv := []envAssignment{{Name: "XDG_DATA_HOME", Value: sessionsTarget}}
+
 	// Host hook: the bare executable, no workshop wrapping, run in the worktree.
-	host := hookCmd("/proj", "ws", "/wt", []string{"OPENROUTER_API_KEY"}, 0,
+	// The session redirect is a workshop path, so a host hook ignores it.
+	host := hookCmd("/proj", "ws", "/wt", []string{"OPENROUTER_API_KEY"}, sessionEnv, 0,
 		Hook{Command: []string{"make", "deps"}})
 	if host.Name != "make" || !slices.Equal(host.Args, []string{"deps"}) {
 		t.Errorf("host hook = %+v, want make [deps]", host)
@@ -54,11 +57,12 @@ func TestHookCmd(t *testing.T) {
 		t.Errorf("host hook Dir = %q, want /wt (the run's worktree)", host.Dir)
 	}
 
-	// In-workshop hook: a `workshop exec` carrying cwd, timeout, and the env keys.
-	in := hookCmd("/proj", "ws", "/wt", []string{"OPENROUTER_API_KEY"}, 30*time.Second,
+	// In-workshop hook: a `workshop exec` carrying cwd, timeout, the credential
+	// env keys, and the session-dir redirect — the same context as the agent.
+	in := hookCmd("/proj", "ws", "/wt", []string{"OPENROUTER_API_KEY"}, sessionEnv, 30*time.Second,
 		Hook{Command: []string{"go", "build"}, InWorkshop: true})
 	want := execArgs("/proj", "ws",
-		execOptions{cwd: workspaceTarget, timeout: 30 * time.Second, envKeys: []string{"OPENROUTER_API_KEY"}},
+		execOptions{cwd: workspaceTarget, timeout: 30 * time.Second, envKeys: []string{"OPENROUTER_API_KEY"}, env: sessionEnv},
 		[]string{"go", "build"})
 	if in.Name != "workshop" || !slices.Equal(in.Args, want) {
 		t.Errorf("in-workshop hook = %+v, want workshop %v", in, want)
@@ -207,7 +211,7 @@ func TestRun_OnWorkshopReadyHostHookRunsOnHost(t *testing.T) {
 	}
 }
 
-func TestRun_OnWorkshopReadyInWorkshopHookInheritsCwdAndEnvKeys(t *testing.T) {
+func TestRun_OnWorkshopReadyInWorkshopHookInheritsAgentContext(t *testing.T) {
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
 	r := New(cfg, fc)
@@ -225,15 +229,54 @@ func TestRun_OnWorkshopReadyInWorkshopHookInheritsCwdAndEnvKeys(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// The in-workshop hook is a `workshop exec` with the same cwd and credential
-	// env keys the agent gets, so setup runs with the agent's context. Assert the
-	// whole argv against the builder the production path uses.
+	// The in-workshop hook is a `workshop exec` with the same cwd, credential env
+	// keys, and session-dir redirect the agent gets, so setup runs in the agent's
+	// context and a hook preparing session state writes where the agent reads.
+	// OpenCode (the test config agent) is session-capable, so the redirect is
+	// present. Assert the whole argv against the builder the production path uses.
+	spec, ok := cfg.Agent.Sessions()
+	if !ok {
+		t.Fatal("test config agent is not session-capable")
+	}
 	idx := indexOfExecContaining(fc, "download")
 	want := execArgs(cfg.ProjectDir, cfg.Workshop,
-		execOptions{cwd: workspaceTarget, envKeys: cfg.Agent.CredentialEnvKeys()},
+		execOptions{
+			cwd:     workspaceTarget,
+			envKeys: cfg.Agent.CredentialEnvKeys(),
+			env:     []envAssignment{{Name: spec.DirEnv, Value: sessionsTarget}},
+		},
 		[]string{"go", "mod", "download"})
 	if got := fc.calls[idx].Args; !slices.Equal(got, want) {
 		t.Errorf("in-workshop hook args =\n  %v\nwant\n  %v", got, want)
+	}
+}
+
+// A sessionless agent's in-workshop hook carries no session-dir redirect, just
+// as its agent exec does not. Pins the negative branch of the hook env wiring.
+func TestRun_OnWorkshopReadyInWorkshopHook_SessionlessAgentNoRedirect(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	cfg.Agent = stdinProfile{} // Sessions() ok == false
+	r := New(cfg, fc)
+
+	_, err := r.Run(context.Background(), RunRequest{
+		Branch: "agent/x",
+		Prompt: "do the task",
+		Hooks: Hooks{
+			OnWorkshopReady: []Hook{
+				{Command: []string{"go", "mod", "download"}, InWorkshop: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	idx := indexOfExecContaining(fc, "download")
+	for _, a := range fc.calls[idx].Args {
+		if strings.Contains(a, "/sessions") {
+			t.Errorf("sessionless agent's in-workshop hook carries a session redirect: %v", fc.calls[idx].Args)
+		}
 	}
 }
 

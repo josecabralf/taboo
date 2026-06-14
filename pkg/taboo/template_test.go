@@ -74,3 +74,63 @@ func TestRenderDefinition_ProducesTwoMountPlugsOnAgentSDK(t *testing.T) {
 		t.Errorf("gitcommon plug = %+v, want mount→/home/dev/repos/myproject/.git", gc)
 	}
 }
+
+// A session-capable agent (OpenCode) gets a third mount plug binding a host
+// sessions directory into the workshop, so session files written inside survive
+// the per-run stop/remount/start swap (which wipes the rootfs).
+func TestRenderDefinition_AddsSessionsPlugForSessionCapableAgent(t *testing.T) {
+	cfg := Config{
+		Workshop: "taboo-run",
+		Base:     "ubuntu@24.04",
+		Agent:    OpenCode(openCodeModel),
+		RepoPath: "/home/dev/repos/myproject",
+	}
+
+	out, err := renderDefinition(cfg)
+	if err != nil {
+		t.Fatalf("renderDefinition: %v", err)
+	}
+
+	var def parsedDefinition
+	if err := yaml.Unmarshal([]byte(out), &def); err != nil {
+		t.Fatalf("rendered definition is not valid YAML: %v\n%s", err, out)
+	}
+	if len(def.SDKs) != 1 {
+		t.Fatalf("got %d SDKs, want 1", len(def.SDKs))
+	}
+
+	s, ok := def.SDKs[0].Plugs["sessions"]
+	if !ok {
+		t.Fatal("missing sessions plug")
+	}
+	if s.Interface != "mount" || s.WorkshopTarget != "/sessions" {
+		t.Errorf("sessions plug = %+v, want mount→/sessions", s)
+	}
+}
+
+// An agent with no session store gets no sessions plug: there is nothing to
+// persist, so taboo does not mount a sessions directory for it.
+func TestRenderDefinition_OmitsSessionsPlugForSessionlessAgent(t *testing.T) {
+	cfg := Config{
+		Workshop: "taboo-run",
+		Base:     "ubuntu@24.04",
+		Agent:    stdinProfile{}, // Sessions() ok == false
+		RepoPath: "/home/dev/repos/myproject",
+	}
+
+	out, err := renderDefinition(cfg)
+	if err != nil {
+		t.Fatalf("renderDefinition: %v", err)
+	}
+
+	var def parsedDefinition
+	if err := yaml.Unmarshal([]byte(out), &def); err != nil {
+		t.Fatalf("rendered definition is not valid YAML: %v\n%s", err, out)
+	}
+	if len(def.SDKs) != 1 {
+		t.Fatalf("got %d SDKs, want 1", len(def.SDKs))
+	}
+	if _, ok := def.SDKs[0].Plugs["sessions"]; ok {
+		t.Error("sessions plug present for a sessionless agent, want none")
+	}
+}

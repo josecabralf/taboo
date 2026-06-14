@@ -166,7 +166,7 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		t.Skip("OPENROUTER_API_KEY not set; skipping live-agent integration test")
 	}
 	repo := initSeedRepo(t)
-	r, _ := newIntegrationRunner(t, repo, OpenCode("openrouter/qwen/qwen3-coder-plus"))
+	r, cfg := newIntegrationRunner(t, repo, OpenCode("openrouter/qwen/qwen3-coder-plus"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -196,4 +196,46 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		t.Errorf("expected an agent commit beyond seed; log:\n%s", out)
 	}
 	t.Logf("agent commit=%s\nlog:\n%s", res.Commit, out)
+
+	// Session capture: OpenCode's session storage was redirected (XDG_DATA_HOME)
+	// to the mounted host sessions dir, so its session files must be present on
+	// the host after the run (write-through over the bind-mount).
+	spec, _ := OpenCode("").Sessions()
+	sessDir := filepath.Join(cfg.ProjectDir, "sessions", spec.Subdir)
+	before := dirEntryNames(t, sessDir)
+	if len(before) == 0 {
+		t.Fatalf("host sessions dir %q is empty after the run; nothing was captured", sessDir)
+	}
+	t.Logf("host session files under %s after run 1: %d entries", sessDir, len(before))
+
+	// Survival across the swap: the session files written above were produced
+	// after run 1's final `start`, so run 1 never actually swapped them. Drive a
+	// second Setup against the reused workshop — another stop/remount/start, which
+	// wipes the rootfs — and assert every run-1 file is still on the host. This is
+	// the acceptance criterion the single-run write-through check cannot prove.
+	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/opencode-2"}); err != nil {
+		t.Fatalf("second Setup (stop/remount/start swap): %v", err)
+	}
+	after := dirEntryNames(t, sessDir)
+	for _, name := range before {
+		if !slices.Contains(after, name) {
+			t.Errorf("session file %q did not survive a second stop/remount/start swap; after=%v", name, after)
+		}
+	}
+	t.Logf("session files survived a second swap: %d before, %d after", len(before), len(after))
+}
+
+// dirEntryNames returns the names of dir's entries, failing the test if it
+// cannot be read.
+func dirEntryNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %q: %v", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
 }

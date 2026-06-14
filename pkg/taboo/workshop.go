@@ -39,8 +39,20 @@ type execOptions struct {
 	cwd     string
 	timeout time.Duration
 	// envKeys are env var names whose host values are inherited via `--env NAME`
-	// (the value never appears in argv).
+	// (the value never appears in argv). Used for credentials.
 	envKeys []string
+	// env are explicit `--env NAME=VALUE` assignments whose value is set in argv
+	// rather than inherited. Used to point an agent's session-dir env var at the
+	// mounted sessions path (the value is a workshop path, not a secret).
+	env []envAssignment
+}
+
+// envAssignment is an explicit environment variable value passed to the workshop
+// as `--env NAME=VALUE`. Unlike execOptions.envKeys, the value is set here, not
+// inherited from the host.
+type envAssignment struct {
+	Name  string
+	Value string
 }
 
 // execArgs builds:
@@ -56,6 +68,9 @@ func execArgs(project, ws string, opts execOptions, command []string) []string {
 	}
 	for _, k := range opts.envKeys {
 		args = append(args, "--env", k)
+	}
+	for _, e := range opts.env {
+		args = append(args, "--env", e.Name+"="+e.Value)
 	}
 	args = append(args, ws, "--")
 	args = append(args, command...)

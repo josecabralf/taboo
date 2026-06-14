@@ -120,6 +120,33 @@ func (r *Runner) worktreePath(branch string) string {
 	return filepath.Join(r.cfg.ProjectDir, "worktrees", safe)
 }
 
+// sessionsDir is the host directory taboo binds into the workshop for a
+// session-capable agent's session files. It is stable across a workshop's runs
+// (not per-branch) so a session can be resumed regardless of which worktree a
+// later run uses.
+//
+// Because it is shared by every run in a ProjectDir, it is safe only for
+// sequential runs against one workshop. When parallel fan-out (the Pool slice)
+// lands, concurrent runs sharing a ProjectDir would share OpenCode's single
+// SQLite session store and could corrupt it; give each concurrent run its own
+// ProjectDir (or a per-slot subdir here) at that point.
+func (r *Runner) sessionsDir() string {
+	return filepath.Join(r.cfg.ProjectDir, "sessions")
+}
+
+// sessionEnv returns the explicit `--env NAME=VALUE` assignment that redirects a
+// session-capable agent's session-dir env var at the sessions mount target, or
+// nil for a sessionless agent. Both the agent exec and any in-workshop setup
+// hook apply it: hooks run after start with no swap before the exec, so a hook
+// that prepares session state must resolve the store to the same bound path the
+// agent later reads, or their views of it would silently diverge.
+func (r *Runner) sessionEnv() []envAssignment {
+	if spec, ok := r.cfg.Agent.Sessions(); ok {
+		return []envAssignment{{Name: spec.DirEnv, Value: sessionsTarget}}
+	}
+	return nil
+}
+
 // Run executes one agent run end-to-end: Setup the worktree, then Exec the
 // agent once in it. It is the single-run primitive. The Orchestrator splits
 // these steps to Setup once and Exec repeatedly into the same worktree.
@@ -160,6 +187,18 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	if err := r.workshop(ctx, remountArgs(proj, ws, sdk, "gitcommon", gitCommonTarget(r.cfg.RepoPath))); err != nil {
 		return res, fmt.Errorf("remount gitcommon: %w", err)
 	}
+	// A session-capable agent gets a host sessions dir bound in alongside the
+	// worktree, so its session files write through to the host and survive this
+	// stop/remount/start swap (which wipes the rootfs).
+	if _, ok := r.cfg.Agent.Sessions(); ok {
+		host := r.sessionsDir()
+		if err := os.MkdirAll(host, 0o750); err != nil {
+			return res, fmt.Errorf("create sessions dir: %w", err)
+		}
+		if err := r.workshop(ctx, remountArgs(proj, ws, sdk, "sessions", host)); err != nil {
+			return res, fmt.Errorf("remount sessions: %w", err)
+		}
+	}
 	if err := r.workshop(ctx, startArgs(proj, ws)); err != nil {
 		return res, fmt.Errorf("start: %w", err)
 	}
@@ -193,6 +232,10 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 
 	ac := r.cfg.Agent.BuildCommand(CommandOptions{Prompt: req.Prompt})
 	opts := execOptions{cwd: workspaceTarget, timeout: req.Timeout, envKeys: r.cfg.Agent.CredentialEnvKeys()}
+	// Point the agent's session-dir env var at the sessions mount target so its
+	// session files land in the bound host directory (the same dir Setup mounted
+	// and that survives the swap).
+	opts.env = r.sessionEnv()
 	execCmd := Cmd{
 		Name:   "workshop",
 		Args:   execArgs(proj, ws, opts, ac.Argv),

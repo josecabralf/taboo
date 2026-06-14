@@ -65,6 +65,40 @@ func TestWorkshopArgs(t *testing.T) {
 				ws, "--", "true",
 			},
 		},
+		{
+			// An explicit assignment is passed as `--env NAME=VALUE` (value set,
+			// not inherited) — how taboo points an agent's session-dir env var at
+			// the mounted sessions path.
+			name: "exec with explicit env assignment",
+			got: execArgs(project, ws, execOptions{
+				cwd: "/workspace",
+				env: []envAssignment{{Name: "XDG_DATA_HOME", Value: "/sessions"}},
+			}, []string{"opencode", "run"}),
+			want: []string{
+				"--project", project, "exec",
+				"--cwd", "/workspace",
+				"--env", "XDG_DATA_HOME=/sessions",
+				ws, "--", "opencode", "run",
+			},
+		},
+		{
+			// Inherited keys come first, then explicit assignments, so the argv
+			// is deterministic when an agent has both credentials and a session
+			// redirect.
+			name: "exec orders env keys before explicit assignments",
+			got: execArgs(project, ws, execOptions{
+				cwd:     "/workspace",
+				envKeys: []string{"OPENROUTER_API_KEY"},
+				env:     []envAssignment{{Name: "XDG_DATA_HOME", Value: "/sessions"}},
+			}, []string{"true"}),
+			want: []string{
+				"--project", project, "exec",
+				"--cwd", "/workspace",
+				"--env", "OPENROUTER_API_KEY",
+				"--env", "XDG_DATA_HOME=/sessions",
+				ws, "--", "true",
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -195,8 +195,10 @@ func TestRun_PerRunSequence(t *testing.T) {
 	}
 
 	// The verified recipe order: ensure (info+launch) -> worktree add ->
-	// stop -> remount workspace -> remount gitcommon -> start -> exec.
-	wantSeq := []string{"info", "launch", "worktree", "stop", "remount", "remount", "start", "exec", "rev-parse"}
+	// stop -> remount workspace -> remount gitcommon -> remount sessions ->
+	// start -> exec. The sessions remount is present because OpenCode is a
+	// session-capable agent.
+	wantSeq := []string{"info", "launch", "worktree", "stop", "remount", "remount", "remount", "start", "exec", "rev-parse"}
 	if got := fc.verbs(); !slices.Equal(got, wantSeq) {
 		t.Fatalf("sequence =\n  %v\nwant\n  %v", got, wantSeq)
 	}
@@ -214,6 +216,16 @@ func TestRun_PerRunSequence(t *testing.T) {
 	wantGc := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.Agent.Name(), "gitcommon", "/home/dev/repos/myproject/.git")
 	if got := fc.findCallN(t, "remount", 1).Args; !slices.Equal(got, wantGc) {
 		t.Errorf("gitcommon remount args =\n  %v\nwant\n  %v", got, wantGc)
+	}
+	// Sessions mount: a host sessions dir under the project is bound so the
+	// agent's session files survive the swap. It is the third remount.
+	wantSess := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.Agent.Name(), "sessions", filepath.Join(cfg.ProjectDir, "sessions"))
+	if got := fc.findCallN(t, "remount", 2).Args; !slices.Equal(got, wantSess) {
+		t.Errorf("sessions remount args =\n  %v\nwant\n  %v", got, wantSess)
+	}
+	// The host sessions dir must exist for the remount source to resolve.
+	if _, err := os.Stat(filepath.Join(cfg.ProjectDir, "sessions")); err != nil {
+		t.Errorf("host sessions dir not created: %v", err)
 	}
 
 	// The worktree is created on the requested branch.
@@ -235,6 +247,70 @@ func TestRun_PerRunSequence(t *testing.T) {
 	}
 	if !slices.Contains(exec.Args, "/workspace") {
 		t.Errorf("exec missing /workspace cwd: %v", exec.Args)
+	}
+}
+
+// A session-capable agent has its session-dir env var redirected to the sessions
+// mount target at exec time, so the agent writes session files into the bound
+// host directory rather than the ephemeral rootfs. The value is set explicitly
+// (NAME=VALUE), unlike inherited credential keys.
+func TestRun_RedirectsSessionDirEnv(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	r := New(cfg, fc)
+
+	if _, err := r.Run(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	spec, ok := cfg.Agent.Sessions()
+	if !ok {
+		t.Fatal("test config agent is not session-capable")
+	}
+	// The redirect value must be the sessions mount target itself (the host dir
+	// Setup bound there), so the agent writes session files into the bind-mount.
+	want := spec.DirEnv + "=" + sessionsTarget // e.g. XDG_DATA_HOME=/sessions
+	exec := fc.findCallN(t, "exec", 0)
+	if !slices.Contains(exec.Args, want) {
+		t.Errorf("exec missing session-dir redirect %q in argv: %v", want, exec.Args)
+	}
+}
+
+// An agent with no session store gets none of the sessions wiring: no sessions
+// remount in the swap, no session-dir env on exec, and no host sessions dir is
+// created. This pins the negative branch of the Sessions() guard.
+func TestRun_SessionlessAgent_NoSessionsWiring(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	cfg.Agent = stdinProfile{} // Sessions() ok == false
+	r := New(cfg, fc)
+
+	if _, err := r.Run(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Only the two core remounts (workspace, gitcommon); no sessions remount.
+	remounts := 0
+	for _, v := range fc.verbs() {
+		if v == "remount" {
+			remounts++
+		}
+	}
+	if remounts != 2 {
+		t.Errorf("got %d remounts, want 2 (workspace+gitcommon, no sessions); verbs: %v", remounts, fc.verbs())
+	}
+
+	// No session-dir redirect leaks into the agent exec.
+	exec := fc.findCallN(t, "exec", 0)
+	for _, a := range exec.Args {
+		if strings.Contains(a, "/sessions") {
+			t.Errorf("sessionless agent exec carries a session redirect: %v", exec.Args)
+		}
+	}
+
+	// No host sessions dir is created when there is nothing to persist.
+	if _, err := os.Stat(filepath.Join(cfg.ProjectDir, "sessions")); !os.IsNotExist(err) {
+		t.Errorf("host sessions dir created for a sessionless agent (err=%v)", err)
 	}
 }
 
