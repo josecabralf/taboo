@@ -120,6 +120,14 @@ func (r *Runner) worktreePath(branch string) string {
 	return filepath.Join(r.cfg.ProjectDir, "worktrees", safe)
 }
 
+// sessionsDir is the host directory taboo binds into the workshop for a
+// session-capable agent's session files. It is stable across a workshop's runs
+// (not per-branch) so a session can be resumed regardless of which worktree a
+// later run uses.
+func (r *Runner) sessionsDir() string {
+	return filepath.Join(r.cfg.ProjectDir, "sessions")
+}
+
 // Run executes one agent run end-to-end: Setup the worktree, then Exec the
 // agent once in it. It is the single-run primitive. The Orchestrator splits
 // these steps to Setup once and Exec repeatedly into the same worktree.
@@ -160,6 +168,18 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	if err := r.workshop(ctx, remountArgs(proj, ws, sdk, "gitcommon", gitCommonTarget(r.cfg.RepoPath))); err != nil {
 		return res, fmt.Errorf("remount gitcommon: %w", err)
 	}
+	// A session-capable agent gets a host sessions dir bound in alongside the
+	// worktree, so its session files write through to the host and survive this
+	// stop/remount/start swap (which wipes the rootfs).
+	if _, ok := r.cfg.Agent.Sessions(); ok {
+		host := r.sessionsDir()
+		if err := os.MkdirAll(host, 0o750); err != nil {
+			return res, fmt.Errorf("create sessions dir: %w", err)
+		}
+		if err := r.workshop(ctx, remountArgs(proj, ws, sdk, "sessions", host)); err != nil {
+			return res, fmt.Errorf("remount sessions: %w", err)
+		}
+	}
 	if err := r.workshop(ctx, startArgs(proj, ws)); err != nil {
 		return res, fmt.Errorf("start: %w", err)
 	}
@@ -193,6 +213,12 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 
 	ac := r.cfg.Agent.BuildCommand(CommandOptions{Prompt: req.Prompt})
 	opts := execOptions{cwd: workspaceTarget, timeout: req.Timeout, envKeys: r.cfg.Agent.CredentialEnvKeys()}
+	// Point the agent's session-dir env var at the sessions mount target so its
+	// session files land in the bound host directory (the same dir Setup mounted
+	// and that survives the swap).
+	if spec, ok := r.cfg.Agent.Sessions(); ok {
+		opts.env = append(opts.env, envAssignment{Name: spec.DirEnv, Value: sessionsTarget})
+	}
 	execCmd := Cmd{
 		Name:   "workshop",
 		Args:   execArgs(proj, ws, opts, ac.Argv),

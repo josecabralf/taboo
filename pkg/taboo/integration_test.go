@@ -166,7 +166,7 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		t.Skip("OPENROUTER_API_KEY not set; skipping live-agent integration test")
 	}
 	repo := initSeedRepo(t)
-	r, _ := newIntegrationRunner(t, repo, OpenCode("openrouter/qwen/qwen3-coder-plus"))
+	r, cfg := newIntegrationRunner(t, repo, OpenCode("openrouter/qwen/qwen3-coder-plus"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -196,4 +196,18 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		t.Errorf("expected an agent commit beyond seed; log:\n%s", out)
 	}
 	t.Logf("agent commit=%s\nlog:\n%s", res.Commit, out)
+
+	// Session capture: OpenCode's session storage was redirected (XDG_DATA_HOME)
+	// to the mounted host sessions dir, so its session files must be present on
+	// the host after the run — proving they survived the stop/remount/start swap.
+	spec, _ := OpenCode("").Sessions()
+	sessDir := filepath.Join(cfg.ProjectDir, "sessions", spec.Subdir)
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		t.Fatalf("host sessions dir %q not populated after run: %v", sessDir, err)
+	}
+	if len(entries) == 0 {
+		t.Errorf("host sessions dir %q is empty; session files did not survive", sessDir)
+	}
+	t.Logf("host session files under %s: %d entries", sessDir, len(entries))
 }

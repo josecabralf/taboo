@@ -215,7 +215,8 @@ any feature work.
    `Validator` + `WithStrictFields()` add opt-in validation; no new dependency.
 4. **Parallel fan-out.** N workshops, worktree-per-agent, caller-driven
    concurrency.
-5. **Session capture + resume/fork** via the mounted sessions dir.
+5. **Session capture** (✅ done) **+ resume/fork** (deferred) via the mounted
+   sessions dir.
 6. **Hooks + prompt templating** ergonomics.
 
 ## Open questions & risks (to verify)
@@ -258,7 +259,13 @@ the walking skeleton (build step 1) exists to prove.
      bind-mount is fine, but resume/fork semantics over a DB are harder than
      file-copy — almost certainly why sandcastle leaves OpenCode non-resumable.
      The `AgentProfile.Sessions()` accessor returns `({XDG_DATA_HOME, "opencode"},
-     true)` for OpenCode; the DB-vs-JSONL question is deferred to the sessions slice.
+     true)` for OpenCode. **Capture is now built (risk #3 closed for OpenCode):**
+     `renderDefinition` adds a `sessions` mount plug, `Runner.Setup` binds a host
+     sessions dir into the swap, and `Runner.Exec` sets `XDG_DATA_HOME` to the
+     mount target so session files write through to the host and survive the
+     stop/remount/start swap — verified end-to-end by the OpenCode integration
+     test. Resume/fork over the SQLite DB (the DB-vs-JSONL question) remains
+     deferred to a later slice.
 4. **Table-parsing fragility.** `list` / `changes` / `tasks` emit human tables
    (no JSON). Prefer `info` / `actions` (real YAML) and minimize reliance on
    table output; watch for breakage across workshop versions.

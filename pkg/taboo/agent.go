@@ -14,9 +14,10 @@ type AgentProfile interface {
 	// CredentialEnvKeys are host environment variable names whose values reach
 	// the agent via `workshop exec --env NAME` (the value never enters argv).
 	CredentialEnvKeys() []string
-	// Sessions reports where the agent persists session state, for the sessions
-	// slice to mount. ok is false for agents with no session store. It is a pure
-	// accessor with no consumer in this slice.
+	// Sessions reports where the agent persists session state. ok is false for
+	// agents with no session store. taboo uses it to render a sessions mount
+	// plug, bind a host sessions directory into the workshop, and point DirEnv at
+	// the mount target so session files survive the per-run rootfs wipe.
 	Sessions() (SessionSpec, bool)
 }
 

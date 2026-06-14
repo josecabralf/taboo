@@ -44,6 +44,12 @@ type plug struct {
 
 const workspaceTarget = "/workspace"
 
+// sessionsTarget is the in-workshop mount target for the host sessions directory.
+// A session-capable agent's session-dir env var (AgentProfile.Sessions().DirEnv)
+// is pointed here at exec time so session files write through to the host and
+// survive the per-run stop/remount/start swap, which wipes the rootfs.
+const sessionsTarget = "/sessions"
+
 // projectSDKRef returns the name used to reference an in-project SDK (one
 // shipped under .workshop/<name>/) in a definition's `sdks:` list. Workshop
 // resolves "project-<name>" to the bare "<name>" used for remount qualifiers
@@ -60,15 +66,21 @@ func gitCommonTarget(repoPath string) string {
 
 // renderDefinition produces the workshop definition YAML for cfg.
 func renderDefinition(cfg Config) (string, error) {
+	plugs := map[string]plug{
+		"workspace": {Interface: "mount", WorkshopTarget: workspaceTarget},
+		"gitcommon": {Interface: "mount", WorkshopTarget: gitCommonTarget(cfg.RepoPath)},
+	}
+	// A session-capable agent gets a third mount so its session files reach the
+	// host and survive the per-run rootfs wipe (see sessionsTarget).
+	if _, ok := cfg.Agent.Sessions(); ok {
+		plugs["sessions"] = plug{Interface: "mount", WorkshopTarget: sessionsTarget}
+	}
 	def := definition{
 		Name: cfg.Workshop,
 		Base: cfg.Base,
 		SDKs: []sdkDef{{
-			Name: projectSDKRef(cfg.Agent.Name()),
-			Plugs: map[string]plug{
-				"workspace": {Interface: "mount", WorkshopTarget: workspaceTarget},
-				"gitcommon": {Interface: "mount", WorkshopTarget: gitCommonTarget(cfg.RepoPath)},
-			},
+			Name:  projectSDKRef(cfg.Agent.Name()),
+			Plugs: plugs,
 		}},
 	}
 	out, err := yaml.Marshal(def)
