@@ -208,10 +208,11 @@ any feature work.
    A second integration test exercises the real OpenCode agent when
    `OPENROUTER_API_KEY` is set.
 2. **Iteration loop + completion-signal** early stop.
-3. **Structured output extraction.** Go equivalent of sandcastle's Zod — likely
-   JSON Schema validation or struct-tag decoding of a `<result>{...}</result>`
-   block. *This is a genuine "Go instead of TS" design fork; decide the mechanism
-   here.*
+3. **Structured output extraction.** Go equivalent of sandcastle's Zod —
+   **resolved (ADR 0002): generics over `encoding/json`, the caller's struct is
+   the schema.** A `ResultExtractor` parses the last `<result>{...}</result>`
+   block from the agent's final output and `JSONResult[T]` decodes it into `T`;
+   `Validator` + `WithStrictFields()` add opt-in validation; no new dependency.
 4. **Parallel fan-out.** N workshops, worktree-per-agent, caller-driven
    concurrency.
 5. **Session capture + resume/fork** via the mounted sessions dir.
@@ -267,8 +268,8 @@ the walking skeleton (build step 1) exists to prove.
 Not workshop-specific; follow sandcastle's proven design when reached:
 
 - **Branch-naming convention** — head / merge-to-head / named-branch strategies.
-- **Go structured-output mechanism** — no Zod equivalent in Go; decide at build
-  step 3.
+- ~~**Go structured-output mechanism**~~ — resolved in ADR 0002 (generics over
+  `encoding/json`; the struct is the schema).
 
 ## Glossary
 
@@ -293,3 +294,13 @@ Not workshop-specific; follow sandcastle's proven design when reached:
   qualifier). The model is baked in at construction (`OpenCode(model)`). `Config`
   references one `AgentProfile` instead of a raw agent command. OpenCode is the
   first concrete profile.
+- **result block** — a delimited span in the agent's output (default
+  `<result>…</result>`) whose JSON payload is the run's structured result. The
+  agent is prompted to emit one; the **last** one in the final iteration's output
+  is authoritative.
+- **ResultExtractor** — taboo's structured-output abstraction (sandcastle's
+  Zod-shaped concern, done the Go way; ADR 0002). A pure function over the
+  agent's captured output that finds the result block and decodes/validates its
+  payload into a typed value. Constructed by `JSONResult[T]`; surfaced on an
+  orchestrated run as `OrchestratedResult.Result` (typed `any`). Distinguishes
+  *no block* (`ErrNoResult`) from *block found but invalid* (`ErrInvalidResult`).

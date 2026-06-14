@@ -2,6 +2,7 @@ package taboo
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -133,6 +134,92 @@ func TestOrchestrator_SignalMustMatchConfigured(t *testing.T) {
 	}
 	if res.Iterations != 2 {
 		t.Errorf("Iterations = %d, want 2", res.Iterations)
+	}
+}
+
+func TestOrchestrator_SurfacesExtractedResult(t *testing.T) {
+	// The agent's final output carries a <result> block; the orchestrator runs
+	// the extractor once post-loop and surfaces the typed value on res.Result.
+	fc := &fakeCommander{
+		stdoutFn: func(c Cmd) string {
+			if verbOf(c) == "exec" {
+				return "done\n<result>{\"summary\":\"shipped\",\"score\":8}</result>\n"
+			}
+			return ""
+		},
+	}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:      RunRequest{Branch: "agent/x", Prompt: "go"},
+		ResultExtractor: JSONResult[review](),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rv, ok := res.Result.(review)
+	if !ok {
+		t.Fatalf("res.Result = %T, want taboo.review", res.Result)
+	}
+	if rv.Summary != "shipped" || rv.Score != 8 {
+		t.Errorf("res.Result = %+v, want {shipped 8}", rv)
+	}
+}
+
+func TestOrchestrator_NoExtractorLeavesResultNil(t *testing.T) {
+	// Back-compat: without a ResultExtractor the run behaves as before and
+	// res.Result stays nil with no error.
+	fc := &fakeCommander{
+		stdoutFn: func(c Cmd) string {
+			if verbOf(c) == "exec" {
+				return "<result>{\"summary\":\"ignored\"}</result>"
+			}
+			return ""
+		},
+	}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest: RunRequest{Branch: "agent/x", Prompt: "go"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Result != nil {
+		t.Errorf("res.Result = %v, want nil (no extractor configured)", res.Result)
+	}
+}
+
+func TestOrchestrator_ExtractionErrorKeepsResultPopulated(t *testing.T) {
+	// The extractor is set but the agent emits no block: o.Run returns
+	// ErrNoResult, yet the populated result (Commit/Output/Iterations) is
+	// preserved so a failed extraction never discards the agent's commit.
+	fc := &fakeCommander{
+		stdoutFn: func(c Cmd) string {
+			if verbOf(c) == "exec" {
+				return "the agent never emitted a block\n"
+			}
+			return ""
+		},
+	}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:      RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:   2,
+		ResultExtractor: JSONResult[review](),
+	})
+	if !errors.Is(err, ErrNoResult) {
+		t.Fatalf("Run err = %v, want ErrNoResult", err)
+	}
+	if res.Result != nil {
+		t.Errorf("res.Result = %v, want nil on extraction failure", res.Result)
+	}
+	if res.Iterations != 2 {
+		t.Errorf("res.Iterations = %d, want 2 (loop ran fully before extraction)", res.Iterations)
+	}
+	if res.Output == "" {
+		t.Error("res.Output is empty; the populated result must survive extraction failure")
 	}
 }
 

@@ -28,6 +28,9 @@ type OrchestratedRequest struct {
 	// CompletionSignal is the sentinel watched for in the agent's stdout to stop
 	// the loop early (empty = no early stop).
 	CompletionSignal string
+	// ResultExtractor, if set, parses a typed result from the final iteration's
+	// output once the loop ends (nil = skip; OrchestratedResult.Result stays nil).
+	ResultExtractor ResultExtractor
 }
 
 // OrchestratedResult reports the outcome of a looped run: the final iteration's
@@ -40,6 +43,10 @@ type OrchestratedResult struct {
 	Iterations int
 	// StopReason explains why the loop ended.
 	StopReason StopReason
+	// Result is the value decoded by req.ResultExtractor from the final output,
+	// or nil if no extractor was configured. Callers type-assert it to their
+	// result type (e.g. res.Result.(MyResult)).
+	Result any
 }
 
 // Orchestrator composes a Runner into an iteration loop. It prepares the
@@ -79,10 +86,27 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 		}
 		if req.CompletionSignal != "" && strings.Contains(rr.Output, req.CompletionSignal) {
 			res.StopReason = StopSignal
-			return res, nil
+			return o.extract(req, res)
 		}
 	}
 
 	res.StopReason = StopMaxIterations
+	return o.extract(req, res)
+}
+
+// extract runs req.ResultExtractor once over the final iteration's output and
+// records the typed value on res.Result. It is the single post-loop step shared
+// by both stop paths. On extraction failure res stays fully populated (the
+// agent's commit is never discarded) and the wrapped sentinel error is
+// returned alongside it.
+func (o *Orchestrator) extract(req OrchestratedRequest, res OrchestratedResult) (OrchestratedResult, error) {
+	if req.ResultExtractor == nil {
+		return res, nil
+	}
+	result, err := req.ResultExtractor.Extract(res.Output)
+	if err != nil {
+		return res, err
+	}
+	res.Result = result
 	return res, nil
 }
