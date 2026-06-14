@@ -39,7 +39,7 @@ type RunRequest struct {
 type RunResult struct {
 	Branch       string
 	WorktreePath string
-	Commit       string // HEAD of the branch after the agent ran (set in slice 6)
+	Commit       string // HEAD of the branch after the agent ran
 	Output       string // captured agent exec stdout (stderr is not retained)
 	// Err is this run's failure, populated by Pool when fanning out so that one
 	// failed run does not abort the whole batch (see Pool.Run). The single-run

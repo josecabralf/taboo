@@ -61,6 +61,12 @@ func (p *Pool) slotConfig(slot int) Config {
 // on the corresponding RunResult.Err and the remaining runs proceed. The
 // returned error is non-nil only when the batch cannot be started at all (the
 // context is already canceled); per-run failures never surface there.
+//
+// If ctx is canceled after the batch starts, runs already in flight finish on
+// their own (cancellation reaches them through the Commander) and queued runs
+// are skipped: each skipped run's RunResult carries its Branch and ctx.Err() on
+// RunResult.Err, with no workshop or git commands issued for it. The batch error
+// stays nil; cancellation surfaces per run, like any other per-run failure.
 func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -92,6 +98,14 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) 
 			defer wg.Done()
 			r := New(p.slotConfig(slot), cmd)
 			for j := range jobs {
+				// Skip queued runs once ctx is canceled rather than dispatching
+				// commands that would only fail: record the cancellation per run
+				// so results stay in input order and the caller can tell skipped
+				// runs from completed ones.
+				if err := ctx.Err(); err != nil {
+					results[j.idx] = RunResult{Branch: j.req.Branch, Err: err}
+					continue
+				}
 				res, err := r.Run(ctx, j.req)
 				res.Err = err
 				results[j.idx] = res // distinct index per goroutine: race-free

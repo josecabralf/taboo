@@ -2,6 +2,7 @@ package taboo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -427,5 +428,84 @@ func TestPool_AlreadyCanceledContext(t *testing.T) {
 	}
 	if got := len(fc.snapshot()); got != 0 {
 		t.Errorf("issued %d commands for a canceled batch, want 0", got)
+	}
+}
+
+func TestPool_MoreSlotsThanRequestsCapsWorkers(t *testing.T) {
+	const limit, n = 8, 3 // limit > requests: workers must cap at n, not limit
+	// Hold every run in flight at once so each request is forced onto its own
+	// slot; with workers capped at n there are exactly n slots, so n distinct
+	// workshops drive the batch (never `limit` of them).
+	fc := &fakeCommander{
+		gateVerb: "exec",
+		gate:     make(chan struct{}),
+		entered:  make(chan struct{}, n),
+	}
+	p := NewPool(testConfig(t), limit, fc)
+	reqs := poolRequests(n)
+
+	done := make(chan []RunResult, 1)
+	go func() {
+		res, _ := p.Run(context.Background(), reqs)
+		done <- res
+	}()
+	for i := 0; i < n; i++ {
+		<-fc.entered
+	}
+	for i := 0; i < n; i++ {
+		fc.gate <- struct{}{}
+	}
+	results := <-done
+
+	assertInputOrder(t, results, reqs)
+	if ws := fc.remountWorkshops(t); len(ws) != n {
+		t.Errorf("distinct workshops = %v, want %d (workers capped at request count, not limit %d)", ws, n, limit)
+	}
+}
+
+func TestPool_CancelMidFlightSkipsQueuedRuns(t *testing.T) {
+	const n = 3
+	// One slot, so runs are processed strictly in order: run 0 parks at exec,
+	// we cancel, then release it. The worker must skip the queued runs 1 and 2
+	// and record the cancellation on each, without issuing any commands for them.
+	fc := &fakeCommander{
+		gateVerb: "exec",
+		gate:     make(chan struct{}),
+		entered:  make(chan struct{}, n),
+	}
+	p := NewPool(testConfig(t), 1, fc)
+	reqs := poolRequests(n)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan []RunResult, 1)
+	go func() {
+		res, _ := p.Run(ctx, reqs)
+		done <- res
+	}()
+
+	<-fc.entered // run 0 is parked at its agent exec
+	cancel()     // cancel while run 0 is in flight
+	fc.gate <- struct{}{}
+	results := <-done
+
+	assertInputOrder(t, results, reqs)
+	// Run 0 was already in flight, so it completes (the fake exec does not honor
+	// ctx; in production the Commander would surface the cancellation here too).
+	if results[0].Err != nil {
+		t.Errorf("results[0].Err = %v, want nil (an in-flight run finishes)", results[0].Err)
+	}
+	// Runs 1 and 2 were queued: each is skipped and carries the context error,
+	// and nothing was set up for them.
+	for i := 1; i < n; i++ {
+		if !errors.Is(results[i].Err, context.Canceled) {
+			t.Errorf("results[%d].Err = %v, want context.Canceled (queued run skipped)", i, results[i].Err)
+		}
+		if results[i].WorktreePath != "" {
+			t.Errorf("results[%d].WorktreePath = %q, want empty (no setup for a skipped run)", i, results[i].WorktreePath)
+		}
+	}
+	// Only run 0 ever reached exec; no commands were issued for the skipped runs.
+	if got := fc.countVerb("exec"); got != 1 {
+		t.Errorf("exec count = %d, want 1 (only the in-flight run ran)", got)
 	}
 }
