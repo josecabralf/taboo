@@ -124,8 +124,27 @@ func (r *Runner) worktreePath(branch string) string {
 // session-capable agent's session files. It is stable across a workshop's runs
 // (not per-branch) so a session can be resumed regardless of which worktree a
 // later run uses.
+//
+// Because it is shared by every run in a ProjectDir, it is safe only for
+// sequential runs against one workshop. When parallel fan-out (the Pool slice)
+// lands, concurrent runs sharing a ProjectDir would share OpenCode's single
+// SQLite session store and could corrupt it; give each concurrent run its own
+// ProjectDir (or a per-slot subdir here) at that point.
 func (r *Runner) sessionsDir() string {
 	return filepath.Join(r.cfg.ProjectDir, "sessions")
+}
+
+// sessionEnv returns the explicit `--env NAME=VALUE` assignment that redirects a
+// session-capable agent's session-dir env var at the sessions mount target, or
+// nil for a sessionless agent. Both the agent exec and any in-workshop setup
+// hook apply it: hooks run after start with no swap before the exec, so a hook
+// that prepares session state must resolve the store to the same bound path the
+// agent later reads, or their views of it would silently diverge.
+func (r *Runner) sessionEnv() []envAssignment {
+	if spec, ok := r.cfg.Agent.Sessions(); ok {
+		return []envAssignment{{Name: spec.DirEnv, Value: sessionsTarget}}
+	}
+	return nil
 }
 
 // Run executes one agent run end-to-end: Setup the worktree, then Exec the
@@ -216,9 +235,7 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 	// Point the agent's session-dir env var at the sessions mount target so its
 	// session files land in the bound host directory (the same dir Setup mounted
 	// and that survives the swap).
-	if spec, ok := r.cfg.Agent.Sessions(); ok {
-		opts.env = append(opts.env, envAssignment{Name: spec.DirEnv, Value: sessionsTarget})
-	}
+	opts.env = r.sessionEnv()
 	execCmd := Cmd{
 		Name:   "workshop",
 		Args:   execArgs(proj, ws, opts, ac.Argv),

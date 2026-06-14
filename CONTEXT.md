@@ -214,7 +214,11 @@ any feature work.
    block from the agent's final output and `JSONResult[T]` decodes it into `T`;
    `Validator` + `WithStrictFields()` add opt-in validation; no new dependency.
 4. **Parallel fan-out.** N workshops, worktree-per-agent, caller-driven
-   concurrency.
+   concurrency. **Sessions constraint:** the host sessions dir is
+   `<ProjectDir>/sessions`, shared by every run in a ProjectDir, so concurrent
+   runs must not share one — give each its own ProjectDir (or a per-slot
+   sessions subdir), else they share OpenCode's single SQLite store and can
+   corrupt it.
 5. **Session capture** (✅ done) **+ resume/fork** (deferred) via the mounted
    sessions dir.
 6. **Hooks + prompt templating** ergonomics.

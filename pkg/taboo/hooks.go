@@ -29,12 +29,14 @@ type Hooks struct {
 }
 
 // hookCmd builds the Cmd that runs h, either on the host or inside the
-// workshop. In-workshop hooks inherit cwd /workspace, the run's timeout, and the
-// agent's credential env keys so setup commands run with the same context as the
-// agent. Host hooks run in the run's worktree. Pure.
-func hookCmd(proj, ws, worktree string, envKeys []string, timeout time.Duration, h Hook) Cmd {
+// workshop. In-workshop hooks inherit cwd /workspace, the run's timeout, the
+// agent's credential env keys, and its session-dir redirect (sessionEnv) so
+// setup commands run with the same context as the agent. Host hooks run in the
+// run's worktree and get neither env set (the redirect is a workshop path).
+// Pure.
+func hookCmd(proj, ws, worktree string, envKeys []string, sessionEnv []envAssignment, timeout time.Duration, h Hook) Cmd {
 	if h.InWorkshop {
-		opts := execOptions{cwd: workspaceTarget, timeout: timeout, envKeys: envKeys}
+		opts := execOptions{cwd: workspaceTarget, timeout: timeout, envKeys: envKeys, env: sessionEnv}
 		return Cmd{Name: "workshop", Args: execArgs(proj, ws, opts, h.Command)}
 	}
 	return Cmd{Name: h.Command[0], Args: h.Command[1:], Dir: worktree}
@@ -49,7 +51,7 @@ func (r *Runner) runHooks(ctx context.Context, worktree string, timeout time.Dur
 		if len(h.Command) == 0 {
 			continue
 		}
-		cmd := hookCmd(r.cfg.ProjectDir, r.cfg.Workshop, worktree, r.cfg.Agent.CredentialEnvKeys(), timeout, h)
+		cmd := hookCmd(r.cfg.ProjectDir, r.cfg.Workshop, worktree, r.cfg.Agent.CredentialEnvKeys(), r.sessionEnv(), timeout, h)
 		cmd.Stdout, cmd.Stderr = out, out
 		if err := r.runHook(ctx, timeout, cmd); err != nil {
 			return fmt.Errorf("hook %d %v: %w", i, h.Command, err)

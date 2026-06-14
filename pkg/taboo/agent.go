@@ -40,6 +40,12 @@ type AgentCommand struct {
 
 // SessionSpec locates an agent's on-disk session store: Subdir under the
 // directory named by the DirEnv environment variable (e.g. XDG_DATA_HOME).
+//
+// The capture wiring uses only DirEnv: taboo points DirEnv at the sessions
+// mount target and the agent itself writes under DirEnv/Subdir. Subdir is the
+// agent-relative path to those files (mount source + Subdir), consumed when
+// locating the store from the outside — the integration test today, and the
+// deferred resume/fork slice — not by the env redirect.
 type SessionSpec struct {
 	DirEnv string
 	Subdir string
@@ -69,6 +75,12 @@ func (a openCode) BuildCommand(opts CommandOptions) AgentCommand {
 
 func (openCode) CredentialEnvKeys() []string { return []string{"OPENROUTER_API_KEY"} }
 
+// Sessions redirects OpenCode's data store by pointing XDG_DATA_HOME at the
+// mount. This captures OpenCode's whole data dir (sessions plus its SQLite
+// "channel db" and anything else it keeps under XDG_DATA_HOME), not sessions
+// alone. Safe here because OpenCode authenticates from OPENROUTER_API_KEY in the
+// env, so no credential file lands on the host mount; weigh this before adding
+// an agent that keeps file-based secrets under its session-dir env var.
 func (openCode) Sessions() (SessionSpec, bool) {
 	return SessionSpec{DirEnv: "XDG_DATA_HOME", Subdir: "opencode"}, true
 }
