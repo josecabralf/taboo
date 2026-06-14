@@ -15,7 +15,7 @@ prompt riding in argv.
 
 We chose the two-field struct because the agents taboo intends to support split
 on how they receive the prompt, and an argv-only return cannot represent the
-stdin half of that roster — wiring up Claude Code or Codex would then force a
+stdin half of that roster; wiring up Claude Code or Codex would then force a
 breaking change to this interface, which is reviewed by hand precisely because
 fan-out and sessions build on it.
 
@@ -33,11 +33,11 @@ fan-out and sessions build on it.
 Prompt delivery across the embedded `pkg/taboo/sdk/` roster (verified against the
 sandcastle reference invocations):
 
-| Agent       | Prompt delivery              |
-|-------------|------------------------------|
-| opencode    | positional argv              |
-| copilot     | `-p <prompt>` argv           |
-| cursor      | positional argv              |
+| Agent       | Prompt delivery                 |
+|-------------|---------------------------------|
+| opencode    | positional argv                 |
+| copilot     | `-p <prompt>` argv              |
+| cursor      | positional argv                 |
 | claude-code | stdin (`claude --print … -p -`) |
 | codex       | stdin (`codex exec --json …`)   |
 | pi          | stdin (`pi -p --mode json …`)   |
