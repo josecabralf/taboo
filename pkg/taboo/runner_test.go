@@ -8,19 +8,36 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 // fakeCommander records every invocation and can be programmed to fail
-// specific commands via errFn.
+// specific commands via errFn. It is safe for concurrent use (the Pool fans runs
+// out across goroutines), so mu guards calls and worktrees and every accessor
+// takes it.
 type fakeCommander struct {
+	mu        sync.Mutex
 	calls     []Cmd
 	errFn     func(c Cmd) error
 	stdoutFn  func(c Cmd) string  // programmed stdout for a matched call
 	worktrees map[string]struct{} // branches already added, to model git's statefulness
+
+	// Optional concurrency gate for Pool tests. A call whose verb == gateVerb
+	// updates the inflight/peak meter, signals entered, then blocks until it
+	// receives a token from gate — all WITHOUT holding mu, so concurrently gated
+	// calls genuinely overlap and peak reflects true simultaneity. Leaving gate
+	// nil disables it (the default for non-concurrency tests).
+	gateVerb string
+	gate     chan struct{}
+	entered  chan struct{}
+	inflight atomic.Int32
+	peak     atomic.Int32
 }
 
 func (f *fakeCommander) Run(_ context.Context, c Cmd) error {
+	f.mu.Lock()
 	f.calls = append(f.calls, c)
 	// Model the one piece of git statefulness the orchestrator depends on: a
 	// second `worktree add -b <branch>` for a branch already added fails, as
@@ -28,6 +45,7 @@ func (f *fakeCommander) Run(_ context.Context, c Cmd) error {
 	// hide a loop that re-creates the worktree every iteration.
 	if branch, ok := worktreeAddBranch(c); ok {
 		if _, exists := f.worktrees[branch]; exists {
+			f.mu.Unlock()
 			return fmt.Errorf("fatal: a branch named %q already exists", branch)
 		}
 		if f.worktrees == nil {
@@ -35,21 +53,53 @@ func (f *fakeCommander) Run(_ context.Context, c Cmd) error {
 		}
 		f.worktrees[branch] = struct{}{}
 	}
-	if f.stdoutFn != nil && c.Stdout != nil {
-		if s := f.stdoutFn(c); s != "" {
+	stdoutFn, errFn := f.stdoutFn, f.errFn
+	gateVerb, gate, entered := f.gateVerb, f.gate, f.entered
+	f.mu.Unlock()
+
+	// Gate matching calls without holding mu so they truly overlap. Count this
+	// call as in flight, push the peak up to the new high-water mark, announce
+	// arrival, then park until the test releases one token.
+	if gate != nil && verbOf(c) == gateVerb {
+		n := f.inflight.Add(1)
+		for {
+			p := f.peak.Load()
+			if n <= p || f.peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		if entered != nil {
+			entered <- struct{}{}
+		}
+		<-gate
+		f.inflight.Add(-1)
+	}
+
+	if stdoutFn != nil && c.Stdout != nil {
+		if s := stdoutFn(c); s != "" {
 			_, _ = io.WriteString(c.Stdout, s)
 		}
 	}
-	if f.errFn != nil {
-		return f.errFn(c)
+	if errFn != nil {
+		return errFn(c)
 	}
 	return nil
+}
+
+// snapshot returns a copy of the recorded calls, taken under the lock, so tests
+// can inspect the sequence after concurrent runs without racing the recorder.
+func (f *fakeCommander) snapshot() []Cmd {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }
 
 // verbs returns the workshop/git subcommand verb of each recorded call, in
 // order, for sequence assertions. For workshop calls the verb is the token
 // after "--project <dir>"; for git it is "worktree".
 func (f *fakeCommander) verbs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var vs []string
 	for _, c := range f.calls {
 		vs = append(vs, verbOf(c))
@@ -168,6 +218,8 @@ func TestEnsureWorkshop_PresentReuses(t *testing.T) {
 // findCallN returns the nth (0-based) recorded Cmd whose verb matches, or fails.
 func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) Cmd {
 	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	seen := 0
 	for _, c := range f.calls {
 		if verbOf(c) == verb {

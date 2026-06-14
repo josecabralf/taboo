@@ -41,6 +41,11 @@ type RunResult struct {
 	WorktreePath string
 	Commit       string // HEAD of the branch after the agent ran (set in slice 6)
 	Output       string // captured agent exec stdout (stderr is not retained)
+	// Err is this run's failure, populated by Pool when fanning out so that one
+	// failed run does not abort the whole batch (see Pool.Run). The single-run
+	// primitives (Runner.Run/Setup/Exec) return their error separately and leave
+	// Err nil.
+	Err error
 }
 
 // Runner orchestrates agent runs in a taboo-managed workshop.
@@ -126,10 +131,10 @@ func (r *Runner) worktreePath(branch string) string {
 // later run uses.
 //
 // Because it is shared by every run in a ProjectDir, it is safe only for
-// sequential runs against one workshop. When parallel fan-out (the Pool slice)
-// lands, concurrent runs sharing a ProjectDir would share OpenCode's single
-// SQLite session store and could corrupt it; give each concurrent run its own
-// ProjectDir (or a per-slot subdir here) at that point.
+// sequential runs against one workshop: concurrent runs sharing a ProjectDir
+// would share OpenCode's single SQLite session store and could corrupt it. Pool
+// keeps this invariant by giving each concurrency slot its own ProjectDir (see
+// Pool.slotConfig), so parallel fan-out runs never share a session store.
 func (r *Runner) sessionsDir() string {
 	return filepath.Join(r.cfg.ProjectDir, "sessions")
 }
