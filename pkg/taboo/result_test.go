@@ -3,6 +3,7 @@ package taboo
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -80,6 +81,10 @@ func TestJSONResult_EmptyPayloadIsErrInvalidResult(t *testing.T) {
 	if errors.Is(err, ErrNoResult) {
 		t.Errorf("empty payload must not be reported as ErrNoResult: %v", err)
 	}
+	// The dedicated guard names the cause rather than surfacing the decoder's EOF.
+	if err == nil || !strings.Contains(err.Error(), "empty payload") {
+		t.Errorf("Extract err = %v, want it to name the empty payload", err)
+	}
 }
 
 func TestJSONResult_LastBlockWins(t *testing.T) {
@@ -99,7 +104,53 @@ func TestJSONResult_LastBlockWins(t *testing.T) {
 	}
 }
 
-func TestJSONResult_CustomDelimiters(t *testing.T) {
+func TestJSONResult_StrayCloseTagDoesNotResurrectEarlierBlock(t *testing.T) {
+	// A stray </result> in prose sits between a complete earlier block and an
+	// unclosed final block. Anchoring on the last </result> walks back to the
+	// earlier block and returns it silently (json.Decoder stops at the first
+	// value and ignores the trailing tag). Pairing from the open side instead
+	// refuses the unclosed final block rather than serving a stale result.
+	out := `before <result>{"summary":"first","score":1}</result> middle </result> <result>{"summary":"second","score":2}`
+
+	_, err := JSONResult[review]().Extract(out)
+	if !errors.Is(err, ErrNoResult) {
+		t.Errorf("Extract err = %v, want ErrNoResult (unclosed final block; earlier block must not be resurrected)", err)
+	}
+}
+
+func TestJSONResult_StrandedCloseTagDoesNotStrandFinalBlock(t *testing.T) {
+	// A lone </result> in prose follows an earlier block and precedes the real,
+	// still-open final block. Anchoring on the last </result> strands non-JSON
+	// prose as the payload and hard-fails with ErrInvalidResult, discarding the
+	// final block. Pairing from the open side reports the unclosed final block as
+	// ErrNoResult, never the misleading ErrInvalidResult.
+	out := `<result>reasoning</result> and then </result> <result>{"summary":"second","score":2}`
+
+	_, err := JSONResult[review]().Extract(out)
+	if !errors.Is(err, ErrNoResult) {
+		t.Errorf("Extract err = %v, want ErrNoResult (final block unclosed, not invalid)", err)
+	}
+	if errors.Is(err, ErrInvalidResult) {
+		t.Errorf("stranded prose must not be reported as ErrInvalidResult: %v", err)
+	}
+}
+
+func TestJSONResult_IgnoresStrayCloseTagAroundClosedBlock(t *testing.T) {
+	// A properly-closed final block is bracketed by stray </result> tags in
+	// prose. The last opened, properly-closed block is authoritative and its
+	// payload is exactly the JSON between its own tags, free of trailing prose.
+	out := `<result>{"summary":"first","score":1}</result> noise </result> <result>{"summary":"final","score":9}</result> trailing </result>`
+
+	got, err := JSONResult[review]().Extract(out)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if rv := got.(review); rv.Summary != "final" || rv.Score != 9 {
+		t.Errorf("Extract = %+v, want the last closed block {final 9}", rv)
+	}
+}
+
+func TestJSONResult_CustomDelimitersDecodeCustomBlock(t *testing.T) {
 	out := "noise ===BEGIN==={\"summary\":\"custom\",\"score\":3}===END=== noise"
 
 	got, err := JSONResult[review](WithDelimiters("===BEGIN===", "===END===")).Extract(out)
@@ -110,8 +161,13 @@ func TestJSONResult_CustomDelimiters(t *testing.T) {
 	if rv.Summary != "custom" || rv.Score != 3 {
 		t.Errorf("Extract = %+v, want {custom 3}", rv)
 	}
+}
 
-	// The default delimiters no longer match this output.
+func TestJSONResult_DefaultDelimitersMissCustomTags(t *testing.T) {
+	// Output tagged with custom delimiters carries no default <result> block, so
+	// the default extractor must report ErrNoResult rather than half-matching.
+	out := "noise ===BEGIN==={\"summary\":\"custom\",\"score\":3}===END=== noise"
+
 	if _, err := JSONResult[review]().Extract(out); !errors.Is(err, ErrNoResult) {
 		t.Errorf("default delimiters err = %v, want ErrNoResult (custom tags shouldn't match)", err)
 	}

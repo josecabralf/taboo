@@ -80,15 +80,23 @@ func JSONResult[T any](opts ...Option) ResultExtractor {
 
 // Extract implements ResultExtractor.
 func (e jsonExtractor[T]) Extract(output string) (any, error) {
-	end := strings.LastIndex(output, e.closeTag)
-	if end < 0 {
-		return nil, ErrNoResult
-	}
-	start := strings.LastIndex(output[:end], e.openTag)
+	// Pair from the open side: the last <result> tag, then the first </result>
+	// that follows it. Anchoring on the last </result> instead would let a stray
+	// close tag echoed in prose mispair the block (resurrecting an earlier block
+	// or stranding non-JSON prose as the payload).
+	start := strings.LastIndex(output, e.openTag)
 	if start < 0 {
 		return nil, ErrNoResult
 	}
+	rel := strings.Index(output[start+len(e.openTag):], e.closeTag)
+	if rel < 0 {
+		return nil, ErrNoResult // last block unclosed -> matches the existing contract
+	}
+	end := start + len(e.openTag) + rel
 	payload := strings.TrimSpace(output[start+len(e.openTag) : end])
+	if payload == "" {
+		return nil, fmt.Errorf("%w: empty payload", ErrInvalidResult)
+	}
 
 	dec := json.NewDecoder(strings.NewReader(payload))
 	if e.strict {

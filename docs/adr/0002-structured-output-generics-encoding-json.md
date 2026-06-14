@@ -39,13 +39,13 @@ Validation has three layers, in order of when they fire:
 
 ## Considered options
 
-- **Generics + `encoding/json` (chosen).** The struct *is* the schema and the
-  type — the honest Go analog to Zod's unify-schema-and-type. Zero new
-  dependencies (matches the rest of taboo), compile-time typed, a pure function
-  trivially testable like the other pure builders. Concedes declarative
-  constraint validation and a data-shaped schema reusable for prompt injection —
-  the former recovered via the opt-in `Validator` interface, the latter out of
-  scope here (the extractor is scoped to "a pure function over captured output").
+- **Generics + `encoding/json` (chosen).** The struct is both the schema and the
+  type, the honest Go analog to Zod's unified schema-and-type. It adds zero new
+  dependencies (matching the rest of taboo), is compile-time typed, and is a pure
+  function as testable as the other pure builders. It concedes declarative
+  constraint validation and a data-shaped schema reusable for prompt injection.
+  The opt-in `Validator` interface recovers the former; the latter is out of scope
+  here (the extractor is scoped to a pure function over captured output).
 
 - **JSON-Schema validation (`santhosh-tekuri/jsonschema` or similar).** Real
   declarative validation (required/enum/min-max/pattern) and a schema that is
@@ -70,7 +70,7 @@ Validation has three layers, in order of when they fire:
   empty, malformed, type-mismatched, unknown-field-under-strict, or
   `Validate()`-rejected).
 - When the final output holds several result blocks, **the last** complete block
-  wins — robust to echoed examples and the qwen retry noise CONTEXT documents.
+  wins. This tolerates echoed examples and the qwen retry noise CONTEXT documents.
 - Delimiters default to `<result>`/`</result>` and are overridable via an option.
 - Extraction is fatal at the orchestrator: `o.Run` returns the wrapped sentinel
   error, but `res` is still populated (`Branch`/`Commit`/`Output`/`Iterations`/

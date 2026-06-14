@@ -41,7 +41,9 @@ type OrchestratedResult struct {
 	RunResult
 	// Iterations is how many times the agent was run.
 	Iterations int
-	// StopReason explains why the loop ended.
+	// StopReason explains why the loop ended. It is only meaningful when Run
+	// returns a nil error; on a Setup/Exec failure Run returns early and leaves
+	// StopReason at its zero value.
 	StopReason StopReason
 	// Result is the value decoded by req.ResultExtractor from the final output,
 	// or nil if no extractor was configured. Callers type-assert it to their
@@ -64,7 +66,9 @@ func NewOrchestrator(runner *Runner) *Orchestrator {
 
 // Run prepares the worktree once, then re-execs the agent up to
 // req.MaxIterations times in that same worktree, stopping early once the
-// completion signal appears in the agent's stdout.
+// completion signal appears in the agent's stdout. On a Setup or Exec failure it
+// returns the populated result so far alongside the error, with StopReason left
+// at its zero value; StopReason is only meaningful when the returned error is nil.
 func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (OrchestratedResult, error) {
 	maxIter := req.MaxIterations
 	if maxIter < 1 {

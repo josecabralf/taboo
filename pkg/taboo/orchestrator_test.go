@@ -215,9 +215,9 @@ func TestOrchestrator_ExtractionErrorKeepsResultPopulated(t *testing.T) {
 	if res.Result != nil {
 		t.Errorf("res.Result = %v, want nil on extraction failure", res.Result)
 	}
-	if res.Iterations != 2 {
-		t.Errorf("res.Iterations = %d, want 2 (loop ran fully before extraction)", res.Iterations)
-	}
+	// The load-bearing guarantee: a failed extraction returns the wrapped
+	// sentinel yet preserves the agent's captured output, so the commit is never
+	// discarded. (Iteration count is covered by TestOrchestrator_LoopsToMaxIterations.)
 	if res.Output == "" {
 		t.Error("res.Output is empty; the populated result must survive extraction failure")
 	}
