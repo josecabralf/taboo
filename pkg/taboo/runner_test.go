@@ -328,6 +328,66 @@ func TestRun_RedirectsSessionDirEnv(t *testing.T) {
 	}
 }
 
+// A run that carries a resume-session id threads it through the AgentProfile's
+// command builder into the agent exec, so the agent continues the prior session
+// rather than starting fresh. This is the end-to-end resume path: RunRequest ->
+// CommandOptions -> BuildCommand -> exec argv.
+func TestRun_ResumeSessionReachesExec(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	r := New(cfg, fc)
+
+	const sessionID = "ses_abc123"
+	if _, err := r.Run(context.Background(), RunRequest{
+		Branch: "agent/x", Prompt: "go", ResumeSession: sessionID,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	exec := fc.findCallN(t, "exec", 0)
+	if !slices.Contains(exec.Args, sessionID) {
+		t.Errorf("exec missing resume session id %q in argv: %v", sessionID, exec.Args)
+	}
+}
+
+// A fork run resumes a prior session AND branches it: the session id and the
+// agent's fork flag both reach the exec, while Setup allocates a fresh worktree
+// on the fork's branch. Together these isolate a divergent continuation at the
+// session level (the source conversation is not mutated) and the filesystem
+// level (a new worktree) — the two halves of taboo's fork.
+func TestRun_ForkReachesExecAndAllocatesNewWorktree(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	r := New(cfg, fc)
+
+	const sessionID = "ses_src"
+	res, err := r.Run(context.Background(), RunRequest{
+		Branch: "fork/divergent", Prompt: "go", ResumeSession: sessionID, Fork: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Session-level isolation: the resume id and the agent's fork flag both reach
+	// exec, so the agent forks the source session rather than appending to it.
+	exec := fc.findCallN(t, "exec", 0)
+	if !slices.Contains(exec.Args, sessionID) {
+		t.Errorf("fork exec missing resume session id %q: %v", sessionID, exec.Args)
+	}
+	if !slices.Contains(exec.Args, "--fork") {
+		t.Errorf("fork exec missing --fork flag: %v", exec.Args)
+	}
+
+	// Filesystem-level isolation: a fresh worktree is allocated on the fork branch.
+	wtAdd := fc.findCallN(t, "worktree", 0)
+	if !slices.Contains(wtAdd.Args, "fork/divergent") {
+		t.Errorf("fork did not allocate a worktree on the fork branch: %v", wtAdd.Args)
+	}
+	if !slices.Contains(wtAdd.Args, res.WorktreePath) {
+		t.Errorf("fork worktree path %q missing from worktree add: %v", res.WorktreePath, wtAdd.Args)
+	}
+}
+
 // An agent with no session store gets none of the sessions wiring: no sessions
 // remount in the swap, no session-dir env on exec, and no host sessions dir is
 // created. This pins the negative branch of the Sessions() guard.
