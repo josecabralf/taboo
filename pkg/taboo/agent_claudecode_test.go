@@ -8,6 +8,16 @@ import (
 // The model Claude Code is configured with, reused across the assertions below.
 const claudeCodeModel = "claude-sonnet-4-6"
 
+// claudeBaseArgv is the stable prefix every Claude Code invocation carries:
+// headless print mode, literal text output, the configured model, auto
+// permission mode (so the headless agent may edit/commit without an approver),
+// and the hard `git push` deny (the worktree shares the host repo's refs).
+// Resume/fork flags, when present, append after this prefix.
+var claudeBaseArgv = []string{
+	"claude", "-p", "--output-format", "text", "--model", claudeCodeModel,
+	"--permission-mode", "auto", "--disallowedTools", "Bash(git push *)",
+}
+
 func TestClaudeCode_Name(t *testing.T) {
 	if got := ClaudeCode(claudeCodeModel).Name(); got != "claude-code" {
 		t.Errorf("Name() = %q, want %q", got, "claude-code")
@@ -17,7 +27,7 @@ func TestClaudeCode_Name(t *testing.T) {
 func TestClaudeCode_BuildCommand(t *testing.T) {
 	ac := ClaudeCode(claudeCodeModel).BuildCommand(CommandOptions{Prompt: "do the thing"})
 
-	want := []string{"claude", "-p", "--output-format", "text", "--model", claudeCodeModel}
+	want := claudeBaseArgv
 	if !slices.Equal(ac.Argv, want) {
 		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
 	}
@@ -50,7 +60,7 @@ func TestClaudeCode_BuildCommand_Resume(t *testing.T) {
 		Prompt: "do the thing", ResumeSession: "ses_abc",
 	})
 
-	want := []string{"claude", "-p", "--output-format", "text", "--model", claudeCodeModel, "--resume", "ses_abc"}
+	want := append(slices.Clone(claudeBaseArgv), "--resume", "ses_abc")
 	if !slices.Equal(ac.Argv, want) {
 		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
 	}
@@ -67,7 +77,7 @@ func TestClaudeCode_BuildCommand_Fork(t *testing.T) {
 		Prompt: "do the thing", ResumeSession: "ses_abc", Fork: true,
 	})
 
-	want := []string{"claude", "-p", "--output-format", "text", "--model", claudeCodeModel, "--resume", "ses_abc", "--fork-session"}
+	want := append(slices.Clone(claudeBaseArgv), "--resume", "ses_abc", "--fork-session")
 	if !slices.Equal(ac.Argv, want) {
 		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
 	}
@@ -79,7 +89,7 @@ func TestClaudeCode_BuildCommand_Fork(t *testing.T) {
 func TestClaudeCode_BuildCommand_ForkWithoutResumeIgnored(t *testing.T) {
 	ac := ClaudeCode(claudeCodeModel).BuildCommand(CommandOptions{Prompt: "go", Fork: true})
 
-	want := []string{"claude", "-p", "--output-format", "text", "--model", claudeCodeModel}
+	want := claudeBaseArgv
 	if !slices.Equal(ac.Argv, want) {
 		t.Errorf("Argv =\n  %v\nwant\n  %v (Fork without ResumeSession must be ignored)", ac.Argv, want)
 	}
@@ -95,7 +105,7 @@ func TestClaudeCode_BuildCommand_ForkWithoutResumeIgnored(t *testing.T) {
 func TestClaudeCode_BuildCommand_EmptyPrompt(t *testing.T) {
 	ac := ClaudeCode(claudeCodeModel).BuildCommand(CommandOptions{ResumeSession: "ses_abc"})
 
-	want := []string{"claude", "-p", "--output-format", "text", "--model", claudeCodeModel, "--resume", "ses_abc"}
+	want := append(slices.Clone(claudeBaseArgv), "--resume", "ses_abc")
 	if !slices.Equal(ac.Argv, want) {
 		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
 	}

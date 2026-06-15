@@ -225,6 +225,100 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 	t.Logf("session files survived a second swap: %d before, %d after", len(before), len(after))
 }
 
+// TestIntegration_ClaudeCodeAgent runs the real Claude Code agent
+// (claude-sonnet-4-6) against the subscription OAuth path. Skipped unless
+// CLAUDE_CODE_OAUTH_TOKEN is set.
+//
+// This is the first live agent to drive the runner's stdin-delivery path: the
+// prompt rides on AgentCommand.Stdin into `claude -p` (ADR 0001), not on argv
+// like OpenCode. To genuinely exercise the OAuth path, ANTHROPIC_API_KEY must be
+// unset; if it is present Claude Code's own precedence prefers it (ADR 0004), so
+// the test skips rather than silently verify the wrong credential.
+func TestIntegration_ClaudeCodeAgent(t *testing.T) {
+	if os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") == "" {
+		t.Skip("CLAUDE_CODE_OAUTH_TOKEN not set; skipping live Claude Code integration test")
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		t.Skip("ANTHROPIC_API_KEY is set; unset it so the OAuth token is the credential under test (ADR 0004)")
+	}
+	repo := initSeedRepo(t)
+	r, cfg := newIntegrationRunner(t, repo, ClaudeCode("claude-sonnet-4-6"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	res, err := r.Run(ctx, RunRequest{
+		Branch:  "agent/claudecode",
+		Prompt:  "Create a file named HELLO.md containing the single line 'hello from taboo', then commit it with the message 'add HELLO.md'.",
+		Timeout: 10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The runner captures the agent's exec stdout on RunResult.Output even when
+	// the caller supplies no Stdout writer of its own. A non-empty Output also
+	// confirms the prompt reached `claude -p` on stdin: an empty stdin would
+	// yield no agent work and no output.
+	if res.Output == "" {
+		t.Error("RunResult.Output is empty; agent stdout was not captured (prompt may not have reached stdin)")
+	}
+	t.Logf("captured agent output (%d bytes):\n%s", len(res.Output), res.Output)
+
+	// The agent should have produced at least one commit beyond the seed.
+	out, err := exec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	if strings.Count(string(out), "\n") < 2 {
+		t.Errorf("expected an agent commit beyond seed; log:\n%s", out)
+	}
+	t.Logf("agent commit=%s\nlog:\n%s", res.Commit, out)
+
+	// Session capture: Claude Code's config dir was redirected (CLAUDE_CONFIG_DIR)
+	// onto the mounted host sessions dir, so transcripts must be present on the
+	// host after the run (write-through over the bind-mount).
+	spec, _ := ClaudeCode("").Sessions()
+	sessDir := filepath.Join(cfg.ProjectDir, "sessions", spec.Subdir)
+	before := dirEntryNames(t, sessDir)
+	if len(before) == 0 {
+		t.Fatalf("host sessions dir %q is empty after the run; no transcript captured", sessDir)
+	}
+	t.Logf("host session files under %s after run 1: %d entries", sessDir, len(before))
+
+	// Credential-on-disk safety (ADR 0004): because CLAUDE_CONFIG_DIR points at
+	// the host mount, a credentials file would leak onto the host. The OAuth token
+	// is supplied via --env, so Claude must write no .credentials.json. Walk the
+	// whole captured config dir (its root, not just projects/) and assert none.
+	configRoot := filepath.Join(cfg.ProjectDir, "sessions")
+	if err := filepath.WalkDir(configRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Name() == ".credentials.json" {
+			t.Errorf("credential file leaked onto host mount: %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %q: %v", configRoot, err)
+	}
+
+	// Survival across the swap: the transcript files were produced after run 1's
+	// final `start`, so run 1 never swapped them. Drive a second Setup against the
+	// reused workshop — another stop/remount/start, which wipes the rootfs — and
+	// assert every run-1 file is still on the host.
+	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/claudecode-2"}); err != nil {
+		t.Fatalf("second Setup (stop/remount/start swap): %v", err)
+	}
+	after := dirEntryNames(t, sessDir)
+	for _, name := range before {
+		if !slices.Contains(after, name) {
+			t.Errorf("session file %q did not survive a second stop/remount/start swap; after=%v", name, after)
+		}
+	}
+	t.Logf("session files survived a second swap: %d before, %d after", len(before), len(after))
+}
+
 // dirEntryNames returns the names of dir's entries, failing the test if it
 // cannot be read.
 func dirEntryNames(t *testing.T, dir string) []string {

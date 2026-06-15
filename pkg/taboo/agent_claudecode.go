@@ -14,13 +14,31 @@ func ClaudeCode(model string) AgentProfile {
 func (claudeCode) Name() string { return "claude-code" }
 
 // BuildCommand renders the verified Claude Code invocation: `claude -p
-// --output-format text --model <m>`, with the prompt piped on stdin rather than
-// in argv (ADR 0001). --output-format text keeps the agent's output literal so
-// the orchestrator's completion-signal scan and the <result>{…}</result>
-// extraction keep working; --output-format json would escape that block and
-// break extraction.
+// --output-format text --model <m> --permission-mode auto --disallowedTools
+// "Bash(git push *)"`, with the prompt piped on stdin rather than in argv (ADR
+// 0001). --output-format text keeps the agent's output literal so the
+// orchestrator's completion-signal scan and the <result>{…}</result> extraction
+// keep working; --output-format json would escape that block and break
+// extraction.
+//
+// --permission-mode auto lets the headless agent edit files and commit
+// autonomously (there is no interactive approver in `claude -p`; the default
+// mode would gate Write/Edit/Bash and the agent could never commit). taboo runs
+// each agent in an isolated, ephemeral LXD container, so the container is the
+// security boundary — the same posture under which OpenCode runs its tools
+// freely.
+//
+// --disallowedTools "Bash(git push *)" is a hard deny (deny outranks auto's
+// classifier) on every push form: the single `*` spans all arguments, so bare
+// `git push`, `git push origin main`, and `--force`/`-f` in any position are all
+// blocked. The deny is deliberate — a linked worktree shares the host repo's
+// object store and refs, so a push from inside the workshop could mutate host
+// branches. taboo's contract is commit-in-place; the host owns integration, so
+// the agent never needs to push. Automations that must publish add their own
+// host-side push stage (see CONTEXT.md).
 func (a claudeCode) BuildCommand(opts CommandOptions) AgentCommand {
-	argv := []string{"claude", "-p", "--output-format", "text", "--model", a.model}
+	argv := []string{"claude", "-p", "--output-format", "text", "--model", a.model,
+		"--permission-mode", "auto", "--disallowedTools", "Bash(git push *)"}
 	if opts.ResumeSession != "" {
 		argv = append(argv, "--resume", opts.ResumeSession)
 		// --fork-session only applies when continuing a session; it forks that
