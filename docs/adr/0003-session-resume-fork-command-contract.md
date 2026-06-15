@@ -97,9 +97,19 @@ Notes that shaped the contract:
 ## Consequences
 
 - `Runner.Exec` builds `CommandOptions{Prompt, ResumeSession, Fork}` from the
-  `RunRequest`; the orchestration layer (`Orchestrator`, `Pool`) inherits
-  resume/fork for free because both embed `RunRequest`. Fan-out can therefore fork
-  N divergent continuations of one session, each in its own slot/worktree.
+  `RunRequest`; the orchestration layer (`Orchestrator`, `Pool`) inherits the
+  resume/fork *plumbing* for free because both embed `RunRequest`. The semantics,
+  however, do not come entirely for free:
+  - A *looped* fork is rejected. `Orchestrator.Run` re-execs the unchanged
+    `RunRequest` each iteration, so `Fork` with `MaxIterations > 1` would re-fork
+    the source session every iteration rather than continue the fork; it returns
+    `ErrForkLoop`. A single-iteration fork, or a multi-iteration plain resume
+    (which mutates the source in place and so accumulates monotonically), is fine.
+  - Fan-out fork across `Pool` slots is *not* free. Each slot has its own
+    `ProjectDir` and therefore its own session store (`sessionsDir`), so a source
+    session id only exists in the slot that created it. Forking one session into N
+    divergent continuations across slots requires first replicating that session
+    store into each slot — which depends on the session-id capture follow-up below.
 - `Fork` without `ResumeSession` is ignored (an agent can only fork a session it
   is continuing); the OpenCode profile drops the flag in that case and it is
   argv-asserted in tests.

@@ -36,8 +36,9 @@ type RunRequest struct {
 	// ResumeSession, if set, continues a prior agent session by its id instead of
 	// starting fresh: the id is passed to Config.Agent's command builder, which
 	// renders the agent's resume flag (e.g. OpenCode's --session). The session
-	// store is shared per-workshop (see sessionsDir), so the id resolves whichever
-	// worktree this run uses. Empty = a fresh session.
+	// store is bind-mounted independently of the worktree and is stable across a
+	// workshop's runs (see sessionsDir), so a prior id resolves regardless of
+	// which worktree this run uses. Empty = a fresh session.
 	ResumeSession string
 	// Fork, when set together with ResumeSession, forks that session into a new
 	// one (the agent's fork flag, e.g. OpenCode's --fork) so the source

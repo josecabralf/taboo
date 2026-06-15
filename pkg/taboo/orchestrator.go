@@ -2,8 +2,18 @@ package taboo
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
+
+// ErrForkLoop is returned by Orchestrator.Run when a forked run is given more
+// than one iteration. The loop re-execs the unchanged RunRequest, so Fork would
+// re-fork the source session on every iteration instead of continuing the fork —
+// and taboo cannot yet capture the new session id to resume it across iterations
+// (session-id capture is out of scope; see
+// docs/adr/0003-session-resume-fork-command-contract.md). A single-iteration
+// fork, or a multi-iteration plain resume, is allowed.
+var ErrForkLoop = errors.New("taboo: fork cannot be combined with multiple iterations")
 
 // StopReason explains why an orchestrated run's iteration loop ended.
 type StopReason string
@@ -73,6 +83,12 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 	maxIter := req.MaxIterations
 	if maxIter < 1 {
 		maxIter = 1
+	}
+	// A looped fork would re-fork the source session each iteration (every Exec
+	// rebuilds CommandOptions from the same req), not continue the fork, so reject
+	// it up front before the expensive Setup. See ErrForkLoop.
+	if req.Fork && maxIter > 1 {
+		return OrchestratedResult{}, ErrForkLoop
 	}
 
 	base, err := o.runner.Setup(ctx, req.RunRequest)

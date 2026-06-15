@@ -246,3 +246,52 @@ func TestOrchestrator_StopsOnRunnerError(t *testing.T) {
 		t.Errorf("exec count = %d, want 1 (no retry after error)", got)
 	}
 }
+
+// A forked run cannot be looped. The orchestrator re-execs the unchanged
+// RunRequest each iteration, so Fork with MaxIterations > 1 would re-fork the
+// source session every iteration rather than continue the fork — and taboo
+// cannot yet capture the new id to resume it across iterations. Run rejects the
+// combination up front with ErrForkLoop, before any workshop/git command runs.
+func TestOrchestrator_ForkWithMultipleIterationsRejected(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	o := NewOrchestrator(New(cfg, fc))
+
+	_, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:    RunRequest{Branch: "fork/x", Prompt: "go", ResumeSession: "ses_src", Fork: true},
+		MaxIterations: 2,
+	})
+	if !errors.Is(err, ErrForkLoop) {
+		t.Fatalf("Run err = %v, want ErrForkLoop", err)
+	}
+	// Rejected before dispatching anything, so the expensive Setup never runs.
+	if got := len(fc.snapshot()); got != 0 {
+		t.Errorf("dispatched %d commands, want 0 (reject before setup): %v", got, fc.verbs())
+	}
+}
+
+// The fork-loop guard is narrow: a single-iteration fork is allowed (there is no
+// loop to re-fork), and a multi-iteration plain resume is allowed too — resume
+// mutates the source session in place, so each iteration continues the session
+// the previous one grew. Only fork combined with a loop is rejected.
+func TestOrchestrator_ForkSingleIterationAndResumeLoopAllowed(t *testing.T) {
+	// Single-iteration fork: allowed (MaxIterations 0 -> one run).
+	fcFork := &fakeCommander{}
+	if _, err := NewOrchestrator(New(testConfig(t), fcFork)).Run(context.Background(), OrchestratedRequest{
+		RunRequest: RunRequest{Branch: "fork/x", Prompt: "go", ResumeSession: "ses_src", Fork: true},
+	}); err != nil {
+		t.Fatalf("single-iteration fork: %v", err)
+	}
+
+	// Multi-iteration plain resume: allowed, and loops the agent once per iteration.
+	fcResume := &fakeCommander{}
+	if _, err := NewOrchestrator(New(testConfig(t), fcResume)).Run(context.Background(), OrchestratedRequest{
+		RunRequest:    RunRequest{Branch: "agent/x", Prompt: "go", ResumeSession: "ses_src"},
+		MaxIterations: 3,
+	}); err != nil {
+		t.Fatalf("multi-iteration resume: %v", err)
+	}
+	if got := fcResume.countVerb("exec"); got != 3 {
+		t.Errorf("resume loop exec count = %d, want 3 (one per iteration)", got)
+	}
+}

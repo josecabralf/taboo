@@ -78,6 +78,18 @@ func TestOpenCode_BuildCommand_ForkWithoutResumeIgnored(t *testing.T) {
 	}
 }
 
+// An empty prompt is omitted from argv rather than passed as a stray empty
+// positional: a "just continue, no new instruction" resume renders the resume
+// flags with no trailing "" argument.
+func TestOpenCode_BuildCommand_EmptyPromptOmitted(t *testing.T) {
+	ac := OpenCode(openCodeModel).BuildCommand(CommandOptions{ResumeSession: "ses_abc"})
+
+	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", openCodeModel, "--session", "ses_abc"}
+	if !slices.Equal(ac.Argv, want) {
+		t.Errorf("Argv =\n  %v\nwant\n  %v (empty prompt must not add a trailing \"\")", ac.Argv, want)
+	}
+}
+
 func TestOpenCode_CredentialEnvKeys(t *testing.T) {
 	got := OpenCode(openCodeModel).CredentialEnvKeys()
 	want := []string{"OPENROUTER_API_KEY"}

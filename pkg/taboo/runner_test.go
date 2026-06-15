@@ -350,6 +350,28 @@ func TestRun_ResumeSessionReachesExec(t *testing.T) {
 	}
 }
 
+// A plain resume (no Fork) threads the session id to exec but must NOT carry the
+// agent's fork flag: resume continues the source session in place, whereas a
+// stray --fork would divert the work into a new forked session and leave the
+// resumed conversation untouched. This pins the negative at the Runner layer;
+// TestRun_ResumeSessionReachesExec only asserts the id is present.
+func TestRun_ResumeWithoutForkOmitsForkFlag(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	r := New(cfg, fc)
+
+	if _, err := r.Run(context.Background(), RunRequest{
+		Branch: "agent/x", Prompt: "go", ResumeSession: "ses_abc123",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	exec := fc.findCallN(t, "exec", 0)
+	if slices.Contains(exec.Args, "--fork") {
+		t.Errorf("plain resume exec carries --fork; it must not: %v", exec.Args)
+	}
+}
+
 // A fork run resumes a prior session AND branches it: the session id and the
 // agent's fork flag both reach the exec, while Setup allocates a fresh worktree
 // on the fork's branch. Together these isolate a divergent continuation at the

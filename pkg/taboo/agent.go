@@ -87,8 +87,12 @@ func (a openCode) BuildCommand(opts CommandOptions) AgentCommand {
 			argv = append(argv, "--fork")
 		}
 	}
-	// The prompt rides positionally last, after every flag.
-	argv = append(argv, opts.Prompt)
+	// The prompt rides positionally last, after every flag. Omit it when empty so
+	// a resume with no new instruction ("just continue") does not pass a stray
+	// empty positional argument to the agent.
+	if opts.Prompt != "" {
+		argv = append(argv, opts.Prompt)
+	}
 	return AgentCommand{Argv: argv}
 }
 
