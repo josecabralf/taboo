@@ -1,5 +1,12 @@
 set -eux
-# Native installer (npm package is deprecated); drops the launcher in ~/.local/bin.
-curl -fsSL https://claude.ai/install.sh | bash
-ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude
-claude --version
+# The native installer (npm package is deprecated) is entirely $HOME-rooted: it
+# drops the launcher in ~/.local/bin and the binary under ~/.claude. This hook
+# runs as root, but the agent later execs as the unprivileged `workshop` user,
+# who cannot traverse root's 0700 home — so a root install + symlink into
+# /usr/local/bin yields a dangling, unreadable target and `claude` fails with
+# exit 127. Install as `workshop` so the payload lands in a home that user owns,
+# then symlink it onto the default PATH (/usr/local/bin) where `workshop exec --
+# claude` resolves the bare command.
+runuser -l workshop -c 'curl -fsSL https://claude.ai/install.sh | bash'
+ln -sf /home/workshop/.local/bin/claude /usr/local/bin/claude
+runuser -l workshop -c 'claude --version'

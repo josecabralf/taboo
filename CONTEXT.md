@@ -168,6 +168,21 @@ environment / keyring and passed per run via `workshop exec --env`. They are
 never written into `workshop.yaml` or baked into an image; they live only for the
 duration of the exec.
 
+### Agent tool permissions: git push blocked by default
+
+Agents run headless (`claude -p` and equivalents) with no interactive approver.
+The Claude Code profile launches with `--permission-mode auto` — the agent edits
+files and commits autonomously — plus a hard `--disallowedTools "Bash(git push
+*)"` deny (deny outranks the auto-mode classifier). The deny is deliberate: a
+*linked* worktree shares the host repo's object store and refs (see the two-mount
+note above), so a `git push` from inside the workshop, forced or not, could
+mutate host branches. taboo's contract is **commit in place; the host owns
+integration** — the agent never needs to push.
+
+A workflow automation that *does* need to publish (push a branch, open a PR) must
+add its own explicit `git push` stage on the host side, after the run — not rely
+on the agent to push from inside the workshop.
+
 ### Session capture: redirect storage to a mounted dir
 
 For session resume/fork, agent session files (normally in `$HOME` inside the
@@ -305,6 +320,13 @@ Not workshop-specific; follow sandcastle's proven design when reached:
   qualifier). The model is baked in at construction (`OpenCode(model)`). `Config`
   references one `AgentProfile` instead of a raw agent command. OpenCode is the
   first concrete profile.
+- **agent registry** — the lookup in `pkg/taboo` that resolves a canonical agent
+  name (with a model) to its **AgentProfile**, and enumerates the canonical names
+  taboo supports. The name it keys on is one identity with `AgentProfile.Name()`
+  and the workshop **SDK** qualifier — a single canonical string per agent, no
+  separate registry alias. The CLI consults the enumerated names to suggest a
+  correction on an unknown name; the fuzzy matching itself lives in the CLI, not
+  the registry.
 - **result block** — a delimited span in the agent's output (default
   `<result>…</result>`) whose JSON payload is the run's structured result. The
   agent is prompted to emit one; the **last** one in the final iteration's output

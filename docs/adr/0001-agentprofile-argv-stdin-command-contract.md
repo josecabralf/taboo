@@ -38,7 +38,7 @@ sandcastle reference invocations):
 | opencode    | positional argv                 |
 | copilot     | `-p <prompt>` argv              |
 | cursor      | positional argv                 |
-| claude-code | stdin (`claude --print … -p -`) |
+| claude-code | stdin (`claude -p --output-format text …`, prompt piped to stdin, no positional — verified, slice #23) |
 | codex       | stdin (`codex exec --json …`)   |
 | pi          | stdin (`pi -p --mode json …`)   |
 
