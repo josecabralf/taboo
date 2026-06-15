@@ -38,6 +38,58 @@ func TestOpenCode_BuildCommand_UsesModel(t *testing.T) {
 	}
 }
 
+// Resume threads the session id into argv as `--session <id>`, placed after the
+// model flag and before the positional prompt, so OpenCode continues that prior
+// session instead of starting fresh.
+func TestOpenCode_BuildCommand_Resume(t *testing.T) {
+	ac := OpenCode(openCodeModel).BuildCommand(CommandOptions{
+		Prompt: "do the thing", ResumeSession: "ses_abc",
+	})
+
+	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", openCodeModel, "--session", "ses_abc", "do the thing"}
+	if !slices.Equal(ac.Argv, want) {
+		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
+	}
+}
+
+// Fork rides on top of resume: with both set, argv carries `--session <id>
+// --fork` so OpenCode forks that session into a new one (source untouched). The
+// prompt stays positional last.
+func TestOpenCode_BuildCommand_Fork(t *testing.T) {
+	ac := OpenCode(openCodeModel).BuildCommand(CommandOptions{
+		Prompt: "do the thing", ResumeSession: "ses_abc", Fork: true,
+	})
+
+	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", openCodeModel, "--session", "ses_abc", "--fork", "do the thing"}
+	if !slices.Equal(ac.Argv, want) {
+		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
+	}
+}
+
+// Fork is meaningless without a session to fork from: OpenCode's --fork only
+// applies when continuing a session, so Fork without ResumeSession is dropped and
+// argv matches a plain fresh run.
+func TestOpenCode_BuildCommand_ForkWithoutResumeIgnored(t *testing.T) {
+	ac := OpenCode(openCodeModel).BuildCommand(CommandOptions{Prompt: "go", Fork: true})
+
+	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", openCodeModel, "go"}
+	if !slices.Equal(ac.Argv, want) {
+		t.Errorf("Argv =\n  %v\nwant\n  %v (Fork without ResumeSession must be ignored)", ac.Argv, want)
+	}
+}
+
+// An empty prompt is omitted from argv rather than passed as a stray empty
+// positional: a "just continue, no new instruction" resume renders the resume
+// flags with no trailing "" argument.
+func TestOpenCode_BuildCommand_EmptyPromptOmitted(t *testing.T) {
+	ac := OpenCode(openCodeModel).BuildCommand(CommandOptions{ResumeSession: "ses_abc"})
+
+	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", openCodeModel, "--session", "ses_abc"}
+	if !slices.Equal(ac.Argv, want) {
+		t.Errorf("Argv =\n  %v\nwant\n  %v (empty prompt must not add a trailing \"\")", ac.Argv, want)
+	}
+}
+
 func TestOpenCode_CredentialEnvKeys(t *testing.T) {
 	got := OpenCode(openCodeModel).CredentialEnvKeys()
 	want := []string{"OPENROUTER_API_KEY"}

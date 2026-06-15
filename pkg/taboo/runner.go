@@ -33,6 +33,21 @@ type RunRequest struct {
 	Stderr io.Writer
 	// Hooks are lifecycle commands run at defined points during the run.
 	Hooks Hooks
+	// ResumeSession, if set, continues a prior agent session by its id instead of
+	// starting fresh: the id is passed to Config.Agent's command builder, which
+	// renders the agent's resume flag (e.g. OpenCode's --session). The session
+	// store is bind-mounted independently of the worktree and is stable across a
+	// workshop's runs (see sessionsDir), so a prior id resolves regardless of
+	// which worktree this run uses. Empty = a fresh session.
+	ResumeSession string
+	// Fork, when set together with ResumeSession, forks that session into a new
+	// one (the agent's fork flag, e.g. OpenCode's --fork) so the source
+	// conversation is not mutated. Paired with a fresh Branch — Setup always
+	// allocates a new worktree per branch — this isolates a divergent continuation
+	// at both the session and filesystem levels. Fork without ResumeSession is
+	// meaningless and ignored. Agents with no native fork degrade to worktree-only
+	// isolation (see docs/adr/0003-session-resume-fork-command-contract.md).
+	Fork bool
 }
 
 // RunResult reports the outcome of a run.
@@ -235,7 +250,11 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 		stdout = io.MultiWriter(&captured, req.Stdout)
 	}
 
-	ac := r.cfg.Agent.BuildCommand(CommandOptions{Prompt: req.Prompt})
+	ac := r.cfg.Agent.BuildCommand(CommandOptions{
+		Prompt:        req.Prompt,
+		ResumeSession: req.ResumeSession,
+		Fork:          req.Fork,
+	})
 	opts := execOptions{cwd: workspaceTarget, timeout: req.Timeout, envKeys: r.cfg.Agent.CredentialEnvKeys()}
 	// Point the agent's session-dir env var at the sessions mount target so its
 	// session files land in the bound host directory (the same dir Setup mounted

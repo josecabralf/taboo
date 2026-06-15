@@ -21,11 +21,19 @@ type AgentProfile interface {
 	Sessions() (SessionSpec, bool)
 }
 
-// CommandOptions is the input to AgentProfile.BuildCommand. This slice carries
-// only Prompt; the sessions slice adds ResumeSession/ForkSession non-breakingly.
+// CommandOptions is the input to AgentProfile.BuildCommand: the agent-agnostic
+// inputs each profile maps onto its own CLI flags.
 type CommandOptions struct {
 	// Prompt is the agent's instruction for this run.
 	Prompt string
+	// ResumeSession, if set, asks the agent to continue this prior session by id
+	// rather than starting fresh (e.g. OpenCode's --session <id>). Empty = fresh.
+	ResumeSession string
+	// Fork, when set together with ResumeSession, asks the agent to fork that
+	// session into a new one rather than appending to it (e.g. OpenCode's --fork),
+	// leaving the source conversation untouched. It is ignored without
+	// ResumeSession, and a no-op for an agent whose CLI has no native fork.
+	Fork bool
 }
 
 // AgentCommand is the agent invocation taboo execs. Argv is the command and its
@@ -44,8 +52,9 @@ type AgentCommand struct {
 // The capture wiring uses only DirEnv: taboo points DirEnv at the sessions
 // mount target and the agent itself writes under DirEnv/Subdir. Subdir is the
 // agent-relative path to those files (mount source + Subdir), consumed when
-// locating the store from the outside — the integration test today, and the
-// deferred resume/fork slice — not by the env redirect.
+// locating the store from the outside — the integration test today, and a future
+// session-id capture that surfaces ids on RunResult. Resume/fork do not read it:
+// they thread a caller-supplied id straight to the agent via CommandOptions.
 type SessionSpec struct {
 	DirEnv string
 	Subdir string
@@ -66,11 +75,25 @@ func (openCode) Name() string { return "opencode" }
 
 // BuildCommand renders the proven OpenCode invocation: the prompt rides
 // positionally in argv (Stdin empty). --log-level ERROR keeps OpenCode's own
-// chatter off the captured agent output.
+// chatter off the captured agent output. A resume id maps to `--session <id>`,
+// and a fork adds `--fork` on top of it (see ADR 0003); both precede the prompt.
 func (a openCode) BuildCommand(opts CommandOptions) AgentCommand {
-	return AgentCommand{
-		Argv: []string{"opencode", "run", "--log-level", "ERROR", "-m", a.model, opts.Prompt},
+	argv := []string{"opencode", "run", "--log-level", "ERROR", "-m", a.model}
+	if opts.ResumeSession != "" {
+		argv = append(argv, "--session", opts.ResumeSession)
+		// OpenCode's --fork only applies when continuing a session; it forks that
+		// session into a new one so the source conversation is left untouched.
+		if opts.Fork {
+			argv = append(argv, "--fork")
+		}
 	}
+	// The prompt rides positionally last, after every flag. Omit it when empty so
+	// a resume with no new instruction ("just continue") does not pass a stray
+	// empty positional argument to the agent.
+	if opts.Prompt != "" {
+		argv = append(argv, opts.Prompt)
+	}
+	return AgentCommand{Argv: argv}
 }
 
 func (openCode) CredentialEnvKeys() []string { return []string{"OPENROUTER_API_KEY"} }
