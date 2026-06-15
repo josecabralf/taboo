@@ -119,14 +119,12 @@ func TestRegistry_EveryAgentHasMatchingSDK(t *testing.T) {
 	}
 }
 
-// The roster is well-formed: every registration has a non-nil constructor, the
-// agents resolve to unique Name() keys, and each carries its co-located hint.
-// ADR 0005 keys the registry on Name(), so two registrations resolving to the
-// same name would let the first silently shadow the second in NewProfile and
-// emit a duplicate from AgentNames — a plausible copy-paste slip when adding an
-// agent, and otherwise untested. The hint is a deferred-type placeholder this
-// slice (empty struct), referenced here only to stay load-bearing until the
-// validate slice reads it.
+// The roster is well-formed: every registration has a non-nil constructor and a
+// non-empty Name(), and the agents resolve to unique Name() keys. ADR 0005 keys
+// the registry on Name(), so two registrations resolving to the same name would
+// let the first silently shadow the second in NewProfile and emit a duplicate
+// from AgentNames — a plausible copy-paste slip when adding an agent, and
+// otherwise untested.
 func TestRegistry_RosterWellFormed(t *testing.T) {
 	seen := make(map[string]bool, len(agents))
 	for _, reg := range agents {
@@ -134,11 +132,13 @@ func TestRegistry_RosterWellFormed(t *testing.T) {
 			t.Errorf("registration has a nil New constructor")
 			continue
 		}
-		name := reg.New("").Name()
+		name := reg.name()
+		if name == "" {
+			t.Errorf("registration resolves to an empty Name() — keys must be non-empty")
+		}
 		if seen[name] {
 			t.Errorf("duplicate agent name %q in roster — keys must be unique", name)
 		}
 		seen[name] = true
-		_ = reg.Hint
 	}
 }

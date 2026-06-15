@@ -32,9 +32,13 @@ func TestClaudeCode_BuildCommand(t *testing.T) {
 // commands; nothing else is parameterized this slice.
 func TestClaudeCode_BuildCommand_UsesModel(t *testing.T) {
 	ac := ClaudeCode("claude-opus-4-8").BuildCommand(CommandOptions{Prompt: "go"})
-	want := []string{"claude", "-p", "--output-format", "text", "--model", "claude-opus-4-8"}
-	if !slices.Equal(ac.Argv, want) {
-		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
+	// Only the model interpolation is under test here; TestClaudeCode_BuildCommand
+	// owns the one canonical full-argv check. Assert the configured model rides in
+	// argv right after --model, so distinct models yield distinct commands without
+	// re-pinning the stable prefix.
+	i := slices.Index(ac.Argv, "--model")
+	if i < 0 || i+1 >= len(ac.Argv) || ac.Argv[i+1] != "claude-opus-4-8" {
+		t.Errorf("Argv = %v, want --model followed by %q", ac.Argv, "claude-opus-4-8")
 	}
 }
 

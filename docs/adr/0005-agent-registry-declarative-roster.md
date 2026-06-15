@@ -35,8 +35,8 @@ the CLI's candidate set.
 The **model-format hint is registry-table metadata, sourced from a value defined
 in each `agent_<name>.go`** (`claudeCodeHint` lives beside `claudeCode`). This
 keeps the hint cohesive with its agent *without* adding a method to the
-hand-reviewed 4-method `AgentProfile` interface, and makes it readable from the
-name alone — `validate` runs on config, before anything is constructed or run.
+hand-reviewed 4-method `AgentProfile` interface, and lets `validate` read the hint
+from the agent name alone — it runs on config, before anything is constructed or run.
 
 ## Considered options
 
@@ -67,10 +67,10 @@ name alone — `validate` runs on config, before anything is constructed or run.
   name has a `pkg/taboo/sdk/<Name()>/` dir whose `sdk.yaml` `name` equals
   `Name()`. This is the safety-critical direction — `runner.go` uses
   `Agent.Name()` directly as the SDK qualifier, so a registered agent with no
-  matching SDK breaks at provisioning. The reverse (every embedded SDK has a
-  profile) fails today (`codex`/`copilot`/`pi` are embedded but profile-less) and
-  is left to a TODO until the last profile lands, rather than a live skip-list
-  that could rot into a false green.
+  matching SDK breaks at provisioning. The reverse direction — every embedded SDK
+  has a profile — is not asserted yet: `codex`/`copilot`/`pi` are embedded but
+  profile-less, so it is left to a TODO until the last profile lands, rather than a
+  live skip-list that could rot into a false green.
 - The hint's concrete *type* (regex vs. predicate vs. human "expected format"
   string) is deferred to the `validate` slice that consumes it; this ADR fixes
   only its *placement*, so the interface and registry shape do not churn later.

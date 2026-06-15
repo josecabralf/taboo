@@ -11,8 +11,8 @@ import (
 // fuzzy-suggestion path (story #24); NewProfile itself never suggests.
 var ErrUnknownAgent = errors.New("taboo: unknown agent")
 
-// modelHint is the placeholder type for a per-agent model-format hint. ADR 0005
-// fixes only its placement — registry-table metadata, co-located beside each
+// modelHint is a per-agent model-format hint: an empty placeholder type for now.
+// ADR 0005 fixes only its placement — registry-table metadata, co-located beside each
 // agent as <name>Hint — and defers its concrete shape (regex, predicate, or
 // human "expected format" string) to the validate slice that consumes it. An
 // empty struct lets that slice add fields without churning registration.Hint's
@@ -29,6 +29,12 @@ type registration struct {
 	New  func(model string) AgentProfile
 	Hint modelHint
 }
+
+// name reads the registration's canonical key: the profile's own Name(), which
+// is model-independent, so constructing with "" purely to read it is safe (see
+// the roster comment below). Centralizes the New("").Name() key extraction
+// shared by NewProfile and AgentNames.
+func (r registration) name() string { return r.New("").Name() }
 
 // agents is taboo's declarative agent roster: one explicit line per supported
 // agent. Enumeration stays greppable here rather than hiding behind init()
@@ -47,7 +53,7 @@ var agents = []registration{
 // ErrUnknownAgent the CLI matches with errors.Is.
 func NewProfile(name, model string) (AgentProfile, error) {
 	for _, a := range agents {
-		if a.New("").Name() == name {
+		if a.name() == name {
 			return a.New(model), nil
 		}
 	}
@@ -60,7 +66,7 @@ func NewProfile(name, model string) (AgentProfile, error) {
 func AgentNames() []string {
 	names := make([]string, len(agents))
 	for i, a := range agents {
-		names[i] = a.New("").Name()
+		names[i] = a.name()
 	}
 	slices.Sort(names)
 	return names

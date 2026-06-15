@@ -47,8 +47,9 @@ func (claudeCode) CredentialEnvKeys() []string {
 }
 
 // Sessions redirects Claude Code's config dir by pointing CLAUDE_CONFIG_DIR at
-// the mount; transcripts land under projects/<project>/<session>.jsonl. This is
-// the only env var Claude exposes, and it captures the whole config dir
+// the mount; transcripts land under projects/<project>/<session>.jsonl.
+// CLAUDE_CONFIG_DIR is the only relocation env var Claude exposes, and it
+// captures the whole config dir
 // (settings + history + credentials), not sessions alone — no finer-grained
 // override exists.
 //
@@ -63,7 +64,7 @@ func (claudeCode) Sessions() (SessionSpec, bool) {
 // claudeCodeHint is Claude Code's model-format hint for the agent registry
 // (ADR 0005): registry-table metadata co-located with the profile, kept off the
 // deliberately-minimal AgentProfile interface (ADR 0001). It is a deferred-type
-// placeholder this slice — the validate slice that consumes it decides whether a
+// placeholder for this slice — the validate slice that consumes it decides whether a
 // hint is a regex, a predicate, or a human "expected format" string (see
 // modelHint in registry.go).
 var claudeCodeHint modelHint

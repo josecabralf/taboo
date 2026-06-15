@@ -33,9 +33,13 @@ func TestOpenCode_BuildCommand(t *testing.T) {
 // commands; nothing else is parameterized this slice.
 func TestOpenCode_BuildCommand_UsesModel(t *testing.T) {
 	ac := OpenCode("anthropic/claude").BuildCommand(CommandOptions{Prompt: "go"})
-	want := []string{"opencode", "run", "--log-level", "ERROR", "-m", "anthropic/claude", "go"}
-	if !slices.Equal(ac.Argv, want) {
-		t.Errorf("Argv =\n  %v\nwant\n  %v", ac.Argv, want)
+	// Only the model interpolation is under test here; TestOpenCode_BuildCommand
+	// owns the one canonical full-argv check. Assert the configured model rides in
+	// argv right after -m, so distinct models yield distinct commands without
+	// re-pinning the stable prefix.
+	i := slices.Index(ac.Argv, "-m")
+	if i < 0 || i+1 >= len(ac.Argv) || ac.Argv[i+1] != "anthropic/claude" {
+		t.Errorf("Argv = %v, want -m followed by %q", ac.Argv, "anthropic/claude")
 	}
 }
 
