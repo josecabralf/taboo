@@ -5,7 +5,8 @@ import (
 	"testing"
 )
 
-// The model OpenCode is configured with, reused across the assertions below.
+// The model OpenCode is configured with, reused across the assertions below
+// (and by runner_test.go / template_test.go, which share the package test scope).
 const openCodeModel = "openrouter/qwen/qwen3-coder-plus"
 
 func TestOpenCode_Name(t *testing.T) {
