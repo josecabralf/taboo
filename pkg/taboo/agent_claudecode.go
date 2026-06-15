@@ -59,3 +59,11 @@ func (claudeCode) CredentialEnvKeys() []string {
 func (claudeCode) Sessions() (SessionSpec, bool) {
 	return SessionSpec{DirEnv: "CLAUDE_CONFIG_DIR", Subdir: "projects"}, true
 }
+
+// claudeCodeHint is Claude Code's model-format hint for the agent registry
+// (ADR 0005): registry-table metadata co-located with the profile, kept off the
+// deliberately-minimal AgentProfile interface (ADR 0001). It is a deferred-type
+// placeholder this slice — the validate slice that consumes it decides whether a
+// hint is a regex, a predicate, or a human "expected format" string (see
+// modelHint in registry.go).
+var claudeCodeHint modelHint

@@ -47,3 +47,8 @@ func (openCode) CredentialEnvKeys() []string { return []string{"OPENROUTER_API_K
 func (openCode) Sessions() (SessionSpec, bool) {
 	return SessionSpec{DirEnv: "XDG_DATA_HOME", Subdir: "opencode"}, true
 }
+
+// openCodeHint is OpenCode's model-format hint for the agent registry. See
+// claudeCodeHint and modelHint (registry.go) for the deferred-type placeholder's
+// rationale.
+var openCodeHint modelHint

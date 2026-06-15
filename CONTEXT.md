@@ -305,6 +305,13 @@ Not workshop-specific; follow sandcastle's proven design when reached:
   qualifier). The model is baked in at construction (`OpenCode(model)`). `Config`
   references one `AgentProfile` instead of a raw agent command. OpenCode is the
   first concrete profile.
+- **agent registry** — the lookup in `pkg/taboo` that resolves a canonical agent
+  name (with a model) to its **AgentProfile**, and enumerates the canonical names
+  taboo supports. The name it keys on is one identity with `AgentProfile.Name()`
+  and the workshop **SDK** qualifier — a single canonical string per agent, no
+  separate registry alias. The CLI consults the enumerated names to suggest a
+  correction on an unknown name; the fuzzy matching itself lives in the CLI, not
+  the registry.
 - **result block** — a delimited span in the agent's output (default
   `<result>…</result>`) whose JSON payload is the run's structured result. The
   agent is prompted to emit one; the **last** one in the final iteration's output
