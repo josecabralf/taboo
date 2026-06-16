@@ -44,6 +44,7 @@ func newRootCmd(env Env) *cobra.Command {
 	root.SetOut(env.Stdout)
 	root.SetErr(env.Stderr)
 	root.AddCommand(newDoctorCmd(env))
+	root.AddCommand(newInitCmd(env))
 	return root
 }
 
