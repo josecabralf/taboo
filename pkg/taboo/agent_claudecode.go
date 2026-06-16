@@ -1,5 +1,7 @@
 package taboo
 
+import "regexp"
+
 // claudeCode is the AgentProfile for the Claude Code CLI, run against a single model.
 type claudeCode struct {
 	model string
@@ -79,10 +81,14 @@ func (claudeCode) Sessions() (SessionSpec, bool) {
 	return SessionSpec{DirEnv: "CLAUDE_CONFIG_DIR", Subdir: "projects"}, true
 }
 
-// claudeCodeHint is Claude Code's model-format hint for the agent registry
-// (ADR 0005): registry-table metadata co-located with the profile, kept off the
-// deliberately-minimal AgentProfile interface (ADR 0001). It is a deferred-type
-// placeholder for this slice — the validate slice that consumes it decides whether a
-// hint is a regex, a predicate, or a human "expected format" string (see
-// modelHint in registry.go).
-var claudeCodeHint modelHint
+// claudeCodeHint warns when the model is not a Claude model id or family alias
+// (ADR 0008). It accepts any value containing "claude" (case-insensitively) —
+// covering ids like claude-sonnet-4-6 and Bedrock/Vertex forms like
+// anthropic.claude-3-5-sonnet — or one starting with a bare family alias
+// (sonnet/opus/haiku). A foreign id (gpt-*, an OpenCode provider slug) matches
+// neither and warns. The match is anchored only for the aliases; "claude" may
+// appear anywhere so vendor-prefixed ids still pass.
+var claudeCodeHint = modelHint{
+	pattern:  regexp.MustCompile(`(?i)claude|^(sonnet|opus|haiku)`),
+	expected: "a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet",
+}

@@ -106,8 +106,10 @@ func (copilot) Sessions() (SessionSpec, bool) {
 	return SessionSpec{DirEnv: "COPILOT_HOME", Subdir: "session-state"}, true
 }
 
-// copilotHint is Copilot's model-format hint for the agent registry (ADR 0005):
-// registry-table metadata co-located with the profile, kept off the
-// deliberately-minimal AgentProfile interface (ADR 0001). It is a deferred-type
-// placeholder for this slice — see modelHint (registry.go).
-var copilotHint modelHint
+// copilotHint is deliberately the no-opinion hint (nil pattern; ADR 0008).
+// Copilot is a proxy that runs models from many providers — gpt-*, claude-*,
+// gemini-*, the o-series — so there is no single well-formed shape to check, and
+// any format heuristic would warn on valid configs. The validate command
+// therefore never warns on a copilot model; the empty modelHint{} makes that
+// intent explicit rather than leaving a bare zero value to read as an oversight.
+var copilotHint = modelHint{}

@@ -36,7 +36,7 @@ func newDoctorCmd(env Env) *cobra.Command {
 			ctx := cmd.Context()
 			checks := hostChecks(ctx, env)
 			checks = append(checks, configChecks(ctx, env, statFileExists, taboo.LoadConfig)...)
-			if err := renderReport(env, asJSON, checks); err != nil {
+			if err := renderReport(env, asJSON, "taboo doctor — host readiness", checks); err != nil {
 				return err
 			}
 			if anyError(checks) {
@@ -49,13 +49,14 @@ func newDoctorCmd(env Env) *cobra.Command {
 	return cmd
 }
 
-// renderReport writes the report in the requested format to env.Stdout and
-// surfaces only an encoding error; the failure verdict is signaled separately by
-// the caller via errChecksFailed.
-func renderReport(env Env, asJSON bool, checks []check) error {
+// renderReport writes the report in the requested format to env.Stdout under
+// title and surfaces only an encoding error; the failure verdict is signaled
+// separately by the caller via its own sentinel. The JSON document is generic
+// (no title), so title applies only to the human form.
+func renderReport(env Env, asJSON bool, title string, checks []check) error {
 	if asJSON {
 		return writeJSON(env.Stdout, checks)
 	}
-	writeHuman(env.Stdout, checks)
+	writeHuman(env.Stdout, title, checks)
 	return nil
 }
