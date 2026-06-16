@@ -17,22 +17,22 @@ func TestWorkshopArgs(t *testing.T) {
 	}{
 		{
 			name: "launch",
-			got:  launchArgs(project, ws),
+			got:  verbArgs(project, "launch", ws),
 			want: []string{"--project", project, "launch", ws},
 		},
 		{
 			name: "stop",
-			got:  stopArgs(project, ws),
+			got:  verbArgs(project, "stop", ws),
 			want: []string{"--project", project, "stop", ws},
 		},
 		{
 			name: "start",
-			got:  startArgs(project, ws),
+			got:  verbArgs(project, "start", ws),
 			want: []string{"--project", project, "start", ws},
 		},
 		{
 			name: "info",
-			got:  infoArgs(project, ws),
+			got:  verbArgs(project, "info", ws),
 			want: []string{"--project", project, "info", ws},
 		},
 		{

@@ -191,14 +191,15 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	wt := r.worktreePath(req.Branch)
 	res.WorktreePath = wt
-	if err := r.git(ctx, worktreeAddArgs(r.cfg.RepoPath, req.Branch, wt)); err != nil {
+	// git -C <repo> worktree add -b <branch> <path>: a fresh linked worktree on req.Branch.
+	if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt}); err != nil {
 		return res, fmt.Errorf("add worktree: %w", err)
 	}
 
 	// Swap the worktree + the repo's .git into the workshop. A worktree is a
 	// non-empty source, so remount is not atomic: stop -> remount -> start.
 	proj, ws, sdk := r.cfg.ProjectDir, r.cfg.Workshop, r.cfg.Agent.Name()
-	if err := r.workshop(ctx, stopArgs(proj, ws)); err != nil {
+	if err := r.workshop(ctx, verbArgs(proj, "stop", ws)); err != nil {
 		return res, fmt.Errorf("stop: %w", err)
 	}
 	if err := r.workshop(ctx, remountArgs(proj, ws, sdk, "workspace", wt)); err != nil {
@@ -219,7 +220,7 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 			return res, fmt.Errorf("remount sessions: %w", err)
 		}
 	}
-	if err := r.workshop(ctx, startArgs(proj, ws)); err != nil {
+	if err := r.workshop(ctx, verbArgs(proj, "start", ws)); err != nil {
 		return res, fmt.Errorf("start: %w", err)
 	}
 
@@ -278,7 +279,7 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 
 	// The agent committed in place through the bind-mount; capture the branch
 	// HEAD from the host worktree.
-	commit, err := r.gitCapture(ctx, revParseHeadArgs(res.WorktreePath))
+	commit, err := r.gitCapture(ctx, []string{"-C", res.WorktreePath, "rev-parse", "HEAD"})
 	if err != nil {
 		return res, fmt.Errorf("rev-parse HEAD: %w", err)
 	}
@@ -299,7 +300,7 @@ func (r *Runner) gitCapture(ctx context.Context, args []string) (string, error) 
 // workshop is present and is reused (the launch is expensive (minutes), so it
 // is amortized across runs).
 func (r *Runner) ensureWorkshop(ctx context.Context) error {
-	if err := r.workshop(ctx, infoArgs(r.cfg.ProjectDir, r.cfg.Workshop)); err == nil {
+	if err := r.workshop(ctx, verbArgs(r.cfg.ProjectDir, "info", r.cfg.Workshop)); err == nil {
 		return nil // present — reuse
 	}
 	if err := r.seedSDK(); err != nil {
@@ -308,5 +309,5 @@ func (r *Runner) ensureWorkshop(ctx context.Context) error {
 	if err := r.writeDefinition(); err != nil {
 		return fmt.Errorf("write definition: %w", err)
 	}
-	return r.workshop(ctx, launchArgs(r.cfg.ProjectDir, r.cfg.Workshop))
+	return r.workshop(ctx, verbArgs(r.cfg.ProjectDir, "launch", r.cfg.Workshop))
 }

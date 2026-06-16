@@ -10,20 +10,10 @@ func projectArgs(project string) []string {
 	return []string{"--project", project}
 }
 
-func launchArgs(project, ws string) []string {
-	return append(projectArgs(project), "launch", ws)
-}
-
-func stopArgs(project, ws string) []string {
-	return append(projectArgs(project), "stop", ws)
-}
-
-func startArgs(project, ws string) []string {
-	return append(projectArgs(project), "start", ws)
-}
-
-func infoArgs(project, ws string) []string {
-	return append(projectArgs(project), "info", ws)
+// verbArgs builds a plain `workshop --project <p> <verb> <ws>` invocation — the
+// shape shared by launch, stop, start, and info.
+func verbArgs(project, verb, ws string) []string {
+	return append(projectArgs(project), verb, ws)
 }
 
 // remountArgs points the <ws>/<sdk>:<plug> mount plug at a new host source:
