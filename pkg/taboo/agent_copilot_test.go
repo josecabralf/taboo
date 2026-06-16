@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// The model Copilot is configured with, reused across the assertions below. A
-// GPT model (not a Claude one) is used on purpose so the Copilot fixtures stay
-// visually distinct from the claude-code suite — Copilot and claude-code are
-// different agents that happen to both be able to run Anthropic models.
+// The model Copilot is configured with, reused across the assertions below. A GPT
+// model (not a Claude one) keeps the Copilot fixtures visually distinct from the
+// claude-code suite.
 const copilotModel = "gpt-5.4"
 
 // copilotBaseArgv is the stable prefix every Copilot invocation carries:
@@ -47,15 +46,12 @@ func TestCopilot_BuildCommand(t *testing.T) {
 	}
 }
 
-// Resume binds the session id with the =-attached `--resume=<id>`, placed after
-// the stable prefix and before the -p prompt, so Copilot continues that prior
-// session instead of starting fresh. The = form is the one the CLI documents
-// (`copilot --resume=<id>`): `--resume[=sessionId]` is a commander.js
-// optional-value option, where a bare `--resume` opens the interactive picker and
-// the space form binds an id only when the next token is not option-like, so we
-// attach with `=` to target the session unambiguously. ADR 0003's roster wrote
-// `--resume <id>` schematically; the real CLI documents the = form (verified
-// against `copilot --help`, v1.0.22).
+// Resume binds the session id as the =-attached `--resume=<id>`, placed after the
+// stable prefix and before the -p prompt, so Copilot continues that prior session
+// instead of starting fresh. The = form (not bare `--resume`, which opens the
+// interactive picker) is the one the CLI documents; see BuildCommand's doc for the
+// commander.js optional-value rationale. ADR 0003's roster wrote `--resume <id>`
+// schematically; the real CLI documents the = form (verified, copilot 1.0.22).
 func TestCopilot_BuildCommand_Resume(t *testing.T) {
 	ac := Copilot(copilotModel).BuildCommand(CommandOptions{
 		Prompt: "do the thing", ResumeSession: "ses_abc",

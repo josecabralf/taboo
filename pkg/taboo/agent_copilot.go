@@ -18,14 +18,13 @@ func (copilot) Name() string { return "copilot" }
 // text -s -p <prompt>`, with the prompt delivered as the value of -p (ADR 0001),
 // never on stdin.
 //
-// -p/--prompt is what makes the run non-interactive: without it copilot starts an
-// interactive TUI and would hang, so the prompt is always emitted as the -p value
-// (never on stdin; ADR 0001). Copilot requires a non-empty prompt for a -p run —
-// an empty value makes it exit 1 ("No prompt provided"), so a "just continue"
-// resume (empty Prompt) is not a valid Copilot run. Like the other profiles
-// BuildCommand does not guard this; the caller must supply a prompt even when
-// resuming. An empty prompt is still emitted faithfully as `-p ""`, because
-// omitting -p would launch the hanging TUI instead of that fast, clear exit 1.
+// -p/--prompt both selects non-interactive mode and carries the prompt (as its
+// value, never on stdin; ADR 0001): omitting it would drop copilot into an
+// interactive TUI that hangs, so -p is always emitted, even empty. Copilot then
+// requires a non-empty value — an empty one exits 1 ("No prompt provided") — so a
+// "just continue" resume (empty Prompt) is not a valid Copilot run. Like the other
+// profiles BuildCommand does not guard this; the caller must supply a prompt even
+// when resuming, and an empty prompt is still emitted faithfully as `-p ""`.
 //
 // --allow-all (= --allow-all-tools --allow-all-paths --allow-all-urls) is
 // required for non-interactive mode: a `-p` run has no interactive approver, so
@@ -56,11 +55,11 @@ func (copilot) Name() string { return "copilot" }
 // commander.js optional-value option: a bare `--resume` opens the interactive
 // session picker, and the space form binds an id only when the following token is
 // not option-like — so attaching the id with `=` targets the session
-// unambiguously and never risks the picker (verified, copilot 1.0.22). Copilot has
-// no native headless fork (1.0.22; ADR 0003), so Fork is a documented no-op here —
-// it is intentionally not consulted, and session-level fork degrades to taboo's
-// filesystem-only isolation (fork = resume onto a fresh branch+worktree). The
-// resume flag precedes the -p prompt.
+// unambiguously and never risks the picker (verified, copilot 1.0.22). The resume
+// flag precedes the -p prompt.
+//
+// Copilot has no native headless fork (1.0.22; ADR 0003), so Fork is intentionally
+// not consulted here — a documented no-op; see TestCopilot_BuildCommand_ForkIsNoOp.
 func (a copilot) BuildCommand(opts CommandOptions) AgentCommand {
 	argv := []string{
 		"copilot", "--model", a.model,
@@ -95,9 +94,9 @@ func (copilot) CredentialEnvKeys() []string {
 // Sessions redirects Copilot's whole config+state directory by pointing
 // COPILOT_HOME at the mount (it defaults to $HOME/.copilot); session transcripts
 // land under session-state/. COPILOT_HOME is the only env var copilot exposes to
-// relocate this directory — the --config-dir flag does the same but taboo's
-// capture wiring drives an env var, not argv — and it captures the entire home
-// (config.json, logs, command history, sessions), not sessions alone.
+// relocate this directory, and it captures the entire home (config.json, logs,
+// command history, sessions), not sessions alone. (The --config-dir flag does the
+// same, but taboo's capture wiring drives an env var, not argv.)
 //
 // Safe here ONLY because auth is env-based (see CredentialEnvKeys): with the
 // GitHub token supplied through --env, copilot writes no stored-credential file
