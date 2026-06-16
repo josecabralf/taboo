@@ -72,6 +72,17 @@ model:
 
 This sidesteps workshop's missing copy primitive entirely and matches its grain.
 
+**Worktree placement is host-side and free of the mount topology.** A run's
+worktree lives at `<ProjectDir>/worktrees/<branch>` (slashes → `-`). The CLI sets
+`ProjectDir = <repo>/.taboo`, so worktrees **nest at
+`<repo>/.taboo/worktrees/<branch>`**, inside the repo and git-ignored. This was the
+open risk in PRD #19 (issue #35) — nesting the worktree under the repo whose `.git`
+is the second mount — and is now **verified on real workshop 0.9.1 + LXD 6.8**
+(`TestIntegration_NestedWorktreeArrangement`): the commit lands on the host branch
+and the worktree's `.git` pointer resolves on both sides. Nesting works because
+placement changes only the host path of the `/workspace` source, never the two
+mounts themselves; the out-of-repo layout remains a sound fallback. See ADR 0007.
+
 **Two mounts are required, not one.** A *linked* git worktree is **not
 self-contained**: its `.git` is a pointer to the main repo's
 `.git/worktrees/<name>`, and its objects/refs live in the main `.git`. Mounting
