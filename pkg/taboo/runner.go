@@ -147,7 +147,7 @@ func (r *Runner) worktreePath(branch string) string {
 //
 // Because it is shared by every run in a ProjectDir, it is safe only for
 // sequential runs against one workshop: concurrent runs sharing a ProjectDir
-// would share OpenCode's single SQLite session store and could corrupt it. Pool
+// would share OpenCode's single SQLite session DB and could corrupt it. Pool
 // keeps this invariant by giving each concurrency slot its own ProjectDir (see
 // Pool.slotConfig), so parallel fan-out runs never share a session store.
 func (r *Runner) sessionsDir() string {
