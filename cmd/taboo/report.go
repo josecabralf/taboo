@@ -20,10 +20,11 @@ type jsonReport struct {
 	Checks []jsonCheck `json:"checks"`
 }
 
-// writeHuman prints a human-readable report, one line per check, with a short
-// header and a footer summarizing the overall verdict.
-func writeHuman(w io.Writer, checks []check) {
-	_, _ = fmt.Fprintln(w, "taboo doctor — host readiness")
+// writeHuman prints a human-readable report under title, one line per check,
+// with a footer summarizing the overall verdict. The title is supplied by the
+// caller (doctor and validate render the same shape under different headers).
+func writeHuman(w io.Writer, title string, checks []check) {
+	_, _ = fmt.Fprintln(w, title)
 	for _, c := range checks {
 		_, _ = fmt.Fprintf(w, "  [%-5s] %-16s %s\n", c.Status.token(), c.Name, c.Message)
 	}

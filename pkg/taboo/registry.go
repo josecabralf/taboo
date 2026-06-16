@@ -3,7 +3,9 @@ package taboo
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
+	"strings"
 )
 
 // ErrUnknownAgent is the sentinel NewProfile wraps when a name matches no
@@ -11,14 +13,27 @@ import (
 // fuzzy-suggestion path (story #24); NewProfile itself never suggests.
 var ErrUnknownAgent = errors.New("taboo: unknown agent")
 
-// modelHint is a per-agent model-format hint: an empty placeholder type for now.
-// ADR 0005 fixes only its placement — registry-table metadata, co-located beside each
-// agent as <name>Hint — and defers its concrete shape (regex, predicate, or
-// human "expected format" string) to the validate slice that consumes it. An
-// empty struct lets that slice add fields without churning registration.Hint's
-// type, and keeps the hint off the deliberately-minimal AgentProfile interface
-// (ADR 0001).
-type modelHint struct{}
+// modelHint is a per-agent model-format heuristic for `taboo validate` (story
+// #25). ADR 0005 fixed its placement — registry-table metadata, co-located beside
+// each agent as <name>Hint — and deferred its concrete shape to the validate
+// slice that consumes it; ADR 0008 settles that shape here: pattern is the regexp
+// a well-formed model matches, and expected is the human-readable format the
+// validate warning quotes. A nil pattern means the agent has no opinion (e.g.
+// copilot, which proxies many providers' models), so matches always succeeds and
+// never warns. The hint stays off the deliberately-minimal AgentProfile interface
+// (ADR 0001) — it is read from the agent name alone, before anything is built.
+type modelHint struct {
+	pattern  *regexp.Regexp
+	expected string
+}
+
+// matches reports whether model looks well-formed for this hint's agent. The
+// heuristic is advisory (warn, never fail): a no-opinion hint (nil pattern)
+// always matches, and surrounding whitespace is trimmed so a stray space in YAML
+// does not trip a false warning.
+func (h modelHint) matches(model string) bool {
+	return h.pattern == nil || h.pattern.MatchString(strings.TrimSpace(model))
+}
 
 // registration pairs an agent's constructor with its model-format hint. The
 // roster is keyed by New("").Name() — the profile's own identity, which equals
@@ -71,4 +86,20 @@ func AgentNames() []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+// MatchModelFormat reports whether model looks well-formed for the named agent
+// and returns that agent's human-readable expected-format string. It is purely
+// advisory (story #25): an unknown agent, a no-opinion hint, or a pattern match
+// all yield ok=true — only a recognized agent whose hint pattern rejects the
+// model yields ok=false, which the validate command turns into a WARN, never a
+// failure. The expected string is "" exactly when the agent is unknown or has no
+// opinion.
+func MatchModelFormat(agent, model string) (ok bool, expected string) {
+	for _, a := range agents {
+		if a.name() == agent {
+			return a.Hint.matches(model), a.Hint.expected
+		}
+	}
+	return true, ""
 }

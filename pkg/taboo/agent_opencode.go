@@ -1,5 +1,7 @@
 package taboo
 
+import "regexp"
+
 // openCode is the AgentProfile for the OpenCode CLI, run against a single model.
 type openCode struct {
 	model string
@@ -52,7 +54,13 @@ func (openCode) Sessions() (SessionSpec, bool) {
 	return SessionSpec{DirEnv: "XDG_DATA_HOME", Subdir: "opencode"}, true
 }
 
-// openCodeHint is OpenCode's model-format hint for the agent registry. See
-// claudeCodeHint and modelHint (registry.go) for the deferred-type placeholder's
-// rationale.
-var openCodeHint modelHint
+// openCodeHint warns when the model is not an OpenCode provider/model slug
+// (ADR 0008). OpenCode addresses every model as `<provider>/<model>` (it routes
+// through OpenRouter and friends), so a value with no leading provider segment —
+// e.g. a bare `gpt-4` or `claude-sonnet-4-6` — is almost certainly a mistake.
+// The pattern requires one non-slash provider segment, a slash, then a non-empty
+// remainder (which may itself contain slashes, as in openrouter/qwen/...).
+var openCodeHint = modelHint{
+	pattern:  regexp.MustCompile(`^[^/]+/.+$`),
+	expected: "<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus",
+}

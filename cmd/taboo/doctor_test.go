@@ -69,16 +69,23 @@ func runDoctor(t *testing.T, env Env, args ...string) (string, error) {
 }
 
 // findStatus returns the status token for the named check in human-readable
-// output, or "" if the check is absent. It scans for a line containing both the
-// status token and the name.
+// output, or "" if the check is absent. It parses the report's "[status] name
+// message" column layout (writeHuman in report.go): it pins the status COLUMN
+// and matches the check-name field exactly, so a status word inside a message —
+// or a temp-dir path that happens to contain the check name — cannot masquerade
+// as the status (a substring scan would let it).
 func findStatus(out, name string) string {
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, name) {
-			for _, tok := range []string{"error", "warn", "ok"} {
-				if strings.Contains(line, tok) {
-					return tok
-				}
-			}
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "[") {
+			continue
+		}
+		end := strings.IndexByte(trimmed, ']')
+		if end < 0 {
+			continue
+		}
+		if fields := strings.Fields(trimmed[end+1:]); len(fields) > 0 && fields[0] == name {
+			return strings.TrimSpace(trimmed[1:end])
 		}
 	}
 	return ""
