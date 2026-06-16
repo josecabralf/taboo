@@ -1,0 +1,284 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/charmbracelet/x/term"
+	"github.com/spf13/cobra"
+
+	taboo "github.com/josecabralf/taboo/pkg/taboo"
+)
+
+// defaultBase is the workshop base image init assumes when none is supplied.
+const defaultBase = "ubuntu@24.04"
+
+// initOptions are the resolved-or-flag values init scaffolds from. They are
+// filled from flags, defaulted, and (interactively) confirmed via the wizard.
+type initOptions struct {
+	// agent is the chosen agent name.
+	agent string
+	// model is the chosen model.
+	model string
+	// base is the workshop base image.
+	base string
+	// repo is the host repository path (absolute after finalize).
+	repo string
+	// workshop is the workshop name (derived from repo when unset).
+	workshop string
+	// force overwrites an existing .taboo when true.
+	force bool
+	// dryRun lists the files it would write and touches nothing when true.
+	dryRun bool
+}
+
+// newInitCmd builds the `init` subcommand. It scaffolds a .taboo/ directory into
+// a target repo, collecting agent/model/base/repo interactively (a huh wizard)
+// or non-interactively (one flag per prompt). It writes taboo.yaml, .gitignore,
+// and .env.example, never launches a workshop, and prints next steps.
+func newInitCmd(env Env) *cobra.Command {
+	opts := initOptions{}
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Scaffold a .taboo/ project into a repository",
+		Long: "init scaffolds a .taboo/ directory (taboo.yaml, .gitignore, .env.example) into a " +
+			"target repository. Run it interactively to be prompted for agent, model, base, and " +
+			"repo, or pass the equivalent flags to scaffold non-interactively.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			// The root sets SilenceErrors, and main exits without printing, so
+			// (like doctor) init surfaces its own failures to stderr; the returned
+			// error only drives the non-zero exit.
+			if err := runInitCmd(env, &opts); err != nil {
+				_, _ = fmt.Fprintln(env.Stderr, "Error:", err)
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&opts.agent, "agent", "", "agent to scaffold for (e.g. opencode, claude-code, copilot)")
+	cmd.Flags().StringVar(&opts.model, "model", "", "model passed to the chosen agent")
+	cmd.Flags().StringVar(&opts.base, "base", "", "workshop base image (default: "+defaultBase+")")
+	cmd.Flags().StringVar(&opts.repo, "repo", "", "host repository path to scaffold into (default: current directory)")
+	cmd.Flags().StringVar(&opts.workshop, "workshop", "", "workshop name (default: derived from the repo directory name)")
+	cmd.Flags().BoolVar(&opts.force, "force", false, "regenerate the scaffold files in an existing .taboo directory")
+	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "list the files init would write without writing them")
+	return cmd
+}
+
+// runInitCmd orchestrates init's resolve-then-scaffold flow: it applies
+// defaults, collects values (wizard or required-flag check), resolves the agent
+// profile, refuses to clobber an existing .taboo without --force, and either
+// previews (--dry-run) or writes the scaffold and prints next steps.
+func runInitCmd(env Env, opts *initOptions) error {
+	if err := applyDefaults(env, opts); err != nil {
+		return err
+	}
+	// Collect the required values (agent, model) only when a flag left one unset:
+	// prompt at a TTY, else fail fast naming the flag. A fully flagged invocation
+	// skips the wizard entirely, so it scaffolds without prompting even from a
+	// terminal (and stays scriptable).
+	if opts.agent == "" || opts.model == "" {
+		if isInteractive(env) {
+			if err := runWizard(env, opts); err != nil {
+				return err
+			}
+		} else if err := requireValues(opts); err != nil {
+			return err
+		}
+	}
+	if err := finalize(env, opts); err != nil {
+		return err
+	}
+
+	profile, err := resolveProfile(opts.agent, opts.model)
+	if err != nil {
+		return err
+	}
+
+	projectDir := filepath.Join(opts.repo, ".taboo")
+	if err := ensureWritable(projectDir, opts.force); err != nil {
+		return err
+	}
+
+	in := scaffoldInputs{
+		Workshop: opts.workshop,
+		Base:     opts.base,
+		Repo:     opts.repo,
+		Agent:    opts.agent,
+		Model:    opts.model,
+		Profile:  profile,
+	}
+	files, err := in.plan()
+	if err != nil {
+		return err
+	}
+	if opts.dryRun {
+		printDryRun(env, projectDir, files)
+		return nil
+	}
+	if err := writeScaffold(projectDir, files); err != nil {
+		return err
+	}
+	printNextSteps(env, opts, projectDir)
+	return nil
+}
+
+// applyDefaults fills the pre-wizard defaults: base falls back to defaultBase
+// and repo falls back to the working directory.
+func applyDefaults(env Env, opts *initOptions) error {
+	if opts.base == "" {
+		opts.base = defaultBase
+	}
+	if opts.repo == "" {
+		wd, err := env.Getwd()
+		if err != nil {
+			return fmt.Errorf("determine working directory: %w", err)
+		}
+		opts.repo = wd
+	}
+	return nil
+}
+
+// requireValues enforces the non-interactive contract: agent and model must be
+// supplied. It returns one error naming every missing flag so a scripted caller
+// fixes them in a single pass.
+func requireValues(opts *initOptions) error {
+	var missing []string
+	if opts.agent == "" {
+		missing = append(missing, "--agent")
+	}
+	if opts.model == "" {
+		missing = append(missing, "--model")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required flags: %s (pass them or run init interactively)",
+			strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// finalize resolves repo to an absolute path (a relative --repo is joined to
+// env.Getwd, the injected working directory), derives the workshop name from it
+// when unset, and guarantees a non-empty base (the wizard's base field has no
+// required validator, so an interactive user can clear it).
+func finalize(env Env, opts *initOptions) error {
+	if !filepath.IsAbs(opts.repo) {
+		wd, err := env.Getwd()
+		if err != nil {
+			return fmt.Errorf("determine working directory: %w", err)
+		}
+		opts.repo = filepath.Join(wd, opts.repo)
+	}
+	opts.repo = filepath.Clean(opts.repo)
+	if opts.workshop == "" {
+		opts.workshop = deriveWorkshopName(opts.repo)
+	}
+	if opts.base == "" {
+		opts.base = defaultBase
+	}
+	return nil
+}
+
+// resolveProfile maps the chosen agent/model to an AgentProfile, turning an
+// unknown agent into an error that lists the valid agent names (the fuzzy "did
+// you mean" lives in the separate validate slice).
+func resolveProfile(agent, model string) (taboo.AgentProfile, error) {
+	profile, err := taboo.NewProfile(agent, model)
+	if err != nil {
+		if errors.Is(err, taboo.ErrUnknownAgent) {
+			return nil, fmt.Errorf("unknown agent %q; valid agents: %s",
+				agent, strings.Join(taboo.AgentNames(), ", "))
+		}
+		return nil, err
+	}
+	return profile, nil
+}
+
+// ensureWritable refuses to clobber an existing .taboo directory unless force is
+// set; with force, only the generated scaffold files are regenerated (any other
+// files the user added under .taboo are left untouched). It also rejects a
+// non-directory at that path so the failure is clear rather than an opaque
+// MkdirAll error. It runs before the dry-run branch so a preview is honest about
+// the refusal.
+func ensureWritable(projectDir string, force bool) error {
+	info, err := os.Stat(projectDir)
+	if err != nil {
+		return nil // absent (or unstattable) — writeScaffold creates it or surfaces the error
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists but is not a directory; remove it and re-run init", projectDir)
+	}
+	if !force {
+		return fmt.Errorf(".taboo already exists at %s; pass --force to regenerate its scaffold files", projectDir)
+	}
+	return nil
+}
+
+// printDryRun lists the absolute path of every file init would write, writing
+// nothing to disk.
+func printDryRun(env Env, projectDir string, files []scaffoldFile) {
+	_, _ = fmt.Fprintln(env.Stdout, "taboo init (dry run) — would write:")
+	for _, f := range files {
+		_, _ = fmt.Fprintf(env.Stdout, "  %s\n", filepath.Join(projectDir, f.Path))
+	}
+}
+
+// printNextSteps confirms the scaffold and prints the suggested follow-ups,
+// including an offer to run doctor. It never launches a workshop.
+func printNextSteps(env Env, opts *initOptions, projectDir string) {
+	envExample := filepath.Join(projectDir, ".env.example")
+	envFile := filepath.Join(projectDir, ".env")
+	_, _ = fmt.Fprintf(env.Stdout, "Scaffolded taboo project at %s\n", projectDir)
+	_, _ = fmt.Fprintln(env.Stdout, "")
+	_, _ = fmt.Fprintln(env.Stdout, "Next steps:")
+	_, _ = fmt.Fprintf(env.Stdout, "  1. Copy %s to %s and fill in your %s credential(s),\n",
+		envExample, envFile, opts.agent)
+	_, _ = fmt.Fprintf(env.Stdout, "     then load them into your shell so taboo can forward them (e.g. `set -a; source %s; set +a`).\n", envFile)
+	_, _ = fmt.Fprintf(env.Stdout, "  2. Review %s and adjust as needed.\n",
+		filepath.Join(projectDir, "taboo.yaml"))
+	_, _ = fmt.Fprintln(env.Stdout, "  3. Run `taboo doctor` to verify your host is ready.")
+}
+
+// isInteractive reports whether stdin is a real terminal we can run the wizard
+// on. It returns true only when env.Stdin is an *os.File backed by a TTY, so a
+// piped, redirected (including < /dev/null), or in-memory stdin (as in tests and
+// scripts) is non-interactive and takes the flag-or-fail path. A bare
+// os.ModeCharDevice check is not enough here: /dev/null is a character device
+// too, so this uses a real isatty probe.
+func isInteractive(env Env) bool {
+	f, ok := env.Stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(f.Fd())
+}
+
+// deriveWorkshopName slugifies the repo's base directory name into a workshop
+// name: lowercased, with every run of non-[a-z0-9] characters collapsed to a
+// single dash and leading/trailing dashes trimmed. It falls back to "taboo" when
+// the result is empty.
+func deriveWorkshopName(repo string) string {
+	base := strings.ToLower(filepath.Base(filepath.Clean(repo)))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+			continue
+		}
+		if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		return "taboo"
+	}
+	return slug
+}
