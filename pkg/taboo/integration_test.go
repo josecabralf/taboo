@@ -91,10 +91,20 @@ func (scriptProfile) CredentialEnvKeys() []string { return nil }
 func (scriptProfile) Sessions() (SessionSpec, bool) { return SessionSpec{}, false }
 
 // newIntegrationRunner builds a Runner against the real workshop CLI and
-// registers cleanup that removes the workshop and prunes the worktree.
+// registers cleanup that removes the workshop and prunes the worktree. The
+// project dir is a standalone directory outside the repo (the out-of-repo
+// worktree arrangement); newIntegrationRunnerInProject takes an explicit project
+// dir for the nested arrangement.
 func newIntegrationRunner(t *testing.T, repo string, agent AgentProfile) (*Runner, Config) {
 	t.Helper()
-	proj := nonTmpDir(t)
+	return newIntegrationRunnerInProject(t, repo, agent, nonTmpDir(t))
+}
+
+// newIntegrationRunnerInProject is newIntegrationRunner with the project dir
+// supplied by the caller, so a test can place worktrees nested inside the repo
+// (proj == <repo>/.taboo) rather than in a standalone directory.
+func newIntegrationRunnerInProject(t *testing.T, repo string, agent AgentProfile, proj string) (*Runner, Config) {
+	t.Helper()
 	ws := fmt.Sprintf("taboo-it-%d", os.Getpid())
 	cfg := Config{
 		Workshop:   ws,
@@ -163,6 +173,88 @@ git commit -qm "agent: add TABOO.md"`
 		t.Errorf("commit not on branch; log:\n%s", logOut)
 	}
 	t.Logf("workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.WorktreePath)
+}
+
+// TestIntegration_NestedWorktreeArrangement is the risk gate for issue #35: it
+// verifies the PRD's proposed on-disk layout where the project dir lives *inside*
+// the target repo (ProjectDir == <repo>/.taboo), so worktrees nest at
+// <repo>/.taboo/worktrees/<branch> — git-ignored, inside the repo — rather than in
+// a standalone out-of-repo directory (the arrangement the other integration tests
+// exercise).
+//
+// The concern (CONTEXT.md, two-mount rule): the git-common mount target equals the
+// host .git absolute path, and a worktree's .git is only a pointer into
+// <repo>/.git/worktrees/<name>. Nesting the worktree under the repo must still
+// yield a worktree whose .git pointer resolves identically inside the workshop
+// (via the gitcommon mount) and on the host, with no pointer rewriting — so the
+// agent's commit lands on the host branch *and* the worktree stays valid for
+// host-side git.
+//
+// It uses the deterministic shell "agent" (no LLM, no credential), so it gates on
+// workshop + LXD alone. If the commit does not land, or the host worktree is not a
+// valid git checkout afterwards, the nested arrangement is rejected in favour of
+// the out-of-repo fallback.
+func TestIntegration_NestedWorktreeArrangement(t *testing.T) {
+	repo := initSeedRepo(t)
+	// The nested arrangement: the project dir is inside the repo. taboo derives
+	// worktree paths as <ProjectDir>/worktrees/<branch>, so this alone places them
+	// at <repo>/.taboo/worktrees/<branch> — no library change is needed.
+	proj := filepath.Join(repo, ".taboo")
+	r, cfg := newIntegrationRunnerInProject(t, repo, scriptProfile{argv: []string{"bash", "-lc"}}, proj)
+
+	const script = `set -eux
+git config user.email agent@example.com
+git config user.name agent
+echo "written inside the workshop" > NESTED.md
+git add -A
+git commit -qm "agent: add NESTED.md"`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	var agentOut strings.Builder
+	res, err := r.Run(ctx, RunRequest{
+		Branch: "agent/nested", Prompt: script, Timeout: 2 * time.Minute,
+		Stdout: &agentOut, Stderr: &agentOut,
+	})
+	t.Logf("agent exec output:\n%s", agentOut.String())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The worktree is actually nested inside the repo, under .taboo/worktrees.
+	nestedPrefix := filepath.Join(repo, ".taboo", "worktrees") + string(os.PathSeparator)
+	if !strings.HasPrefix(res.WorktreePath, nestedPrefix) {
+		t.Fatalf("worktree not nested under the repo: got %q, want prefix %q", res.WorktreePath, nestedPrefix)
+	}
+
+	// The agent's commit landed on the host branch (the in-place commit succeeded
+	// despite the worktree being nested under the repo's mounted .git).
+	if res.Commit == "" {
+		t.Fatal("RunResult.Commit is empty")
+	}
+	agentFile := filepath.Join(res.WorktreePath, "NESTED.md")
+	if _, err := os.Stat(agentFile); err != nil {
+		t.Fatalf("agent file not on host worktree: %v", err)
+	}
+	logOut, err := exec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, logOut)
+	}
+	if !strings.Contains(string(logOut), "add NESTED.md") {
+		t.Errorf("commit not on branch; log:\n%s", logOut)
+	}
+
+	// The worktree's .git pointer resolves on the host too: host-side git sees a
+	// valid checkout on the run's branch (no pointer rewriting broke either side).
+	branchOut, err := exec.Command("git", "-C", res.WorktreePath, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("host-side git in nested worktree failed (pointer did not resolve): %v\n%s", err, branchOut)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != "agent/nested" {
+		t.Errorf("host worktree on wrong branch: got %q, want %q", got, "agent/nested")
+	}
+	t.Logf("nested arrangement OK: workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.WorktreePath)
 }
 
 // runLiveAgentCommitTest is the shared body of the three live-agent integration
