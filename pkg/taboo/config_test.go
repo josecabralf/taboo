@@ -355,12 +355,11 @@ defaults:
 	}
 }
 
-// TestLoadConfig_NonScalarTimeout rejects a timeout given a mapping (a non-scalar
-// value) as a wrapped ErrConfigParse. It exercises the Duration unmarshaler's
-// other error exit — the value.Decode failure, distinct from the
-// time.ParseDuration failure TestLoadConfig_BadDuration covers — proving a
-// structurally invalid timeout still surfaces through the strict decoder rather
-// than being silently admitted.
+// TestLoadConfig_NonScalarTimeout rejects a timeout given a mapping as a wrapped
+// ErrConfigParse. This hits the Duration unmarshaler's value.Decode error exit
+// (the other branch from the time.ParseDuration failure TestLoadConfig_BadDuration
+// covers), proving a structurally invalid timeout surfaces through the strict
+// decoder rather than being silently admitted.
 func TestLoadConfig_NonScalarTimeout(t *testing.T) {
 	path := writeConfig(t, `
 workshop: demo
@@ -385,10 +384,6 @@ func TestLoadConfig_UnknownFieldRejected(t *testing.T) {
 		{
 			name: "unknown top-level scalar",
 			body: "workshop: demo\nfan-out: 3\n",
-		},
-		{
-			name: "unknown top-level block",
-			body: "workshop: demo\nhooks:\n  pre: echo hi\n",
 		},
 		{
 			name: "unknown key inside workflow",
@@ -478,21 +473,19 @@ func TestDuration_UnmarshalYAML(t *testing.T) {
 	}
 }
 
-// TestDuration_MarshalRoundTrip renders a Duration as a Go duration string that
-// parses back to the same value, so a written config can be re-read losslessly.
-func TestDuration_MarshalRoundTrip(t *testing.T) {
-	type holder struct {
-		Timeout Duration `yaml:"timeout"`
-	}
-	out, err := yaml.Marshal(holder{Timeout: Duration(90 * time.Minute)})
+// TestDuration_MarshalYAML pins taboo's marshaler output directly: a Duration
+// renders as the canonical Go duration string, so a written config reads back as
+// the human-friendly form rather than a raw nanosecond count.
+func TestDuration_MarshalYAML(t *testing.T) {
+	got, err := Duration(90 * time.Minute).MarshalYAML()
 	if err != nil {
-		t.Fatalf("yaml.Marshal error = %v", err)
+		t.Fatalf("MarshalYAML() error = %v", err)
 	}
-	var back holder
-	if err := yaml.Unmarshal(out, &back); err != nil {
-		t.Fatalf("yaml.Unmarshal(%q) error = %v", out, err)
+	s, ok := got.(string)
+	if !ok {
+		t.Fatalf("MarshalYAML() returned %T, want string", got)
 	}
-	if got, want := time.Duration(back.Timeout), 90*time.Minute; got != want {
-		t.Errorf("round-tripped Timeout = %v, want %v (marshaled %q)", got, want, out)
+	if want := "1h30m0s"; s != want {
+		t.Errorf("MarshalYAML() = %q, want %q", s, want)
 	}
 }

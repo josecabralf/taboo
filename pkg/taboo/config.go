@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"time"
@@ -41,7 +42,7 @@ func (d Duration) MarshalYAML() (any, error) {
 }
 
 // ProjectConfig is the parsed taboo.yaml: the single source of truth read by
-// both the CLI and scaffolded Go.
+// both the CLI and Go callers that drive runs through pkg/taboo.
 type ProjectConfig struct {
 	// Workshop is the workshop name taboo provisions runs in.
 	Workshop string `yaml:"workshop"`
@@ -130,21 +131,9 @@ func LoadConfig(path string) (*ProjectConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrConfigRead, err)
 	}
-	var cfg ProjectConfig
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true) // reject unknown/structural keys: schema admits scalars/file paths only
-	decErr := dec.Decode(&cfg)
-	if decErr != nil && !errors.Is(decErr, io.EOF) {
-		return nil, fmt.Errorf("%w: %s: %v", ErrConfigParse, path, decErr)
-	}
-	// taboo.yaml is a single document: a stray "---" separator would otherwise
-	// silently drop everything after the first document, contradicting the strict
-	// decode above. Probe for a trailing document and reject it. An empty file
-	// already decoded to io.EOF, so there is nothing more to read.
-	if decErr == nil {
-		if trailing := dec.Decode(&struct{}{}); !errors.Is(trailing, io.EOF) {
-			return nil, fmt.Errorf("%w: %s: multiple YAML documents not supported", ErrConfigParse, path)
-		}
+	cfg, err := decodeStrict(path, data)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.Strategy == "" {
 		cfg.Strategy = defaultStrategy
@@ -155,11 +144,34 @@ func LoadConfig(path string) (*ProjectConfig, error) {
 	return &cfg, nil
 }
 
+// decodeStrict parses data as a single strict taboo.yaml document at path: it
+// rejects unknown keys and any trailing document, wrapping every failure as
+// ErrConfigParse named with path. An empty document decodes to the zero config.
+func decodeStrict(path string, data []byte) (ProjectConfig, error) {
+	var cfg ProjectConfig
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true) // schema is scalars and file paths only — reject any unknown key
+	decErr := dec.Decode(&cfg)
+	if decErr != nil && !errors.Is(decErr, io.EOF) {
+		return cfg, fmt.Errorf("%w: %s: %v", ErrConfigParse, path, decErr)
+	}
+	// taboo.yaml must be a single document. Without this probe a stray "---"
+	// would silently drop everything after the first document — the opposite of
+	// the strict decode above. So we read once more and reject any trailing
+	// document. (An empty file already hit io.EOF, gated out by decErr == nil.)
+	if decErr == nil {
+		if trailing := dec.Decode(&struct{}{}); !errors.Is(trailing, io.EOF) {
+			return cfg, fmt.Errorf("%w: %s: multiple YAML documents not supported", ErrConfigParse, path)
+		}
+	}
+	return cfg, nil
+}
+
 // resolveProfiles fills the top-level Profile and every workflow's Profile from
-// the configured agent/model. The top-level profile is resolved only when an
-// agent is set; an empty agent leaves Profile nil with no error, because the
-// required-field policy belongs to a later validate command. Workflows are
-// visited in sorted key order so an unknown-agent error is deterministic.
+// the configured agent/model. A profile is resolved only where an agent is set;
+// an empty agent leaves Profile nil without error — enforcing the required field
+// is a later validate command's job, not the loader's. Workflows are visited in
+// sorted key order so an unknown-agent error is deterministic.
 func (c *ProjectConfig) resolveProfiles() error {
 	if c.Agent != "" {
 		p, err := NewProfile(c.Agent, c.Model)
@@ -169,25 +181,13 @@ func (c *ProjectConfig) resolveProfiles() error {
 		c.Profile = p
 	}
 
-	names := make([]string, 0, len(c.Workflows))
-	for name := range c.Workflows {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(c.Workflows)) {
 		wf := c.Workflows[name]
-		agent := wf.Agent
-		if agent == "" {
-			agent = c.Agent
-		}
+		agent := orElse(wf.Agent, c.Agent)
 		if agent == "" {
 			continue // no agent anywhere for this workflow: leave Profile nil
 		}
-		model := wf.Model
-		if model == "" {
-			model = c.Model
-		}
+		model := orElse(wf.Model, c.Model)
 		p, err := NewProfile(agent, model)
 		if err != nil {
 			return fmt.Errorf("workflow %q: %w", name, err)
@@ -196,4 +196,13 @@ func (c *ProjectConfig) resolveProfiles() error {
 		c.Workflows[name] = wf
 	}
 	return nil
+}
+
+// orElse returns override when non-empty, otherwise fallback. It expresses the
+// workflow-then-top-level precedence resolveProfiles applies to agent and model.
+func orElse(override, fallback string) string {
+	if override == "" {
+		return fallback
+	}
+	return override
 }
