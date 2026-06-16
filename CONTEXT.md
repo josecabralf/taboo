@@ -92,8 +92,10 @@ the worktree for host-side git — rejected.) Implication: the git-common mount'
 `workshop-target` is **per-repo** (it equals the host `.git` path), so it is
 templated into `workshop.yaml` per repo, not fixed. This couples a persistent
 workshop to one repo unless all managed repos live under a single host parent
-that is mounted at its identical path. Revisit this when persistent-reuse-across-repos
-is built.
+that is mounted at its identical path. ~~Revisit this when
+persistent-reuse-across-repos is built.~~ Resolved in ADR 0006: multi-repo reuse
+is **not** built — one workshop per repo; the common-parent mount is the recorded
+design of record only if that stance reverses.
 
 **Mount-plug mechanics (verified — risk #2).** A `mount` plug is declared
 **inline in `workshop.yaml`** under any SDK entry (`plugs: { <name>: { interface:
@@ -128,8 +130,10 @@ unlike a cheap ephemeral sandbox. So:
   many sequential runs.
 - **Parallelism:** for N concurrent agents, stand up N workshops, each with its
   own worktree. Isolation is at the workshop level. Reuse across waves keeps the
-  cost down; workshop's ZFS snapshot/clone may make warm clones cheap (to be
-  measured).
+  cost down; ~~workshop's ZFS snapshot/clone may make warm clones cheap (to be
+  measured)~~ — resolved in ADR 0006: warm-clone fan-out is deferred, blocked
+  upstream (no `workshop` clone / `launch --from` verb; the Go client shares the
+  same API surface; direct LXD coupling is rejected).
 
 ### Agent provisioning: agent-as-SDK
 
