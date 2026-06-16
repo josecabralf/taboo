@@ -2,7 +2,7 @@ package taboo
 
 // AgentProfile is taboo's per-agent abstraction: it names the agent's SDK
 // environment and builds the exact invocation taboo runs inside the workshop.
-// Each supported agent (OpenCode and Claude Code now; Codex/Pi/Copilot/Cursor
+// Each supported agent (OpenCode, Claude Code, and Copilot now; Codex/Pi/Cursor
 // later) is one implementation. The interface is reviewed by hand because
 // fan-out and sessions build on it; see
 // docs/adr/0001-agentprofile-argv-stdin-command-contract.md.

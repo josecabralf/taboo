@@ -22,6 +22,7 @@ func TestNewProfile_KnownAgents(t *testing.T) {
 	}{
 		{name: "opencode", model: openCodeModel, wantName: "opencode"},
 		{name: "claude-code", model: claudeCodeModel, wantName: "claude-code"},
+		{name: "copilot", model: copilotModel, wantName: "copilot"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,7 +77,7 @@ func TestAgentNames_SortedAndComplete(t *testing.T) {
 	got := AgentNames()
 
 	// Complete: exactly the registered roster, nothing more, nothing missing.
-	want := []string{"claude-code", "opencode"}
+	want := []string{"claude-code", "copilot", "opencode"}
 	if !slices.Equal(got, want) {
 		t.Errorf("AgentNames() = %v, want %v (complete roster)", got, want)
 	}
@@ -95,9 +96,9 @@ func TestAgentNames_SortedAndComplete(t *testing.T) {
 // qualifier — a registered agent with no matching SDK breaks at provisioning.
 //
 // TODO(final-profile): also assert the reverse — every embedded sdk/<dir> has a
-// registered profile. It fails today (codex/copilot/pi ship SDK dirs but no Go
-// profile yet); wire it once the last profile lands, rather than a live skip-list
-// that could rot into a false green.
+// registered profile. It fails today (codex/pi ship SDK dirs but no Go profile
+// yet); wire it once the last profile lands, rather than a live skip-list that
+// could rot into a false green.
 func TestRegistry_EveryAgentHasMatchingSDK(t *testing.T) {
 	for _, name := range AgentNames() {
 		t.Run(name, func(t *testing.T) {

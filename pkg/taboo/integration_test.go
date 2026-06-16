@@ -5,7 +5,11 @@
 //
 //	go test -tags integration ./pkg/taboo/ -run Integration -v
 //
-// The live-agent test additionally requires OPENROUTER_API_KEY in the env.
+// Each live-agent test additionally requires its agent's credential in the env:
+// OpenCode needs OPENROUTER_API_KEY; Claude Code needs CLAUDE_CODE_OAUTH_TOKEN
+// (with ANTHROPIC_API_KEY unset, ADR 0004); Copilot needs a GitHub token
+// (COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN). Each test skips when its own
+// credential is absent.
 package taboo
 
 import (
@@ -159,20 +163,32 @@ git commit -qm "agent: add TABOO.md"`
 	t.Logf("workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.WorktreePath)
 }
 
-// TestIntegration_OpenCodeAgent runs the real OpenCode agent (qwen via
-// OpenRouter). Skipped unless OPENROUTER_API_KEY is set.
-func TestIntegration_OpenCodeAgent(t *testing.T) {
-	if os.Getenv("OPENROUTER_API_KEY") == "" {
-		t.Skip("OPENROUTER_API_KEY not set; skipping live-agent integration test")
-	}
+// runLiveAgentCommitTest is the shared body of the three live-agent integration
+// tests (OpenCode, Claude Code, Copilot). Those tests differ only in their
+// credential skip guard, their profile, and their branch name; the orchestration
+// they assert is identical:
+//
+//   - run the agent on a one-commit task (write HELLO.md and commit it),
+//   - confirm the runner captured the agent's stdout on RunResult.Output,
+//   - confirm the agent produced a commit beyond the seed,
+//   - confirm the agent's session files land on the host sessions mount and
+//     survive a second stop/remount/start swap — the rootfs-wipe acceptance
+//     criterion a single run cannot prove.
+//
+// The run-1 branch is branch; the swap uses branch+"-2". It returns the Config so
+// a caller can make agent-specific follow-up assertions against the captured
+// sessions mount (cfg.ProjectDir/sessions) — the Claude Code test uses this for
+// its credential-on-disk check.
+func runLiveAgentCommitTest(t *testing.T, agent AgentProfile, branch string) Config {
+	t.Helper()
 	repo := initSeedRepo(t)
-	r, cfg := newIntegrationRunner(t, repo, OpenCode("openrouter/qwen/qwen3-coder-plus"))
+	r, cfg := newIntegrationRunner(t, repo, agent)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
 	res, err := r.Run(ctx, RunRequest{
-		Branch:  "agent/opencode",
+		Branch:  branch,
 		Prompt:  "Create a file named HELLO.md containing the single line 'hello from taboo', then commit it with the message 'add HELLO.md'.",
 		Timeout: 10 * time.Minute,
 	})
@@ -180,8 +196,8 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// The runner captures the agent's exec stdout on RunResult.Output even when
-	// the caller supplies no Stdout writer of its own (the slice-2 feature).
+	// The runner captures the agent's exec stdout on RunResult.Output even when the
+	// caller supplies no Stdout writer of its own.
 	if res.Output == "" {
 		t.Error("RunResult.Output is empty; agent stdout was not captured")
 	}
@@ -197,10 +213,10 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 	}
 	t.Logf("agent commit=%s\nlog:\n%s", res.Commit, out)
 
-	// Session capture: OpenCode's session storage was redirected (XDG_DATA_HOME)
-	// to the mounted host sessions dir, so its session files must be present on
-	// the host after the run (write-through over the bind-mount).
-	spec, _ := OpenCode("").Sessions()
+	// Session capture: the agent's session store was redirected onto the mounted
+	// host sessions dir (see the profile's Sessions()), so its files must be on the
+	// host after the run (write-through over the bind-mount).
+	spec, _ := agent.Sessions()
 	sessDir := filepath.Join(cfg.ProjectDir, "sessions", spec.Subdir)
 	before := dirEntryNames(t, sessDir)
 	if len(before) == 0 {
@@ -208,12 +224,12 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 	}
 	t.Logf("host session files under %s after run 1: %d entries", sessDir, len(before))
 
-	// Survival across the swap: the session files written above were produced
-	// after run 1's final `start`, so run 1 never actually swapped them. Drive a
-	// second Setup against the reused workshop — another stop/remount/start, which
-	// wipes the rootfs — and assert every run-1 file is still on the host. This is
-	// the acceptance criterion the single-run write-through check cannot prove.
-	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/opencode-2"}); err != nil {
+	// Survival across the swap: the session files written above were produced after
+	// run 1's final `start`, so run 1 never actually swapped them. Drive a second
+	// Setup against the reused workshop — another stop/remount/start, which wipes
+	// the rootfs — and assert every run-1 file is still on the host. This is the
+	// acceptance criterion the single-run write-through check cannot prove.
+	if _, err := r.Setup(ctx, RunRequest{Branch: branch + "-2"}); err != nil {
 		t.Fatalf("second Setup (stop/remount/start swap): %v", err)
 	}
 	after := dirEntryNames(t, sessDir)
@@ -223,6 +239,17 @@ func TestIntegration_OpenCodeAgent(t *testing.T) {
 		}
 	}
 	t.Logf("session files survived a second swap: %d before, %d after", len(before), len(after))
+
+	return cfg
+}
+
+// TestIntegration_OpenCodeAgent runs the real OpenCode agent (qwen via
+// OpenRouter). Skipped unless OPENROUTER_API_KEY is set.
+func TestIntegration_OpenCodeAgent(t *testing.T) {
+	if os.Getenv("OPENROUTER_API_KEY") == "" {
+		t.Skip("OPENROUTER_API_KEY not set; skipping live-agent integration test")
+	}
+	runLiveAgentCommitTest(t, OpenCode("openrouter/qwen/qwen3-coder-plus"), "agent/opencode")
 }
 
 // TestIntegration_ClaudeCodeAgent runs the real Claude Code agent
@@ -241,55 +268,14 @@ func TestIntegration_ClaudeCodeAgent(t *testing.T) {
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
 		t.Skip("ANTHROPIC_API_KEY is set; unset it so the OAuth token is the credential under test (ADR 0004)")
 	}
-	repo := initSeedRepo(t)
-	r, cfg := newIntegrationRunner(t, repo, ClaudeCode("claude-sonnet-4-6"))
+	cfg := runLiveAgentCommitTest(t, ClaudeCode("claude-sonnet-4-6"), "agent/claudecode")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-
-	res, err := r.Run(ctx, RunRequest{
-		Branch:  "agent/claudecode",
-		Prompt:  "Create a file named HELLO.md containing the single line 'hello from taboo', then commit it with the message 'add HELLO.md'.",
-		Timeout: 10 * time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	// The runner captures the agent's exec stdout on RunResult.Output even when
-	// the caller supplies no Stdout writer of its own. A non-empty Output also
-	// confirms the prompt reached `claude -p` on stdin: an empty stdin would
-	// yield no agent work and no output.
-	if res.Output == "" {
-		t.Error("RunResult.Output is empty; agent stdout was not captured (prompt may not have reached stdin)")
-	}
-	t.Logf("captured agent output (%d bytes):\n%s", len(res.Output), res.Output)
-
-	// The agent should have produced at least one commit beyond the seed.
-	out, err := exec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git log: %v\n%s", err, out)
-	}
-	if strings.Count(string(out), "\n") < 2 {
-		t.Errorf("expected an agent commit beyond seed; log:\n%s", out)
-	}
-	t.Logf("agent commit=%s\nlog:\n%s", res.Commit, out)
-
-	// Session capture: Claude Code's config dir was redirected (CLAUDE_CONFIG_DIR)
-	// onto the mounted host sessions dir, so transcripts must be present on the
-	// host after the run (write-through over the bind-mount).
-	spec, _ := ClaudeCode("").Sessions()
-	sessDir := filepath.Join(cfg.ProjectDir, "sessions", spec.Subdir)
-	before := dirEntryNames(t, sessDir)
-	if len(before) == 0 {
-		t.Fatalf("host sessions dir %q is empty after the run; no transcript captured", sessDir)
-	}
-	t.Logf("host session files under %s after run 1: %d entries", sessDir, len(before))
-
-	// Credential-on-disk safety (ADR 0004): because CLAUDE_CONFIG_DIR points at
-	// the host mount, a credentials file would leak onto the host. The OAuth token
-	// is supplied via --env, so Claude must write no .credentials.json. Walk the
-	// whole captured config dir (its root, not just projects/) and assert none.
+	// Credential-on-disk safety (ADR 0004): because CLAUDE_CONFIG_DIR points at the
+	// host sessions mount, a credentials file would leak onto the host. The OAuth
+	// token is supplied via --env, so Claude must write no .credentials.json. Walk
+	// the whole captured config dir (its root, not just the Subdir) and assert none.
+	// Run after the swap rather than before — the swap writes no credentials and the
+	// host files persist, so a leak would still be on disk here.
 	configRoot := filepath.Join(cfg.ProjectDir, "sessions")
 	if err := filepath.WalkDir(configRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -302,21 +288,34 @@ func TestIntegration_ClaudeCodeAgent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("walk %q: %v", configRoot, err)
 	}
+}
 
-	// Survival across the swap: the transcript files were produced after run 1's
-	// final `start`, so run 1 never swapped them. Drive a second Setup against the
-	// reused workshop — another stop/remount/start, which wipes the rootfs — and
-	// assert every run-1 file is still on the host.
-	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/claudecode-2"}); err != nil {
-		t.Fatalf("second Setup (stop/remount/start swap): %v", err)
+// TestIntegration_CopilotAgent runs the real GitHub Copilot CLI
+// (claude-sonnet-4.6) against the GitHub-token auth path. Skipped unless a Copilot
+// GitHub token is present in the env (COPILOT_GITHUB_TOKEN, GH_TOKEN, or
+// GITHUB_TOKEN — the keys the profile forwards via --env, ADR 0004).
+//
+// Copilot delivers the prompt in argv (the -p value, ADR 0001), like OpenCode and
+// unlike Claude Code's stdin path. -p also selects non-interactive mode;
+// --allow-all lets the headless agent edit and commit without an approver, while
+// --deny-tool=shell(git push) keeps it off the worktree's shared host refs.
+//
+// Unlike the Claude Code test's ANTHROPIC_API_KEY guard, no BYOK skip guard is
+// needed here: the profile forwards only the three GitHub-token keys via --env, so
+// COPILOT_PROVIDER_* vars on the host never reach the workshop and cannot switch
+// the credential under test to a custom model endpoint.
+func TestIntegration_CopilotAgent(t *testing.T) {
+	if os.Getenv("COPILOT_GITHUB_TOKEN") == "" &&
+		os.Getenv("GH_TOKEN") == "" &&
+		os.Getenv("GITHUB_TOKEN") == "" {
+		t.Skip("no Copilot GitHub token (COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN) set; skipping live Copilot integration test")
 	}
-	after := dirEntryNames(t, sessDir)
-	for _, name := range before {
-		if !slices.Contains(after, name) {
-			t.Errorf("session file %q did not survive a second stop/remount/start swap; after=%v", name, after)
-		}
-	}
-	t.Logf("session files survived a second swap: %d before, %d after", len(before), len(after))
+	// Copilot writes each run's transcript under session-state/<uuid>/ (workspace.yaml,
+	// checkpoints/, and an events.jsonl once a turn runs); non-interactive -p runs
+	// persist here, same as interactive ones. No credential-on-disk walk (cf. the
+	// Claude Code test): copilot's token comes in via --env, so no `copilot login`
+	// file is written onto the host mount.
+	runLiveAgentCommitTest(t, Copilot("claude-sonnet-4.6"), "agent/copilot")
 }
 
 // dirEntryNames returns the names of dir's entries, failing the test if it
