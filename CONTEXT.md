@@ -232,10 +232,14 @@ any feature work.
    concurrency. **Sessions constraint:** the host sessions dir is
    `<ProjectDir>/sessions`, shared by every run in a ProjectDir, so concurrent
    runs must not share one — give each its own ProjectDir (or a per-slot
-   sessions subdir), else they share OpenCode's single SQLite store and can
-   corrupt it.
-5. **Session capture** (✅ done) **+ resume/fork** (deferred) via the mounted
-   sessions dir.
+   sessions subdir), else they share OpenCode's single SQLite session DB and can
+   corrupt it with interleaved WAL writes.
+5. **Session capture** (✅ done) **+ resume/fork** (✅ test-covered for OpenCode)
+   via the mounted sessions dir. Resume-by-id and fork are exercised end-to-end
+   by `TestIntegration_OpenCodeResumeFork` (gated on `OPENROUTER_API_KEY`): it
+   captures a run's session id from the host store, resumes it on a fresh
+   worktree and asserts the conversation continued, then forks it and asserts the
+   source session is untouched and the fork lands on its own branch.
 6. **Hooks + prompt templating** ergonomics.
 
 ## Open questions & risks (to verify)
@@ -268,23 +272,33 @@ the walking skeleton (build step 1) exists to prove.
 3. **Configurable session/home path.** Session redirect depends on each agent
    honoring a configurable session/home location (e.g. `CLAUDE_CONFIG_DIR`).
    Verify per agent.
-   - ✅ **OpenCode — VERIFIED (docs).** OpenCode resolves its data dir from
-     `XDG_DATA_HOME` (via `xdg-basedir`); sessions live under
-     `$XDG_DATA_HOME/opencode/project/<project-slug>/storage/` (default
-     `~/.local/share/opencode/`). Setting `XDG_DATA_HOME` to the mounted host
-     dir redirects session storage through the bind-mount. **Caveat for the
-     sessions slice:** OpenCode stores sessions in a **SQLite DB** (`OPENCODE_DB`,
-     the "channel db"), not loose JSONL like Claude/Codex. Write-through over a
-     bind-mount is fine, but resume/fork semantics over a DB are harder than
-     file-copy — almost certainly why sandcastle leaves OpenCode non-resumable.
-     The `AgentProfile.Sessions()` accessor returns `({XDG_DATA_HOME, "opencode"},
-     true)` for OpenCode. **Capture is now built (risk #3 closed for OpenCode):**
-     `renderDefinition` adds a `sessions` mount plug, `Runner.Setup` binds a host
-     sessions dir into the swap, and `Runner.Exec` sets `XDG_DATA_HOME` to the
-     mount target so session files write through to the host and survive the
-     stop/remount/start swap — verified end-to-end by the OpenCode integration
-     test. Resume/fork over the SQLite DB (the DB-vs-JSONL question) remains
-     deferred to a later slice.
+   - ✅ **OpenCode — VERIFIED (live).** OpenCode resolves its data dir from
+     `XDG_DATA_HOME` (via `xdg-basedir`); the store lives under
+     `$XDG_DATA_HOME/opencode/` (default `~/.local/share/opencode/`). Setting
+     `XDG_DATA_HOME` to the mounted host dir redirects it through the bind-mount.
+     **Storage shape (confirmed by inspecting the captured mount):** the installed
+     binary keeps sessions in a single **SQLite DB** — `opencode/opencode.db`
+     plus its WAL sidecars `opencode.db-wal` / `opencode.db-shm` — *not* loose
+     per-session JSON like Claude/Codex. (The context7 docs for some OpenCode
+     forks show a `storage/session/<id>.json` tree; that does **not** match the
+     `opencode.ai/install` binary, which is SQLite. The original "channel db" note
+     was right.) This made resume/fork the open risk #28 was filed to close:
+     resume/fork semantics over an opaque WAL-mode DB written through a bind-mount,
+     then read back from a *second* per-run worktree after the rootfs-wiping swap,
+     were unproven. **Now proven to work** end-to-end by
+     `TestIntegration_OpenCodeResumeFork` (gated on `OPENROUTER_API_KEY`): a
+     session written in run 1 resumes across the swap in run 2 (the agent recalled
+     a codeword a fresh session could not know, on the same session id), a fork
+     mints a new session id isolated onto its own branch, and resuming the source
+     *after* the fork shows it untouched. Session ids are captured from
+     `opencode run --format json` stdout (`sessionID`), since the SQLite store is
+     opaque from the host. The `AgentProfile.Sessions()` accessor returns
+     `({XDG_DATA_HOME, "opencode"}, true)` for OpenCode. **Capture + resume/fork
+     are done (risk #3 closed for OpenCode):** `renderDefinition` adds a `sessions`
+     mount plug, `Runner.Setup` binds a host sessions dir into the swap, and
+     `Runner.Exec` sets `XDG_DATA_HOME` to the mount target so the DB writes
+     through and survives the swap — covered by `TestIntegration_OpenCodeAgent`
+     (capture/survival) and `TestIntegration_OpenCodeResumeFork` (resume + fork).
 4. **Table-parsing fragility.** `list` / `changes` / `tasks` emit human tables
    (no JSON). Prefer `info` / `actions` (real YAML) and minimize reliance on
    table output; watch for breakage across workshop versions.

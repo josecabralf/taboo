@@ -14,10 +14,12 @@ package taboo
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -316,6 +318,215 @@ func TestIntegration_CopilotAgent(t *testing.T) {
 	// Claude Code test): copilot's token comes in via --env, so no `copilot login`
 	// file is written onto the host mount.
 	runLiveAgentCommitTest(t, Copilot("claude-sonnet-4.6"), "agent/copilot")
+}
+
+// openCodeJSONFormat wraps the real OpenCode profile to add `--format json`,
+// which makes `opencode run` emit newline-delimited JSON events carrying the
+// sessionID — the only way to capture a run's session id, since OpenCode keeps
+// sessions in an opaque SQLite store (opencode.db, WAL mode), not per-session
+// JSON files. It embeds the real profile so Name/CredentialEnvKeys/Sessions —
+// and crucially the resume/fork argv mapping under test — are unchanged; only
+// the output format differs.
+type openCodeJSONFormat struct{ AgentProfile }
+
+func (p openCodeJSONFormat) BuildCommand(o CommandOptions) AgentCommand {
+	ac := p.AgentProfile.BuildCommand(o)
+	// Splice "--format json" right after the "run" subcommand (argv[0]="opencode",
+	// argv[1]="run"), ahead of every other flag and the positional prompt.
+	spliced := make([]string, 0, len(ac.Argv)+2)
+	spliced = append(spliced, ac.Argv[:2]...)
+	spliced = append(spliced, "--format", "json")
+	spliced = append(spliced, ac.Argv[2:]...)
+	ac.Argv = spliced
+	return ac
+}
+
+// TestIntegration_OpenCodeResumeFork proves OpenCode's resume + fork end-to-end
+// over the bind-mounted session store — the risk #28 was opened to close.
+//
+// The store is SQLite (opencode.db + -wal + -shm, WAL mode), not the loose
+// per-session JSON files some OpenCode forks use — confirmed by inspecting the
+// captured store. So the open question is real: does a session written to a
+// SQLite db through the bind-mount in one workshop instance resume correctly
+// from a *second* per-run worktree after the rootfs-wiping stop/remount/start
+// swap? Session ids are captured from `opencode run --format json` stdout
+// (sessionID) rather than from disk, since the db is opaque.
+//
+// Four sequential runs against one reused workshop (shared host sessions dir):
+//
+//  1. Run 1 seeds a secret codeword and commits ONE.md; capture its session id.
+//  2. Run 2 *resumes* that id on a fresh worktree and recalls the codeword into
+//     RESUME.md. A fresh session could not know it (continuity), and run 2 emits
+//     the *same* session id (resume targeted the source, did not fork).
+//  3. Run 3 *forks* that id onto another fresh branch. It emits a *new* session
+//     id (the fork is a separate session, so the source was not appended to), and
+//     FORK.md lands only on the fork's worktree/branch.
+//  4. Run 4 *resumes the source again* after the fork: it still emits the source
+//     id and still recalls the codeword, and is unaware of FORK.md — proving the
+//     fork left the source session untouched.
+//
+// Skipped unless OPENROUTER_API_KEY is set, like the other live OpenCode test.
+func TestIntegration_OpenCodeResumeFork(t *testing.T) {
+	if os.Getenv("OPENROUTER_API_KEY") == "" {
+		t.Skip("OPENROUTER_API_KEY not set; skipping live OpenCode resume/fork integration test")
+	}
+
+	const codeword = "XYZZY-4242" // distinctive token the model cannot guess from a fresh session
+	repo := initSeedRepo(t)
+	agent := openCodeJSONFormat{OpenCode("openrouter/qwen/qwen3-coder-plus")}
+	r, _ := newIntegrationRunner(t, repo, agent)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	defer cancel()
+
+	// Run 1: establish the codeword in the conversation and commit a file.
+	res1, err := r.Run(ctx, RunRequest{
+		Branch: "agent/opencode-resume-1",
+		Prompt: "Remember this secret codeword for later: " + codeword + ". " +
+			"Now create a file named ONE.md containing the single line 'one', then commit it with the message 'add ONE.md'.",
+		Timeout: 10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	sourceID := parseSessionID(t, res1.Output)
+	t.Logf("captured source session id: %s", sourceID)
+
+	// Run 2: resume the captured session on a fresh branch and ask the agent to
+	// recall the codeword. This Setup performs the stop/remount/start swap before
+	// the exec, so continuity here also proves the SQLite store resumed across it.
+	res2, err := r.Run(ctx, RunRequest{
+		Branch:        "agent/opencode-resume-2",
+		ResumeSession: sourceID,
+		Prompt: "Earlier in this same conversation I gave you a secret codeword. " +
+			"Create a file named RESUME.md whose only contents is that exact codeword, then commit it with the message 'add RESUME.md'.",
+		Timeout: 10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("run 2 (resume): %v", err)
+	}
+
+	// Continuity: the resumed agent recalled the codeword a fresh session could not
+	// have known.
+	if got := readWorktreeFile(t, res2.WorktreePath, "RESUME.md"); !strings.Contains(strings.ToUpper(got), codeword) {
+		t.Errorf("resumed session did not continue the prior conversation: RESUME.md = %q, want it to contain the codeword %q", got, codeword)
+	}
+	// Resume targeted the source session in place — it reused the same id, not a fork.
+	if id2 := parseSessionID(t, res2.Output); id2 != sourceID {
+		t.Errorf("resume did not continue the source session: run 2 session id = %q, want %q", id2, sourceID)
+	}
+
+	// Run 3: fork the source session onto a new branch.
+	res3, err := r.Run(ctx, RunRequest{
+		Branch:        "agent/opencode-fork",
+		ResumeSession: sourceID,
+		Fork:          true,
+		Prompt:        "Create a file named FORK.md containing the single line 'fork', then commit it with the message 'add FORK.md'.",
+		Timeout:       10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("run 3 (fork): %v", err)
+	}
+
+	// Fork is a brand-new session, distinct from the source: OpenCode's --fork
+	// branched the conversation rather than appending to the source.
+	forkID := parseSessionID(t, res3.Output)
+	if forkID == "" || forkID == sourceID {
+		t.Fatalf("fork did not create a new session: fork id = %q, source id = %q", forkID, sourceID)
+	}
+	t.Logf("fork session id: %s (source: %s)", forkID, sourceID)
+
+	// Branch isolation: the fork's commit landed on its own branch/worktree, not
+	// the source's. (Filesystem isolation is taboo's unconditional half of fork —
+	// a fresh branch is always a fresh worktree; see ADR 0003.)
+	if _, err := os.Stat(filepath.Join(res3.WorktreePath, "FORK.md")); err != nil {
+		t.Errorf("FORK.md not on the fork worktree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(res2.WorktreePath, "FORK.md")); !os.IsNotExist(err) {
+		t.Errorf("FORK.md leaked onto the source worktree %s (err=%v); fork is not isolated", res2.WorktreePath, err)
+	}
+
+	// Run 4: resume the *source* session again, after the fork. It must still
+	// resolve to the source id and still recall the codeword (source history
+	// intact), and must not know about FORK.md (the fork did not bleed back into
+	// the source) — the "source untouched" acceptance criterion.
+	res4, err := r.Run(ctx, RunRequest{
+		Branch:        "agent/opencode-resume-3",
+		ResumeSession: sourceID,
+		Prompt: "Earlier in this same conversation I gave you a secret codeword. " +
+			"Create a file named SRCCHECK.md with the codeword on the first line and, on the second line, " +
+			"a comma-separated list of the exact filenames I have asked you to create in this conversation. " +
+			"Then commit it with the message 'add SRCCHECK.md'.",
+		Timeout: 10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("run 4 (resume source after fork): %v", err)
+	}
+	if id4 := parseSessionID(t, res4.Output); id4 != sourceID {
+		t.Errorf("source session not resumable after fork: run 4 session id = %q, want %q", id4, sourceID)
+	}
+	srcCheck := strings.ToUpper(readWorktreeFile(t, res4.WorktreePath, "SRCCHECK.md"))
+	if !strings.Contains(srcCheck, codeword) {
+		t.Errorf("source session lost its history after the fork: SRCCHECK.md = %q, want the codeword %q", srcCheck, codeword)
+	}
+	if strings.Contains(srcCheck, "FORK.MD") {
+		t.Errorf("fork bled into the source session: SRCCHECK.md lists FORK.md, but the source never created it: %q", srcCheck)
+	}
+
+	t.Logf("resume/fork verified over SQLite mount: source=%s fork=%s; source resumable+intact after fork; fork on branch %s commit %s",
+		sourceID, forkID, res3.Branch, res3.Commit)
+}
+
+// sessionIDPattern matches an OpenCode session id token (e.g. ses_4f3a...) as a
+// last-resort fallback when the JSON event shape is not the one we expect.
+var sessionIDPattern = regexp.MustCompile(`ses_[A-Za-z0-9]+`)
+
+// parseSessionID extracts the OpenCode session id from `opencode run --format
+// json` output: newline-delimited JSON events that each carry a "sessionID"
+// field (all events in one run share it). It tries, in order, a top-level
+// sessionID, a nested payload.sessionID (the API-envelope shape), and finally a
+// raw ses_* token anywhere in the output — so a schema tweak in the installed
+// binary does not silently break capture. It returns the first id found,
+// failing the test if none is (which means the run emitted no events).
+func parseSessionID(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var ev struct {
+			SessionID string `json:"sessionID"`
+			Payload   struct {
+				SessionID string `json:"sessionID"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev.SessionID != "" {
+			return ev.SessionID
+		}
+		if ev.Payload.SessionID != "" {
+			return ev.Payload.SessionID
+		}
+	}
+	if id := sessionIDPattern.FindString(output); id != "" {
+		return id
+	}
+	t.Fatalf("no sessionID found in --format json output:\n%s", output)
+	return ""
+}
+
+// readWorktreeFile reads a file the agent committed into a run's worktree,
+// failing the test if it is absent.
+func readWorktreeFile(t *testing.T, worktree, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(worktree, name))
+	if err != nil {
+		t.Fatalf("read %s from worktree %s: %v", name, worktree, err)
+	}
+	return string(b)
 }
 
 // dirEntryNames returns the names of dir's entries, failing the test if it

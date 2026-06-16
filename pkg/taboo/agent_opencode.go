@@ -39,11 +39,15 @@ func (a openCode) BuildCommand(opts CommandOptions) AgentCommand {
 func (openCode) CredentialEnvKeys() []string { return []string{"OPENROUTER_API_KEY"} }
 
 // Sessions redirects OpenCode's data store by pointing XDG_DATA_HOME at the
-// mount. This captures OpenCode's whole data dir (sessions plus its SQLite
-// "channel db" and anything else it keeps under XDG_DATA_HOME), not sessions
-// alone. Safe here because OpenCode authenticates from OPENROUTER_API_KEY in the
-// env, so no credential file lands on the host mount; weigh this before adding
-// an agent that keeps file-based secrets under its session-dir env var.
+// mount. This captures OpenCode's whole data dir, not sessions alone: the
+// installed binary keeps its session transcript in a single SQLite DB
+// (opencode.db + WAL sidecars under XDG_DATA_HOME/opencode), plus snapshots,
+// logs, and a per-run git "repos" tree. Resume/fork read that DB; it
+// write-throughs the bind-mount and survives the per-run swap cleanly — proven
+// end-to-end by TestIntegration_OpenCodeResumeFork. Safe here because OpenCode
+// authenticates from OPENROUTER_API_KEY in the env, so no credential file lands
+// on the host mount; weigh this before adding an agent that keeps file-based
+// secrets under its session-dir env var.
 func (openCode) Sessions() (SessionSpec, bool) {
 	return SessionSpec{DirEnv: "XDG_DATA_HOME", Subdir: "opencode"}, true
 }
