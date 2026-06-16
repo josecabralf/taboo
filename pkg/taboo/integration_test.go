@@ -319,6 +319,91 @@ func TestIntegration_ClaudeCodeAgent(t *testing.T) {
 	t.Logf("session files survived a second swap: %d before, %d after", len(before), len(after))
 }
 
+// TestIntegration_CopilotAgent runs the real GitHub Copilot CLI
+// (claude-sonnet-4.6) against the GitHub-token auth path. Skipped unless a Copilot
+// GitHub token is present in the env (COPILOT_GITHUB_TOKEN, GH_TOKEN, or
+// GITHUB_TOKEN — the keys the profile forwards via --env, ADR 0004).
+//
+// Copilot delivers the prompt in argv (the -p value, ADR 0001), like OpenCode and
+// unlike Claude Code's stdin path. -p also selects non-interactive mode;
+// --allow-all lets the headless agent edit and commit without an approver, while
+// --deny-tool=shell(git push) keeps it off the worktree's shared host refs.
+//
+// Unlike the Claude Code test's ANTHROPIC_API_KEY guard, no BYOK skip guard is
+// needed here: the profile forwards only the three GitHub-token keys via --env, so
+// COPILOT_PROVIDER_* vars on the host never reach the workshop and cannot switch
+// the credential under test to a custom model endpoint.
+func TestIntegration_CopilotAgent(t *testing.T) {
+	if os.Getenv("COPILOT_GITHUB_TOKEN") == "" &&
+		os.Getenv("GH_TOKEN") == "" &&
+		os.Getenv("GITHUB_TOKEN") == "" {
+		t.Skip("no Copilot GitHub token (COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN) set; skipping live Copilot integration test")
+	}
+	repo := initSeedRepo(t)
+	r, cfg := newIntegrationRunner(t, repo, Copilot("claude-sonnet-4.6"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	res, err := r.Run(ctx, RunRequest{
+		Branch:  "agent/copilot",
+		Prompt:  "Create a file named HELLO.md containing the single line 'hello from taboo', then commit it with the message 'add HELLO.md'.",
+		Timeout: 10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The runner captures the agent's exec stdout on RunResult.Output even when the
+	// caller supplies no Stdout writer of its own.
+	if res.Output == "" {
+		t.Error("RunResult.Output is empty; agent stdout was not captured")
+	}
+	t.Logf("captured agent output (%d bytes):\n%s", len(res.Output), res.Output)
+
+	// The agent should have produced at least one commit beyond the seed.
+	out, err := exec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	if strings.Count(string(out), "\n") < 2 {
+		t.Errorf("expected an agent commit beyond seed; log:\n%s", out)
+	}
+	t.Logf("agent commit=%s\nlog:\n%s", res.Commit, out)
+
+	// Session capture: Copilot's home was redirected (COPILOT_HOME) onto the
+	// mounted host sessions dir, so its session-state must be present on the host
+	// after the run (write-through over the bind-mount). Each run writes a
+	// session-state/<uuid>/ dir (workspace.yaml, checkpoints/, and an events.jsonl
+	// once a turn runs); non-interactive -p runs persist here, same as interactive
+	// ones.
+	//
+	// No credential-on-disk walk (cf. the Claude Code test): copilot's token comes
+	// in via --env, so no `copilot login` credential file is written onto the host
+	// mount, and copilot's stored-credential filename is not pinned by this slice.
+	spec, _ := Copilot("").Sessions()
+	sessDir := filepath.Join(cfg.ProjectDir, "sessions", spec.Subdir)
+	before := dirEntryNames(t, sessDir)
+	if len(before) == 0 {
+		t.Fatalf("host sessions dir %q is empty after the run; nothing was captured", sessDir)
+	}
+	t.Logf("host session files under %s after run 1: %d entries", sessDir, len(before))
+
+	// Survival across the swap: drive a second Setup against the reused workshop —
+	// another stop/remount/start, which wipes the rootfs — and assert every run-1
+	// session dir is still on the host.
+	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/copilot-2"}); err != nil {
+		t.Fatalf("second Setup (stop/remount/start swap): %v", err)
+	}
+	after := dirEntryNames(t, sessDir)
+	for _, name := range before {
+		if !slices.Contains(after, name) {
+			t.Errorf("session dir %q did not survive a second stop/remount/start swap; after=%v", name, after)
+		}
+	}
+	t.Logf("session files survived a second swap: %d before, %d after", len(before), len(after))
+}
+
 // dirEntryNames returns the names of dir's entries, failing the test if it
 // cannot be read.
 func dirEntryNames(t *testing.T, dir string) []string {

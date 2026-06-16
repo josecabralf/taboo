@@ -45,6 +45,7 @@ func (r registration) name() string { return r.New("").Name() }
 var agents = []registration{
 	{New: OpenCode, Hint: openCodeHint},
 	{New: ClaudeCode, Hint: claudeCodeHint},
+	{New: Copilot, Hint: copilotHint},
 }
 
 // NewProfile resolves a canonical agent name to its AgentProfile, constructed
