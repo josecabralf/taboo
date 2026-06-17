@@ -265,10 +265,7 @@ func promptFileChecks(cfg taboo.ProjectConfig, configPath string, statFile func(
 	base := filepath.Dir(configPath)
 	var checks []check
 	for _, p := range promptFiles(cfg) {
-		resolved := p
-		if !filepath.IsAbs(resolved) {
-			resolved = filepath.Join(base, p)
-		}
+		resolved := resolvePromptFilePath(p, base)
 		if statFile(resolved) {
 			checks = append(checks, ok("prompt-file/"+p, "prompt file "+p+" found"))
 		} else {
