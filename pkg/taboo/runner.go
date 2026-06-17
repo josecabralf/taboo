@@ -191,7 +191,7 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	wt := r.worktreePath(req.Branch)
 	res.WorktreePath = wt
-	// git -C <repo> worktree add -b <branch> <path>: a fresh linked worktree on req.Branch.
+	// A fresh linked worktree on req.Branch.
 	if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt}); err != nil {
 		return res, fmt.Errorf("add worktree: %w", err)
 	}

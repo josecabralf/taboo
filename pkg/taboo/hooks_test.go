@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// indexOfVerb returns the index of the first recorded call whose verb matches,
-// or -1.
 func indexOfVerb(fc *fakeCommander, verb string) int {
 	for i, c := range fc.calls {
 		if verbOf(c) == verb {
@@ -20,9 +18,9 @@ func indexOfVerb(fc *fakeCommander, verb string) int {
 	return -1
 }
 
-// indexOfExecContaining returns the index of the first `workshop exec` call
-// whose argv contains token, or -1. Used to tell the agent exec apart from an
-// in-workshop hook exec (both have verb "exec").
+// indexOfExecContaining finds the first `workshop exec` call whose argv contains
+// token, used to tell the agent exec apart from an in-workshop hook exec (both
+// have verb "exec").
 func indexOfExecContaining(fc *fakeCommander, token string) int {
 	for i, c := range fc.calls {
 		if verbOf(c) == "exec" && slices.Contains(c.Args, token) {
@@ -32,8 +30,6 @@ func indexOfExecContaining(fc *fakeCommander, token string) int {
 	return -1
 }
 
-// indexOfName returns the index of the first recorded call whose executable
-// name matches, or -1.
 func indexOfName(fc *fakeCommander, name string) int {
 	for i, c := range fc.calls {
 		if c.Name == name {
@@ -94,9 +90,9 @@ func TestRun_OnWorkshopReadyEmptyHookSkipped(t *testing.T) {
 	}
 }
 
+// Hook stdout/stderr are wired to the run's Stderr so setup output and failures
+// are diagnosable rather than discarded.
 func TestRun_OnWorkshopReadyHookOutputWiredToRunStderr(t *testing.T) {
-	// Hook stdout/stderr are wired to the run's Stderr so setup output and
-	// failures are diagnosable rather than discarded.
 	var errBuf strings.Builder
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
@@ -123,9 +119,9 @@ func TestRun_OnWorkshopReadyHookOutputWiredToRunStderr(t *testing.T) {
 	}
 }
 
+// When the run is time-bounded, an in-workshop hook carries --timeout so it
+// cannot hang the run before the agent execs.
 func TestRun_OnWorkshopReadyInWorkshopHookHonorsTimeout(t *testing.T) {
-	// When the run is time-bounded, an in-workshop hook carries --timeout so it
-	// cannot hang the run before the agent execs.
 	fc := &fakeCommander{}
 	cfg := testConfig(t)
 	r := New(cfg, fc)
@@ -281,7 +277,6 @@ func TestRun_OnWorkshopReadyInWorkshopHook_SessionlessAgentNoRedirect(t *testing
 }
 
 func TestRun_OnWorkshopReadyHookFailureAbortsBeforeAgent(t *testing.T) {
-	// A failing hook fails the run with context and the agent never execs.
 	fc := &fakeCommander{
 		errFn: func(c Cmd) error {
 			if c.Name == "false" {

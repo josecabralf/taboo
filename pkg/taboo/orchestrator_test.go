@@ -62,13 +62,12 @@ func TestOrchestrator_LoopsToMaxIterations(t *testing.T) {
 	if res.StopReason != StopMaxIterations {
 		t.Errorf("StopReason = %q, want %q", res.StopReason, StopMaxIterations)
 	}
-	// The agent re-execs once per iteration...
 	if got := fc.countVerb("exec"); got != 3 {
 		t.Errorf("exec count = %d, want 3 (one per iteration)", got)
 	}
-	// ...but the worktree is created ONCE and reused. A second `worktree add`
-	// would fail against real git (the fake now enforces this), so this guards
-	// against a loop that re-runs the full per-run setup every iteration.
+	// The worktree is created ONCE and reused. A second `worktree add` would fail
+	// against real git (the fake now enforces this), so this guards against a loop
+	// that re-runs the full per-run setup every iteration.
 	if got := fc.countVerb("worktree"); got != 1 {
 		t.Errorf("worktree add count = %d, want 1 (Setup runs once, then Exec loops)", got)
 	}

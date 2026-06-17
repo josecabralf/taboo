@@ -51,7 +51,6 @@ func TestJSONResult_NoBlockIsErrNoResult(t *testing.T) {
 }
 
 func TestJSONResult_UnclosedBlockIsErrNoResult(t *testing.T) {
-	// An opening tag with no closing tag is not a complete block.
 	_, err := JSONResult[review]().Extract("<result>{\"summary\":\"x\"}")
 	if !errors.Is(err, ErrNoResult) {
 		t.Errorf("Extract err = %v, want ErrNoResult for unclosed block", err)

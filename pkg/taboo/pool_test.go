@@ -118,7 +118,7 @@ func TestPool_FansOutDistinctWorkshopsAndWorktrees(t *testing.T) {
 		res, _ := p.Run(context.Background(), reqs)
 		done <- res
 	}()
-	for i := 0; i < n; i++ { // every run reaches exec, each in its own slot
+	for i := 0; i < n; i++ {
 		<-fc.entered
 	}
 	for i := 0; i < n; i++ {

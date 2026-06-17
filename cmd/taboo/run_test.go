@@ -178,7 +178,6 @@ func TestRun_MachineResultOnStdout(t *testing.T) {
 	fake := &fakeCommander{
 		errFn: runFakeErr,
 		stdoutFn: func(c taboo.Cmd) string {
-			// The agent exec writes chatter that must NOT reach the command's stdout.
 			if c.Name == "workshop" && elemsContain(c.Args, "exec") {
 				return "AGENT-NOISE: thinking...\n"
 			}
@@ -200,8 +199,6 @@ func TestRun_MachineResultOnStdout(t *testing.T) {
 	if strings.Contains(stdout, "AGENT-NOISE") {
 		t.Errorf("agent output leaked to stdout:\n%s", stdout)
 	}
-	// The other half of the split: the live agent stream and the start line both
-	// belong on stderr.
 	if !strings.Contains(stderr, "AGENT-NOISE") {
 		t.Errorf("agent output missing from stderr:\n%s", stderr)
 	}
@@ -229,7 +226,6 @@ func TestRun_UnknownWorkflow(t *testing.T) {
 	if !strings.Contains(msg, `unknown workflow "nope"`) {
 		t.Errorf("error = %q, want it to mention unknown workflow", msg)
 	}
-	// Available workflow names must be listed.
 	if !strings.Contains(msg, "fix") || !strings.Contains(msg, "refactor") {
 		t.Errorf("error = %q, want it to list available workflows (fix, refactor)", msg)
 	}

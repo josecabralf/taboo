@@ -52,7 +52,7 @@ model: `+claudeCodeModel+`
 func TestLoadConfig_Strategy(t *testing.T) {
 	tests := []struct {
 		name     string
-		strategy string // line to inject, empty => omit the key entirely
+		strategy string // line to inject; empty omits the key entirely
 		want     string
 	}{
 		{name: "omitted defaults to branch", strategy: "", want: "branch"},
