@@ -27,6 +27,10 @@ type Env struct {
 	LookupEnv func(string) (string, bool)
 	// Getwd reports the working directory; defaults to os.Getwd.
 	Getwd func() (string, error)
+	// Interactive reports whether the CLI is attached to a TTY. When nil it falls
+	// back to a real isatty probe of Stdin; tests inject it to drive the
+	// confirmation path without a PTY.
+	Interactive func() bool
 }
 
 // newRootCmd builds the taboo root command, wires the injected env into its

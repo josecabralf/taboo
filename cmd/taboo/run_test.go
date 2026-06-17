@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
+
 	taboo "github.com/josecabralf/taboo/pkg/taboo"
 )
 
@@ -677,6 +679,628 @@ func TestRun_JSONCarriesOutput(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "AGENT-RESULT: done") {
 		t.Errorf("res.Output = %q, want it to carry the captured agent output", res.Output)
+	}
+}
+
+// TestRun_ModelFlagOverridesConfig asserts --model is the highest-precedence
+// layer of the model chain (top-level -> workflow -> flag): the agent is exec'd
+// with the flag's model (-m <model>), and the configured top-level model never
+// reaches the exec.
+func TestRun_ModelFlagOverridesConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody) // top-level model anthropic/claude
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	const want = "openrouter/qwen/qwen3-coder"
+	if _, _, err := runCmd(t, env, "fix", "--model", want); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "-m", want) == nil {
+		t.Errorf("no exec carried the --model override %q; calls: %v", want, invocations(fake))
+	}
+	if findInvocation(fake, "exec", "anthropic/claude") != nil {
+		t.Errorf("exec used the configured model, not the --model override; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_PromptFlagOverridesConfig asserts --prompt is the highest-precedence
+// prompt source: its text becomes the agent's instruction even when the selected
+// workflow configures its own prompt.
+func TestRun_PromptFlagOverridesConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody) // fix workflow prompt: "please fix the failing tests"
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	const want = "FLAG-PROMPT: do the thing"
+	if _, _, err := runCmd(t, env, "fix", "--prompt", want); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", want) == nil {
+		t.Errorf("no exec carried the --prompt override; calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "exec", "please fix the failing tests") != nil {
+		t.Errorf("exec used the workflow prompt, not --prompt; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_PromptFileFlagOverridesConfig asserts --prompt-file is read (relative
+// to the .taboo dir) and overrides the workflow's own inline prompt; its contents
+// become the agent's instruction.
+func TestRun_PromptFileFlagOverridesConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody) // fix workflow inline prompt
+	const contents = "FILE-FLAG-PROMPT: refactor the parser"
+	writePromptFile(t, root, "adhoc.md", contents)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--prompt-file", "adhoc.md"); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", contents) == nil {
+		t.Errorf("no exec carried the --prompt-file contents; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_TimeoutFlagOverridesConfig asserts --timeout overrides the workflow
+// timeout: the agent exec is bounded by the flag's duration, visible as
+// `--timeout <dur>` at the workshop exec seam, and the configured value is unused.
+func TestRun_TimeoutFlagOverridesConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody+"    timeout: 30m\n") // fix workflow timeout 30m
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--timeout", "5m"); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "--timeout", "5m0s") == nil {
+		t.Errorf("no exec bounded by the --timeout override; calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "exec", "30m0s") != nil {
+		t.Errorf("exec used the configured timeout, not --timeout; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_IterationsFlagOverridesConfig asserts --iterations overrides the
+// configured iteration cap: with the workflow capped at 1 but --iterations 3 and
+// no completion signal, the agent is exec'd exactly three times.
+func TestRun_IterationsFlagOverridesConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody+"    max-iterations: 1\n") // fix capped at 1
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--iterations", "3"); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if got := countInvocations(fake, "exec"); got != 3 {
+		t.Errorf("exec calls = %d, want 3 (flag override); calls: %v", got, invocations(fake))
+	}
+}
+
+// TestRun_SignalFlagOverridesConfig asserts --signal sets the completion signal:
+// with --iterations 5 and --signal FLAG-DONE, an exec whose output contains
+// FLAG-DONE stops the loop after the first exec.
+func TestRun_SignalFlagOverridesConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := &fakeCommander{
+		errFn: runFakeErr,
+		stdoutFn: func(c taboo.Cmd) string {
+			if c.Name == "workshop" && elemsContain(c.Args, "exec") {
+				return "working... FLAG-DONE\n"
+			}
+			return runFakeStdout(c)
+		},
+	}
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--iterations", "5", "--signal", "FLAG-DONE"); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if got := countInvocations(fake, "exec"); got != 1 {
+		t.Errorf("exec calls = %d, want 1 (stopped on --signal); calls: %v", got, invocations(fake))
+	}
+}
+
+// TestRun_AgentFlagOverridesConfig asserts --agent overrides the resolved agent:
+// the dry-run plan shows the flag's agent, not the configured top-level one.
+func TestRun_AgentFlagOverridesConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody) // top-level agent opencode
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, _, err := runCmd(t, env, "fix", "--agent", "claude-code", "--dry-run")
+	if err != nil {
+		t.Fatalf("run --dry-run error = %v, want nil", err)
+	}
+	if !strings.Contains(stdout, "claude-code") {
+		t.Errorf("plan agent not overridden to claude-code:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "opencode") {
+		t.Errorf("plan still shows the configured agent opencode:\n%s", stdout)
+	}
+}
+
+// TestRun_UnknownAgentFlag asserts an unknown --agent is refused with a fuzzy
+// "did you mean" suggestion drawn from the registry, and never executes. This is
+// the only path that reaches NewProfile's unknown-agent error, since LoadConfig
+// rejects unknown config agents at load time.
+func TestRun_UnknownAgentFlag(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	_, _, err := runCmd(t, env, "fix", "--agent", "claud")
+	if err == nil {
+		t.Fatal("run --agent claud error = nil, want an unknown-agent error")
+	}
+	if !strings.Contains(err.Error(), "unknown agent") || !strings.Contains(err.Error(), "claude-code") {
+		t.Errorf("error = %q, want unknown agent with a claude-code suggestion", err.Error())
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("unknown --agent must not execute; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_AdHocPrompt asserts an ad-hoc run — `taboo run --prompt …` with no
+// workflow — runs off the top-level defaults: it executes carrying the flag
+// prompt, on a branch slugged for an ad-hoc run.
+func TestRun_AdHocPrompt(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody) // top-level agent/model/repo + branch-prefix
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	const want = "ADHOC: tidy the imports"
+	if _, _, err := runCmd(t, env, "--prompt", want); err != nil {
+		t.Fatalf("ad-hoc run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", want) == nil {
+		t.Errorf("no exec carried the ad-hoc prompt; calls: %v", invocations(fake))
+	}
+	wt := findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "add", "-b")
+	if wt == nil {
+		t.Fatalf("no worktree-add invocation; calls: %v", invocations(fake))
+	}
+	if branch := branchOfWorktreeAdd(wt); !strings.HasPrefix(branch, "taboo/adhoc-") {
+		t.Errorf("ad-hoc branch = %q, want prefix %q", branch, "taboo/adhoc-")
+	}
+}
+
+// TestRun_AdHocWithoutTopLevelDefaults asserts an ad-hoc run is refused when the
+// top-level defaults are absent (here, no top-level agent): the error names the
+// missing top-level config and nothing executes, so a one-off never runs
+// half-configured.
+func TestRun_AdHocWithoutTopLevelDefaults(t *testing.T) {
+	root := t.TempDir()
+	// No top-level agent: only the workflow pins one, so cfg.Profile is nil.
+	body := "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n" +
+		"  fix:\n" +
+		"    agent: opencode\n" +
+		"    model: anthropic/claude\n" +
+		"    prompt: fix it\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	_, _, err := runCmd(t, env, "--prompt", "do a quick thing")
+	if err == nil {
+		t.Fatal("ad-hoc run error = nil, want a top-level-defaults error")
+	}
+	if !strings.Contains(err.Error(), "ad-hoc") || !strings.Contains(err.Error(), "top-level") {
+		t.Errorf("error = %q, want it to name the missing top-level defaults", err.Error())
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("a half-configured ad-hoc run must not execute; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_AdHocSkipsUnusedPromptFileCheck asserts run's preflight is run-scoped:
+// an ad-hoc --prompt run proceeds even when defaults.prompt-file points at a
+// missing file, because that file is never consumed. Before the preflight was
+// narrowed to runConfigChecks the full validate set would stat the stale
+// prompt-file and abort the run with errRunFailed; whole-config prompt-file
+// linting stays the job of `taboo validate`.
+func TestRun_AdHocSkipsUnusedPromptFileCheck(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"agent: opencode\n" +
+		"model: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"defaults:\n" +
+		"  branch-prefix: taboo/\n" +
+		"  prompt-file: gone.md\n" + // referenced but never created — and never consumed by an ad-hoc run
+		"workflows:\n" +
+		"  fix:\n" +
+		"    prompt: fix it\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	const want = "ADHOC: tidy the imports"
+	if _, _, err := runCmd(t, env, "--prompt", want); err != nil {
+		t.Fatalf("ad-hoc run with a stale unused defaults.prompt-file error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", want) == nil {
+		t.Errorf("ad-hoc run did not execute despite the stale prompt-file being unused; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_BareRunDefaultWorkflow asserts a bare `taboo run` (no positional, no
+// prompt flag) runs the configured default-workflow.
+func TestRun_BareRunDefaultWorkflow(t *testing.T) {
+	root := t.TempDir()
+	body := runProjectBody +
+		"  refactor:\n    prompt: refactor it\n" +
+		"default-workflow: refactor\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env); err != nil {
+		t.Fatalf("bare run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "refactor it") == nil {
+		t.Errorf("bare run did not execute the default-workflow; calls: %v", invocations(fake))
+	}
+	wt := findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "add", "-b")
+	if wt == nil {
+		t.Fatalf("no worktree-add invocation; calls: %v", invocations(fake))
+	}
+	if branch := branchOfWorktreeAdd(wt); !strings.HasPrefix(branch, "taboo/refactor-") {
+		t.Errorf("branch = %q, want prefix taboo/refactor-", branch)
+	}
+}
+
+// TestRun_BareRunNoDefaultErrors asserts a bare run with workflows but no
+// default-workflow refuses (listing the available workflows) and never executes —
+// the tool never guesses which workflow the user meant.
+func TestRun_BareRunNoDefaultErrors(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody+"  refactor:\n    prompt: refactor it\n")
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	_, _, err := runCmd(t, env)
+	if err == nil {
+		t.Fatal("bare run error = nil, want an error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "default-workflow") {
+		t.Errorf("error = %q, want it to mention default-workflow", msg)
+	}
+	if !strings.Contains(msg, "fix") || !strings.Contains(msg, "refactor") {
+		t.Errorf("error = %q, want it to list the available workflows", msg)
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("a bare run with no default must not execute; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_BareRunNoWorkflowsErrors asserts a bare run against a config with no
+// workflows at all refuses with guidance to add a workflow or pass --prompt, and
+// never executes.
+func TestRun_BareRunNoWorkflowsErrors(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"agent: opencode\n" +
+		"model: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	_, _, err := runCmd(t, env)
+	if err == nil {
+		t.Fatal("bare run error = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "--prompt") {
+		t.Errorf("error = %q, want it to suggest --prompt", err.Error())
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("must not execute; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_DefaultWorkflowUndefined asserts a default-workflow naming a workflow
+// that is not defined is refused (naming the bad default and the real workflows)
+// rather than silently doing nothing.
+func TestRun_DefaultWorkflowUndefined(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody+"default-workflow: ghost\n")
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	_, _, err := runCmd(t, env)
+	if err == nil {
+		t.Fatal("bare run error = nil, want an undefined-default error")
+	}
+	if !strings.Contains(err.Error(), "ghost") || !strings.Contains(err.Error(), "fix") {
+		t.Errorf("error = %q, want it to name the bad default and the real workflows", err.Error())
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("an undefined default-workflow must not execute; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_FlagSet asserts the run command registers exactly the documented
+// flag-shaped subset and nothing more — no structural or typed flags. The set is
+// the acceptance-criterion list; cobra's auto-added "help" flag is ignored.
+func TestRun_FlagSet(t *testing.T) {
+	want := []string{
+		"prompt", "prompt-file", "branch", "model", "agent",
+		"timeout", "iterations", "signal", "dry-run", "yes", "json",
+	}
+	var got []string
+	newRunCmd(Env{}).Flags().VisitAll(func(f *pflag.Flag) {
+		if f.Name == "help" {
+			return
+		}
+		got = append(got, f.Name)
+	})
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("run flag set = %v, want exactly %v", got, want)
+	}
+}
+
+// TestRunNeedsConfirm covers the pure decision behind --yes: a real run pauses
+// for confirmation only at a TTY without --yes; --yes and any non-interactive
+// caller (a pipe, CI) proceed without prompting.
+func TestRunNeedsConfirm(t *testing.T) {
+	cases := []struct {
+		name        string
+		interactive bool
+		yes         bool
+		want        bool
+	}{
+		{"interactive without --yes confirms", true, false, true},
+		{"--yes skips confirm at a TTY", true, true, false},
+		{"non-interactive proceeds", false, false, false},
+		{"non-interactive with --yes proceeds", false, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runNeedsConfirm(tc.interactive, &runOptions{yes: tc.yes}); got != tc.want {
+				t.Errorf("runNeedsConfirm(interactive=%v, yes=%v) = %v, want %v", tc.interactive, tc.yes, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPromptConfirm covers the y/N read: only an explicit yes proceeds; a blank
+// line (the default), a no, EOF, or junk all decline, so an accidental Enter
+// never launches a run.
+func TestPromptConfirm(t *testing.T) {
+	plan := runPlan{
+		workflow: "fix",
+		branch:   "taboo/fix-x",
+		runnerConfig: taboo.Config{
+			Workshop: "demo",
+			Agent:    taboo.OpenCode("anthropic/claude"),
+		},
+	}
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"y\n", true}, {"yes\n", true}, {"Y\n", true}, {" yes \n", true},
+		{"n\n", false}, {"\n", false}, {"", false}, {"nope\n", false},
+	}
+	for _, tc := range cases {
+		env := Env{Stdin: strings.NewReader(tc.in), Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+		got, err := promptConfirm(env, plan)
+		if err != nil {
+			t.Fatalf("promptConfirm(%q) err = %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Errorf("promptConfirm(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+		if errBuf, _ := env.Stderr.(*bytes.Buffer); !strings.Contains(errBuf.String(), "Continue?") {
+			t.Errorf("promptConfirm(%q) did not print a confirmation prompt to stderr", tc.in)
+		}
+	}
+}
+
+// TestRun_ConfirmDeclineAborts drives the integrated decline path: at an
+// (injected) TTY without --yes, answering "n" to the confirmation prints
+// "Aborted.", exits cleanly (nil), and runs nothing — no worktree is added and no
+// agent is exec'd. It complements the pure TestRunNeedsConfirm/TestPromptConfirm
+// by covering runRun's abort branch end to end.
+func TestRun_ConfirmDeclineAborts(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+	env.Interactive = func() bool { return true }
+	env.Stdin = strings.NewReader("n\n")
+
+	_, stderr, err := runCmd(t, env, "fix")
+	if err != nil {
+		t.Fatalf("declined run error = %v, want nil", err)
+	}
+	if !strings.Contains(stderr, "Aborted.") {
+		t.Errorf("stderr missing the abort notice:\n%s", stderr)
+	}
+	if findInvocation(fake, "worktree") != nil || findInvocation(fake, "exec") != nil {
+		t.Errorf("a declined run must not execute; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_ModelPrecedenceLadder verifies the full model precedence ladder
+// (top-level config -> workflow -> --model flag) through the dry-run plan: the
+// top-level model applies when nothing overrides it, a workflow model overrides
+// the top level, and --model overrides both. It is the precedence-unit-test
+// rendering of the acceptance criterion against one representative param.
+func TestRun_ModelPrecedenceLadder(t *testing.T) {
+	const topLevel = "anthropic/claude"
+	cases := []struct {
+		name    string
+		wfModel string // workflow-level model ("" = unset)
+		flag    string // --model flag ("" = unset)
+		want    string
+	}{
+		{"top-level applies", "", "", topLevel},
+		{"workflow overrides top-level", "openrouter/wf-model", "", "openrouter/wf-model"},
+		{"flag overrides workflow", "openrouter/wf-model", "openrouter/flag-model", "openrouter/flag-model"},
+		{"flag overrides top-level", "", "openrouter/flag-model", "openrouter/flag-model"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			body := "" +
+				"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: " + topLevel + "\n" +
+				"repo: /home/dev/repos/myproject\n" +
+				"workflows:\n  fix:\n    prompt: fix it\n"
+			if tc.wfModel != "" {
+				body += "    model: " + tc.wfModel + "\n"
+			}
+			writeTabooProject(t, root, body)
+			fake := newRunFake()
+			env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+			args := []string{"fix", "--dry-run"}
+			if tc.flag != "" {
+				args = append(args, "--model", tc.flag)
+			}
+			stdout, _, err := runCmd(t, env, args...)
+			if err != nil {
+				t.Fatalf("run --dry-run error = %v, want nil", err)
+			}
+			if !strings.Contains(stdout, tc.want) {
+				t.Errorf("resolved model = not %q\n%s", tc.want, stdout)
+			}
+			if tc.want != topLevel && strings.Contains(stdout, topLevel) {
+				t.Errorf("top-level model %q leaked despite an override:\n%s", topLevel, stdout)
+			}
+		})
+	}
+}
+
+// TestRun_AdHocAgentFromFlag asserts an ad-hoc run is allowed when --agent
+// supplies the agent even with no top-level agent: --agent is the highest agent
+// precedence layer, so a run that resolves fully through it must not be refused by
+// the ad-hoc gate.
+func TestRun_AdHocAgentFromFlag(t *testing.T) {
+	root := t.TempDir()
+	// No top-level agent, but everything else an ad-hoc run needs is present.
+	body := "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"model: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, _, err := runCmd(t, env, "--prompt", "tidy the imports", "--agent", "opencode", "--dry-run")
+	if err != nil {
+		t.Fatalf("ad-hoc run with --agent error = %v, want nil", err)
+	}
+	if !strings.Contains(stdout, "opencode") {
+		t.Errorf("dry-run plan missing the --agent agent:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, adhocLabel) {
+		t.Errorf("dry-run plan missing the ad-hoc label:\n%s", stdout)
+	}
+}
+
+// TestRun_WorkflowBeatsDefaults locks the middle precedence rung for the two
+// params with a workflow level: with no flag, a workflow timeout and
+// max-iterations override the defaults: block. It guards resolveTimeout and
+// resolveMaxIterations against a regression that read defaults before the
+// workflow (a swap the flag-override tests alone would not catch).
+func TestRun_WorkflowBeatsDefaults(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"defaults:\n  timeout: 30m\n  max-iterations: 2\n" +
+		"workflows:\n  fix:\n    prompt: fix it\n    timeout: 5m\n    max-iterations: 4\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix"); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "--timeout", "5m0s") == nil {
+		t.Errorf("workflow timeout did not beat the defaults timeout; calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "exec", "--timeout", "30m0s") != nil {
+		t.Errorf("defaults timeout leaked past the workflow value; calls: %v", invocations(fake))
+	}
+	if got := countInvocations(fake, "exec"); got != 4 {
+		t.Errorf("exec calls = %d, want 4 (workflow max-iterations beats defaults); calls: %v", got, invocations(fake))
+	}
+}
+
+// TestRun_PromptFlagBeatsWorkflowPromptFile closes the one prompt-precedence edge
+// the flag-override tests miss: --prompt must beat a workflow prompt-file, not
+// just a workflow inline prompt. Guards resolvePrompt against reading the workflow
+// file before the flag.
+func TestRun_PromptFlagBeatsWorkflowPromptFile(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, "") // create the .taboo dir first
+	writePromptFile(t, root, "wf.md", "FILE: from the workflow prompt-file")
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n  fix:\n    prompt-file: wf.md\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	const want = "INLINE: from the --prompt flag"
+	if _, _, err := runCmd(t, env, "fix", "--prompt", want); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", want) == nil {
+		t.Errorf("--prompt did not beat the workflow prompt-file; calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "exec", "FILE: from the workflow prompt-file") != nil {
+		t.Errorf("workflow prompt-file leaked past --prompt; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_BareRunDefaultWorkflowFlagOverride asserts a flag layers over a
+// bare-run default-workflow selection just as it does over a named one. It uses
+// --model (not --prompt) deliberately: --prompt would route to the ad-hoc branch
+// instead of selecting the default-workflow, so it would not exercise this cell of
+// the selection x precedence matrix.
+func TestRun_BareRunDefaultWorkflowFlagOverride(t *testing.T) {
+	root := t.TempDir()
+	body := runProjectBody +
+		"  refactor:\n    prompt: refactor it\n" +
+		"default-workflow: refactor\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	const wantModel = "openrouter/override-model"
+	if _, _, err := runCmd(t, env, "--model", wantModel); err != nil {
+		t.Fatalf("bare run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "refactor it") == nil {
+		t.Errorf("bare run did not select the default-workflow; calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "exec", "-m", wantModel) == nil {
+		t.Errorf("--model did not override on a bare default-workflow run; calls: %v", invocations(fake))
 	}
 }
 
