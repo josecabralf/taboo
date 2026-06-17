@@ -1,4 +1,4 @@
-.PHONY: help setup build test test-integration lint vet tidy
+.PHONY: help setup build test test-race test-integration lint vet tidy
 
 .DEFAULT_GOAL := help
 
@@ -17,6 +17,12 @@ build: ## Build all packages
 # problematic. CI runs this target via `workshop run make test`.
 test: ## Run unit tests
 	go test ./... -count=1 -cover
+
+# Unit tests under the race detector. Requires cgo + a C compiler (the workshop's
+# setup-base hook installs gcc); CGO_ENABLED is forced on here so the rest of the
+# build stays pure-Go. Slower than `test`, so it's a separate opt-in target.
+test-race: ## Run unit tests under the race detector
+	CGO_ENABLED=1 go test -race ./... -count=1
 
 # Host-only: exercises the real `workshop` CLI and LXD. Not wired into the dev
 # workshop or CI; run it directly on a machine with workshop + LXD installed.
