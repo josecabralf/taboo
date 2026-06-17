@@ -40,7 +40,7 @@ type runOptions struct {
 }
 
 // newRunCmd builds the `run` subcommand: it selects one named workflow
-// positionally, resolves its scalar params from taboo.yaml into an execution
+// positionally, resolves its prompt and run params from taboo.yaml into an execution
 // plan, runs a host preflight, and drives the plan end-to-end through pkg/taboo's
 // Orchestrator on a fresh per-run branch. Live agent output streams to stderr so
 // the machine result stays clean on stdout.
@@ -70,10 +70,8 @@ func newRunCmd(env Env) *cobra.Command {
 // execution, so --dry-run can print it without running anything.
 type runPlan struct {
 	workflow         string
-	configPath       string
 	runnerConfig     taboo.Config
 	branch           string
-	branchPrefix     string
 	prompt           string
 	timeout          time.Duration
 	maxIterations    int
@@ -127,7 +125,7 @@ func loadProjectConfig(env Env) (string, *taboo.ProjectConfig, error) {
 }
 
 // resolvePlan translates the loaded config + selected workflow into a runPlan.
-// It is the gap this slice fills: the library consumes a flat Config +
+// It bridges two shapes: the library consumes a flat Config +
 // OrchestratedRequest, while the config layers workflow over defaults over top
 // level. Every precedence rule and required-field refusal lives here so both
 // --dry-run and a real run resolve identically.
@@ -147,10 +145,10 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath, workflow, branchOverride 
 		defaults = &taboo.RunDefaults{}
 	}
 
+	// wf.Profile already carries the top-level→workflow agent fallback resolved by
+	// LoadConfig (resolveProfiles bakes orElse(wf.Agent, cfg.Agent) in), so it is
+	// nil only when no agent is configured anywhere.
 	profile := wf.Profile
-	if profile == nil {
-		profile = cfg.Profile
-	}
 	if profile == nil {
 		return runPlan{}, fmt.Errorf("workflow %q has no agent configured (set agent: on the workflow or a top-level agent:)", workflow)
 	}
@@ -170,8 +168,7 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath, workflow, branchOverride 
 	}
 
 	plan := runPlan{
-		workflow:   workflow,
-		configPath: configPath,
+		workflow: workflow,
 		runnerConfig: taboo.Config{
 			Workshop:   cfg.Workshop,
 			Base:       cfg.Base,
@@ -183,9 +180,8 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath, workflow, branchOverride 
 		timeout:          resolveTimeout(wf, defaults),
 		maxIterations:    resolveMaxIterations(wf, defaults),
 		completionSignal: defaults.CompletionSignal,
-		branchPrefix:     defaults.BranchPrefix,
 	}
-	plan.branch = resolveBranch(branchOverride, plan.branchPrefix, workflow)
+	plan.branch = resolveBranch(branchOverride, defaults.BranchPrefix, workflow)
 	return plan, nil
 }
 
@@ -224,10 +220,7 @@ func resolvePrompt(wf taboo.Workflow, defaults *taboo.RunDefaults, base string) 
 // readPromptFile returns the contents of a prompt file, resolving a relative
 // path against base. The contents are used verbatim as the prompt.
 func readPromptFile(path, base string) (string, error) {
-	resolved := path
-	if !filepath.IsAbs(resolved) {
-		resolved = filepath.Join(base, path)
-	}
+	resolved := resolvePromptFilePath(path, base)
 	// resolved derives from a trusted config path under a trusted base, not from
 	// untrusted input.
 	data, err := os.ReadFile(resolved) // #nosec G304
@@ -235,6 +228,17 @@ func readPromptFile(path, base string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// resolvePromptFilePath resolves a configured prompt-file path: absolute paths
+// are used verbatim, relative ones resolve against base (the config file's
+// directory). Both run (readPromptFile) and validate (promptFileChecks) share
+// this so a relative prompt-file resolves identically in both.
+func resolvePromptFilePath(path, base string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
 }
 
 // resolveTimeout applies workflow-then-defaults precedence for the per-exec
@@ -364,7 +368,7 @@ func printPlan(env Env, plan runPlan) {
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "workshop:", plan.runnerConfig.Workshop)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "repo:", plan.runnerConfig.RepoPath)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "timeout:", plan.timeout)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "max-iterations:", fmt.Sprintf("%d", plan.maxIterations))
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %d\n", "max-iterations:", plan.maxIterations)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "completion-signal:", plan.completionSignal)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "prompt:", promptSummary(plan.prompt))
 }
@@ -372,7 +376,7 @@ func printPlan(env Env, plan runPlan) {
 // promptSummary renders a prompt on one line so a multi-line (often
 // prompt-file-backed) prompt cannot shatter printPlan's aligned column. It shows
 // the first line, truncated to 60 runes with a trailing ellipsis when longer,
-// and appends a line/byte count whenever the prompt spans multiple lines or was
+// and appends a line count whenever the prompt spans multiple lines or was
 // truncated so the reader knows the displayed text is only a preview.
 func promptSummary(prompt string) string {
 	first := prompt
@@ -391,7 +395,11 @@ func promptSummary(prompt string) string {
 
 	if multiline || truncated {
 		lines := strings.Count(prompt, "\n") + 1
-		return fmt.Sprintf("%s (%d lines, %d bytes)", first, lines, len(prompt))
+		unit := "lines"
+		if lines == 1 {
+			unit = "line"
+		}
+		return fmt.Sprintf("%s (%d %s)", first, lines, unit)
 	}
 	return first
 }

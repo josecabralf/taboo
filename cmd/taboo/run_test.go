@@ -321,6 +321,31 @@ func TestRun_DryRun(t *testing.T) {
 	}
 }
 
+// TestPromptSummary covers the one-line preview promptSummary renders for the
+// dry-run plan: a short single-line prompt is shown verbatim, a multi-line or
+// over-long prompt is collapsed to its (truncated) first line plus a correctly
+// pluralized line count, and the count is singular for a truncated single line.
+func TestPromptSummary(t *testing.T) {
+	long := strings.Repeat("x", 80) // 80 runes, exceeds the 60-rune cap
+	cases := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{"short single line shown verbatim", "fix the failing tests", "fix the failing tests"},
+		{"multiline appends line count", "first line\nsecond\nthird", "first line (3 lines)"},
+		{"truncated single line is singular", long, strings.Repeat("x", 60) + "… (1 line)"},
+		{"exactly 60 runes not truncated", strings.Repeat("y", 60), strings.Repeat("y", 60)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := promptSummary(tc.prompt); got != tc.want {
+				t.Errorf("promptSummary(%q) = %q, want %q", tc.prompt, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestRun_PromptFile asserts a workflow's prompt-file is read (relative to the
 // config dir) and its contents become the agent's prompt in the exec call. This
 // also exercises validate's prompt-file existence check passing in the preflight.
@@ -501,17 +526,6 @@ func TestRun_NoConfig(t *testing.T) {
 	}
 }
 
-// decodedRunResult mirrors the run command's --json result shape (distinct from
-// the doctor/validate report shape), so tests can assert the structured fields.
-type decodedRunResult struct {
-	Branch     string `json:"branch"`
-	Commit     string `json:"commit"`
-	Worktree   string `json:"worktree"`
-	Output     string `json:"output"`
-	Iterations int    `json:"iterations"`
-	StopReason string `json:"stopReason"`
-}
-
 // TestRun_JSONResult asserts --json emits a parseable object carrying the run's
 // branch, commit, a non-empty worktree, at least one iteration, and a stop
 // reason.
@@ -525,7 +539,7 @@ func TestRun_JSONResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run --json error = %v, want nil", err)
 	}
-	var res decodedRunResult
+	var res jsonRunResult
 	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
 		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
 	}
@@ -538,11 +552,11 @@ func TestRun_JSONResult(t *testing.T) {
 	if res.Worktree == "" {
 		t.Errorf("worktree = %q, want non-empty", res.Worktree)
 	}
-	if res.Iterations < 1 {
-		t.Errorf("iterations = %d, want >= 1", res.Iterations)
+	if res.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1", res.Iterations)
 	}
-	if res.StopReason == "" {
-		t.Errorf("stopReason = %q, want non-empty", res.StopReason)
+	if res.StopReason != "max-iterations" {
+		t.Errorf("stopReason = %q, want %q", res.StopReason, "max-iterations")
 	}
 }
 
@@ -568,8 +582,11 @@ func TestRun_ExecFailureSurfaced(t *testing.T) {
 	if err == nil {
 		t.Fatal("run error = nil, want the exec failure to propagate")
 	}
-	if !strings.Contains(stderr, "Error:") {
-		t.Errorf("stderr missing the executePlan error line:\n%s", stderr)
+	if !strings.Contains(err.Error(), "agent exec blew up") {
+		t.Errorf("error = %q, want it to carry the underlying exec failure", err.Error())
+	}
+	if !strings.Contains(stderr, "agent exec blew up") {
+		t.Errorf("stderr missing the underlying exec failure:\n%s", stderr)
 	}
 }
 
@@ -658,7 +675,7 @@ func TestRun_JSONCarriesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run --json error = %v, want nil", err)
 	}
-	var res decodedRunResult
+	var res jsonRunResult
 	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
 		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
 	}
