@@ -905,6 +905,39 @@ func TestRun_AdHocWithoutTopLevelDefaults(t *testing.T) {
 	}
 }
 
+// TestRun_AdHocSkipsUnusedPromptFileCheck asserts run's preflight is run-scoped:
+// an ad-hoc --prompt run proceeds even when defaults.prompt-file points at a
+// missing file, because that file is never consumed. Before the preflight was
+// narrowed to runConfigChecks the full validate set would stat the stale
+// prompt-file and abort the run with errRunFailed; whole-config prompt-file
+// linting stays the job of `taboo validate`.
+func TestRun_AdHocSkipsUnusedPromptFileCheck(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"agent: opencode\n" +
+		"model: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"defaults:\n" +
+		"  branch-prefix: taboo/\n" +
+		"  prompt-file: gone.md\n" + // referenced but never created — and never consumed by an ad-hoc run
+		"workflows:\n" +
+		"  fix:\n" +
+		"    prompt: fix it\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	const want = "ADHOC: tidy the imports"
+	if _, _, err := runCmd(t, env, "--prompt", want); err != nil {
+		t.Fatalf("ad-hoc run with a stale unused defaults.prompt-file error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", want) == nil {
+		t.Errorf("ad-hoc run did not execute despite the stale prompt-file being unused; calls: %v", invocations(fake))
+	}
+}
+
 // TestRun_BareRunDefaultWorkflow asserts a bare `taboo run` (no positional, no
 // prompt flag) runs the configured default-workflow.
 func TestRun_BareRunDefaultWorkflow(t *testing.T) {
@@ -1084,20 +1117,28 @@ func TestPromptConfirm(t *testing.T) {
 	}
 }
 
-// TestRun_DryRunShowsResolvedModel asserts --dry-run prints the resolved model so
-// a user can preview which model a run will use, including a --model override.
-func TestRun_DryRunShowsResolvedModel(t *testing.T) {
+// TestRun_ConfirmDeclineAborts drives the integrated decline path: at an
+// (injected) TTY without --yes, answering "n" to the confirmation prints
+// "Aborted.", exits cleanly (nil), and runs nothing — no worktree is added and no
+// agent is exec'd. It complements the pure TestRunNeedsConfirm/TestPromptConfirm
+// by covering runRun's abort branch end to end.
+func TestRun_ConfirmDeclineAborts(t *testing.T) {
 	root := t.TempDir()
 	writeTabooProject(t, root, runProjectBody)
 	fake := newRunFake()
 	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+	env.Interactive = func() bool { return true }
+	env.Stdin = strings.NewReader("n\n")
 
-	stdout, _, err := runCmd(t, env, "fix", "--model", "openrouter/x/y", "--dry-run")
+	_, stderr, err := runCmd(t, env, "fix")
 	if err != nil {
-		t.Fatalf("run --dry-run error = %v, want nil", err)
+		t.Fatalf("declined run error = %v, want nil", err)
 	}
-	if !strings.Contains(stdout, "model:") || !strings.Contains(stdout, "openrouter/x/y") {
-		t.Errorf("dry-run plan missing the resolved model:\n%s", stdout)
+	if !strings.Contains(stderr, "Aborted.") {
+		t.Errorf("stderr missing the abort notice:\n%s", stderr)
+	}
+	if findInvocation(fake, "worktree") != nil || findInvocation(fake, "exec") != nil {
+		t.Errorf("a declined run must not execute; calls: %v", invocations(fake))
 	}
 }
 

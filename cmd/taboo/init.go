@@ -247,6 +247,9 @@ func printNextSteps(env Env, opts *initOptions, projectDir string) {
 // os.ModeCharDevice check is not enough here: /dev/null is a character device
 // too, so this uses a real isatty probe.
 func isInteractive(env Env) bool {
+	if env.Interactive != nil {
+		return env.Interactive()
+	}
 	f, ok := env.Stdin.(*os.File)
 	if !ok {
 		return false

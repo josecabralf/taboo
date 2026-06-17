@@ -71,12 +71,12 @@ func newRunCmd(env Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run [workflow]",
 		Short: "Run a workflow (or an ad-hoc prompt) end-to-end on a fresh branch",
-		Long: "run selects a workflow from taboo.yaml — named positionally, the configured " +
-			"default-workflow for a bare run, or none for an ad-hoc --prompt off the top-level " +
-			"defaults — resolves its prompt, model, timeout, iterations, and branch (config, then " +
-			"workflow, then these flags), and executes it through a workshop on a new per-run " +
-			"branch. Agent progress streams to stderr; the run result (branch, commit, output) is " +
-			"written to stdout.",
+		Long: "run selects what to execute from taboo.yaml: a workflow named positionally, the " +
+			"configured default-workflow for a bare run, or an ad-hoc --prompt with no workflow. It " +
+			"resolves the prompt, model, timeout, iterations, and branch — where a CLI flag overrides " +
+			"the workflow, which overrides the top-level defaults — then executes the run through a " +
+			"workshop on a new per-run branch. Agent progress streams to stderr; the run result " +
+			"(branch, commit, output) is written to stdout.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRun(cmd.Context(), env, &opts, args)
@@ -88,8 +88,8 @@ func newRunCmd(env Env) *cobra.Command {
 	cmd.Flags().StringVar(&opts.model, "model", "", "override the resolved agent's model for this run")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", 0, "override the per-exec timeout, e.g. 30m")
 	cmd.Flags().IntVar(&opts.iterations, "iterations", 0, "override the max iteration cap for this run")
-	cmd.Flags().StringVar(&opts.signal, "signal", "", "completion signal whose appearance in agent output ends the run early")
-	cmd.Flags().StringVar(&opts.branch, "branch", "", "branch name for this run (default: auto-generated from the workflow and a timestamp)")
+	cmd.Flags().StringVar(&opts.signal, "signal", "", "string that, when it appears in agent output, stops the iteration loop early (run treated as complete)")
+	cmd.Flags().StringVar(&opts.branch, "branch", "", "branch name for this run (default: auto-generated from the workflow name — or \"adhoc\" for a --prompt run — and a timestamp)")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "resolve and print the plan without running anything")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "skip the interactive pre-run confirmation")
 	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit the run result as JSON")
@@ -109,6 +109,9 @@ type runPlan struct {
 	timeout          time.Duration
 	maxIterations    int
 	completionSignal string
+	// adhoc marks a run with no named workflow (an off-the-defaults --prompt run),
+	// so the human-facing summaries name it as such instead of as a workflow.
+	adhoc bool
 }
 
 // runRun is the run command's select-resolve-preflight-execute flow. It discovers
@@ -172,8 +175,12 @@ func runNeedsConfirm(interactive bool, opts *runOptions) bool {
 // from stdin, returning true only on an explicit yes. A blank line (the default),
 // EOF, or anything else declines, so an accidental Enter never launches a run.
 func promptConfirm(env Env, plan runPlan) (bool, error) {
-	_, _ = fmt.Fprintf(env.Stderr, "About to run %q on branch %q (agent %s, workshop %s). Continue? [y/N] ",
-		plan.workflow, plan.branch, plan.runnerConfig.Agent.Name(), plan.runnerConfig.Workshop)
+	target := fmt.Sprintf("workflow %q", plan.workflow)
+	if plan.adhoc {
+		target = "an ad-hoc prompt"
+	}
+	_, _ = fmt.Fprintf(env.Stderr, "About to run %s on branch %q (agent %s, workshop %s). Continue? [y/N] ",
+		target, plan.branch, plan.runnerConfig.Agent.Name(), plan.runnerConfig.Workshop)
 	line, err := bufio.NewReader(env.Stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
@@ -212,11 +219,10 @@ func (s runSelection) describe() string {
 
 // selectRun decides what a run invocation targets, applying the selection
 // precedence: an explicit positional workflow, else an ad-hoc run when a prompt
-// flag is set (gated on an agent being resolvable from --agent or top-level config),
-// else the configured
-// default-workflow, else an error listing what the user could have picked. It
-// never guesses — a bare run with no default-workflow refuses rather than run an
-// arbitrary workflow.
+// flag is set (gated on an agent being resolvable from --agent or top-level
+// config), else the configured default-workflow, else an error listing what the
+// user could have picked. It never guesses — a bare run with no default-workflow
+// refuses rather than run an arbitrary workflow.
 func selectRun(cfg *taboo.ProjectConfig, args []string, opts *runOptions) (runSelection, error) {
 	if len(args) == 1 {
 		name := args[0]
@@ -227,7 +233,9 @@ func selectRun(cfg *taboo.ProjectConfig, args []string, opts *runOptions) (runSe
 		return runSelection{label: name, wf: wf}, nil
 	}
 	if opts.prompt != "" || opts.promptFile != "" {
-		if orElse(opts.agent, cfg.Agent) == "" {
+		// An ad-hoc run has no workflow, so its effective agent is the flag over the
+		// top level (the zero Workflow contributes nothing).
+		if effectiveAgent(cfg, taboo.Workflow{}, opts) == "" {
 			return runSelection{}, errors.New("an ad-hoc run (--prompt/--prompt-file with no workflow) needs a top-level agent: in " +
 				"taboo.yaml — set one (or pass --agent), or name a workflow")
 		}
@@ -331,6 +339,7 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath string, sel runSelection, 
 		timeout:          resolveTimeout(opts, sel.wf, defaults),
 		maxIterations:    resolveMaxIterations(opts, sel.wf, defaults),
 		completionSignal: resolveSignal(opts, defaults),
+		adhoc:            sel.adhoc,
 	}
 	plan.branch = resolveBranch(opts.branch, defaults.BranchPrefix, sel.label)
 	return plan, nil
@@ -345,7 +354,7 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath string, sel runSelection, 
 // LoadConfig already validated config agents) is surfaced through unknownAgentError,
 // with a fuzzy "did you mean" suggestion when a registered agent is close.
 func resolveRunProfile(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions) (taboo.AgentProfile, error) {
-	agent := orElse(opts.agent, orElse(sel.wf.Agent, cfg.Agent))
+	agent := effectiveAgent(cfg, sel.wf, opts)
 	if agent == "" {
 		return nil, fmt.Errorf("%s has no agent configured (set agent: on the workflow or a top-level agent:)", sel.describe())
 	}
@@ -363,16 +372,39 @@ func resolveModel(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions) 
 	return orElse(opts.model, orElse(sel.wf.Model, cfg.Model))
 }
 
+// effectiveAgent applies the agent precedence chain (top-level config -> workflow
+// -> --agent flag) to one workflow block. The ad-hoc gate in selectRun passes the
+// zero Workflow (an ad-hoc run has none), so it reduces to flag-then-top-level
+// there, while resolveRunProfile passes the selected block. Sharing it keeps the
+// ad-hoc gate and the profile resolution from drifting apart.
+func effectiveAgent(cfg *taboo.ProjectConfig, wf taboo.Workflow, opts *runOptions) string {
+	return orElse(opts.agent, orElse(wf.Agent, cfg.Agent))
+}
+
 // unknownAgentError turns NewProfile's wrapped ErrUnknownAgent into a CLI message
 // with a fuzzy "did you mean" suggestion when a registered agent is close enough,
-// reusing the same candidate set and matcher validate uses. When nothing is
+// reusing unknownAgentMessage (the same builder validate uses). When nothing is
 // close, the original wrapped error (which already names the bad agent) is
-// returned unchanged.
+// returned unchanged so callers can still errors.Is it.
 func unknownAgentError(name string, err error) error {
-	if suggestion, ok := suggestAgent(name, taboo.AgentNames()); ok {
-		return fmt.Errorf("unknown agent %q; did you mean %q?", name, suggestion)
+	if msg, ok := unknownAgentMessage(name, taboo.AgentNames()); ok {
+		return errors.New(msg)
 	}
 	return err
+}
+
+// unknownAgentMessage builds the "unknown agent X" report and reports whether a
+// candidate was close enough to append a fuzzy "did you mean Y?" hint. It is the
+// single source of that message, shared by validate's agentChecks (which always
+// uses the text) and run's unknownAgentError (which only overrides its wrapped
+// sentinel when a suggestion exists), so the two surface an identical message.
+func unknownAgentMessage(name string, candidates []string) (string, bool) {
+	msg := fmt.Sprintf("unknown agent %q", name)
+	suggestion, ok := suggestAgent(name, candidates)
+	if ok {
+		msg += fmt.Sprintf("; did you mean %q?", suggestion)
+	}
+	return msg, ok
 }
 
 // availableWorkflows lists the config's workflow names, sorted, for the
@@ -488,13 +520,15 @@ func resolveBranch(override, prefix, workflow string) string {
 }
 
 // runPreflight gathers the lightweight host probe (is workshop callable) plus
-// the full config-correctness checks and refuses the run when any errors. The
-// report goes to stderr (not stdout) so a refusal does not pollute the machine
-// result stream a successful run writes there. It returns errRunFailed so main
-// exits non-zero without echoing cobra noise.
+// the run-scoped config-correctness checks and refuses the run when any errors.
+// The checks are run-scoped (runConfigChecks, not the full validateChecks): they
+// skip prompt-file existence, which resolvePlan already proved for the one file
+// this run consumes. The report goes to stderr (not stdout) so a refusal does not
+// pollute the machine result stream a successful run writes there. It returns
+// errRunFailed so main exits non-zero without echoing cobra noise.
 func runPreflight(ctx context.Context, env Env) error {
 	checks := []check{checkWorkshop(ctx, env)}
-	checks = append(checks, validateChecks(ctx, env, statFileExists)...)
+	checks = append(checks, runConfigChecks(ctx, env, statFileExists)...)
 	if anyError(checks) {
 		writeHuman(env.Stderr, "taboo run — preflight checks", checks)
 		return errRunFailed
@@ -509,7 +543,11 @@ func runPreflight(ctx context.Context, env Env) error {
 // to stdout; a failure inside the run is printed to stderr and returned (exit 1),
 // mirroring init.
 func executePlan(ctx context.Context, env Env, asJSON bool, plan runPlan) error {
-	_, _ = fmt.Fprintf(env.Stderr, "Running workflow %q on branch %q (agent %s)…\n", plan.workflow, plan.branch, plan.runnerConfig.Agent.Name())
+	target := fmt.Sprintf("workflow %q", plan.workflow)
+	if plan.adhoc {
+		target = "ad-hoc prompt"
+	}
+	_, _ = fmt.Fprintf(env.Stderr, "Running %s on branch %q (agent %s)…\n", target, plan.branch, plan.runnerConfig.Agent.Name())
 
 	runner := taboo.New(plan.runnerConfig, env.Cmd)
 	orch := taboo.NewOrchestrator(runner)
@@ -576,7 +614,11 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 // ("completion-signal:") sets that width.
 func printPlan(env Env, plan runPlan) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo run (dry run) — resolved plan:")
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "workflow:", plan.workflow)
+	planLabel, planTarget := "workflow:", plan.workflow
+	if plan.adhoc {
+		planLabel, planTarget = "run:", "ad-hoc (--prompt)"
+	}
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", planLabel, planTarget)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "branch:", plan.branch)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "agent:", plan.runnerConfig.Agent.Name())
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "model:", plan.model)

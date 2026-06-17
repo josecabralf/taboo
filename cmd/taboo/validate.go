@@ -52,11 +52,33 @@ func newValidateCmd(env Env) *cobra.Command {
 }
 
 // validateChecks discovers the taboo.yaml from env.Getwd(), strict-decodes it,
-// and returns the config-correctness checks. A discovery or decode failure is a
-// single terminal config error (no further checks run); otherwise the parsed
-// config feeds the agent/model/prompt-file/repo check groups. The injected
-// statFile callback makes discovery and prompt-file existence testable.
+// and returns the full config-correctness check set the validate command reports.
+// A discovery or decode failure is a single terminal config error (no further
+// checks run); otherwise the parsed config feeds the agent/model/prompt-file/repo
+// check groups. The injected statFile callback makes discovery and prompt-file
+// existence testable.
 func validateChecks(ctx context.Context, env Env, statFile func(string) bool) []check {
+	return configCorrectnessChecks(ctx, env, statFile, true)
+}
+
+// runConfigChecks returns the config-correctness checks run's preflight needs:
+// the full validate set minus prompt-file existence. Resolving the plan already
+// reads and validates the one prompt-file this run actually consumes, so
+// re-checking it here is redundant — and statting every other config-referenced
+// prompt-file would let an unrelated stale one (e.g. a defaults.prompt-file an
+// ad-hoc --prompt run never touches) abort a run that does not need it.
+// Whole-config prompt-file linting stays the job of `taboo validate`.
+func runConfigChecks(ctx context.Context, env Env, statFile func(string) bool) []check {
+	return configCorrectnessChecks(ctx, env, statFile, false)
+}
+
+// configCorrectnessChecks is the shared body behind validateChecks and
+// runConfigChecks: discover + strict-decode the taboo.yaml, then assemble the
+// correctness checks. The includePromptFiles flag toggles the prompt-file
+// existence group — validate wants it (whole-config lint), run's preflight does
+// not (it is run-scoped). It is distinct from config.go's configChecks, which is
+// doctor's host-side config probe.
+func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string) bool, includePromptFiles bool) []check {
 	wd, err := env.Getwd()
 	if err != nil {
 		return []check{fail("config", "cannot determine the working directory: "+err.Error())}
@@ -77,7 +99,9 @@ func validateChecks(ctx context.Context, env Env, statFile func(string) bool) []
 	checks := []check{ok("config", "parsed "+path)}
 	checks = append(checks, agentChecks(cfg)...)
 	checks = append(checks, modelChecks(cfg)...)
-	checks = append(checks, promptFileChecks(cfg, path, statFile)...)
+	if includePromptFiles {
+		checks = append(checks, promptFileChecks(cfg, path, statFile)...)
+	}
 	checks = append(checks, repoValidateChecks(ctx, env, cfg)...)
 	return checks
 }
@@ -159,10 +183,7 @@ func agentChecks(cfg taboo.ProjectConfig) []check {
 			continue
 		}
 		allKnown = false
-		msg := `unknown agent "` + name + `"`
-		if suggestion, ok := suggestAgent(name, known); ok {
-			msg += `; did you mean "` + suggestion + `"?`
-		}
+		msg, _ := unknownAgentMessage(name, known)
 		checks = append(checks, fail("agent/"+name, msg))
 	}
 	if allKnown {
