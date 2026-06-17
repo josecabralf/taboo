@@ -32,6 +32,14 @@ func runWizard(env Env, opts *initOptions) error {
 				Title("Repository path").
 				Validate(notEmpty("repository path")).
 				Value(&opts.repo),
+			huh.NewSelect[string]().
+				Title("Seed example workflows (fix, refactor)?").
+				Options(huh.NewOption("Yes", ""), huh.NewOption("No", "none")).
+				Value(&opts.workflows),
+			huh.NewSelect[string]().
+				Title("Scaffold a Go main.go?").
+				Options(huh.NewOption("No", "none"), huh.NewOption("Single-run", "single"), huh.NewOption("Fan-out", "fanout")).
+				Value(&opts.template),
 		),
 	).WithInput(env.Stdin).WithOutput(env.Stdout)
 	if err := form.Run(); err != nil {
