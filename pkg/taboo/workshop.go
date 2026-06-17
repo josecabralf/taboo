@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// WorkshopName derives the per-agent workshop name from a base name and an
+// agent name, so taboo provisions one workshop per distinct agent (reused
+// across runs) rather than one per run.
+func WorkshopName(base, agent string) string {
+	return base + "-" + agent
+}
+
 // projectArgs returns the leading global flags every workshop invocation shares.
 func projectArgs(project string) []string {
 	return []string{"--project", project}

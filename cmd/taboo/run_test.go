@@ -61,6 +61,47 @@ func newRunFake() *fakeCommander {
 	return &fakeCommander{stdoutFn: runFakeStdout, errFn: runFakeErr}
 }
 
+// argAfter returns the element following verb in c.Args (the workshop target
+// name sits right after its verb, e.g. "launch" -> "demo-opencode"), or "" when
+// verb is absent or is the final element.
+func argAfter(c taboo.Cmd, verb string) string {
+	i := slices.Index(c.Args, verb)
+	if i < 0 || i+1 >= len(c.Args) {
+		return ""
+	}
+	return c.Args[i+1]
+}
+
+// newStatefulRunFake builds a fake commander that models workshop persistence
+// across runs so reuse is observable. Its errFn records the workshop name that
+// follows a "launch" verb into a set, and answers an "info" probe by reporting
+// success only for a workshop that was previously launched (else errInfoMiss).
+// Every other call succeeds, reusing the shared runFakeStdout. Because the
+// launched set lives on the closure, a single stateful fake reused across two
+// runCmd calls sees the first run's launch when the second run probes info.
+func newStatefulRunFake() *fakeCommander {
+	launched := map[string]bool{}
+	return &fakeCommander{
+		stdoutFn: runFakeStdout,
+		errFn: func(c taboo.Cmd) error {
+			if c.Name != "workshop" {
+				return nil
+			}
+			if elemsContain(c.Args, "launch") {
+				launched[argAfter(c, "launch")] = true
+				return nil
+			}
+			if elemsContain(c.Args, "info") {
+				if launched[argAfter(c, "info")] {
+					return nil
+				}
+				return errInfoMiss
+			}
+			return nil
+		},
+	}
+}
+
 // findInvocation returns the first recorded call whose [name, args...] contains
 // every substr (exact element match), or nil when none matches.
 func findInvocation(fake *fakeCommander, substrs ...string) []string {
@@ -147,6 +188,89 @@ func TestRun_TracerBullet(t *testing.T) {
 	exec := findInvocation(fake, "exec", "please fix the failing tests")
 	if exec == nil {
 		t.Errorf("no exec invocation carrying the prompt; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_PerAgentWorkshopProvisioning locks the provisioning behavior across
+// runs that share a workshop world (one stateful fake that remembers which
+// workshops were launched): two workflows with different agents each provision
+// their own derived workshop, while two runs of the same agent's workflow share
+// one — the second reuses it via a successful info probe instead of relaunching.
+func TestRun_PerAgentWorkshopProvisioning(t *testing.T) {
+	t.Run("different agents get distinct workshops", func(t *testing.T) {
+		root := t.TempDir()
+		body := runProjectBody +
+			"  refactor:\n    agent: claude-code\n    prompt: refactor it\n"
+		writeTabooProject(t, root, body)
+		fake := newStatefulRunFake()
+		env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		if _, _, err := runCmd(t, env, "fix"); err != nil {
+			t.Fatalf("run fix error = %v, want nil", err)
+		}
+		if _, _, err := runCmd(t, env, "refactor"); err != nil {
+			t.Fatalf("run refactor error = %v, want nil", err)
+		}
+
+		const opencodeWS, claudeWS = "demo-opencode", "demo-claude-code"
+		if got := countInvocations(fake, "launch", opencodeWS); got != 1 {
+			t.Errorf("launches of %q = %d, want 1; calls: %v", opencodeWS, got, invocations(fake))
+		}
+		if got := countInvocations(fake, "launch", claudeWS); got != 1 {
+			t.Errorf("launches of %q = %d, want 1; calls: %v", claudeWS, got, invocations(fake))
+		}
+	})
+
+	t.Run("same agent reuses one workshop", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		fake := newStatefulRunFake()
+		env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		if _, _, err := runCmd(t, env, "fix"); err != nil {
+			t.Fatalf("first run fix error = %v, want nil", err)
+		}
+		if _, _, err := runCmd(t, env, "fix"); err != nil {
+			t.Fatalf("second run fix error = %v, want nil", err)
+		}
+
+		if got := countInvocations(fake, "launch", "demo-opencode"); got != 1 {
+			t.Errorf("launches of demo-opencode = %d, want 1 (second run reuses); calls: %v", got, invocations(fake))
+		}
+		if findInvocation(fake, "info", "demo-opencode") == nil {
+			t.Errorf("expected an info probe of demo-opencode; calls: %v", invocations(fake))
+		}
+	})
+}
+
+// TestRun_ModelVariationReusesWorkshop locks the acceptance criterion that two
+// workflows of the same agent differing only in model share one workshop, since
+// model is excluded from WorkshopName by design. The "fix" workflow uses the
+// top-level model anthropic/claude; a "tune" workflow inherits the same opencode
+// agent but pins openai/gpt-4o. Running both produces exactly one launch of
+// demo-opencode (the second reuses it), and no launch carries a model string.
+func TestRun_ModelVariationReusesWorkshop(t *testing.T) {
+	root := t.TempDir()
+	body := runProjectBody +
+		"  tune:\n    model: openai/gpt-4o\n    prompt: tune it\n"
+	writeTabooProject(t, root, body)
+	fake := newStatefulRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix"); err != nil {
+		t.Fatalf("run fix error = %v, want nil", err)
+	}
+	if _, _, err := runCmd(t, env, "tune"); err != nil {
+		t.Fatalf("run tune error = %v, want nil", err)
+	}
+
+	if got := countInvocations(fake, "launch", "demo-opencode"); got != 1 {
+		t.Errorf("launches of demo-opencode = %d, want 1 (model variation reuses one workshop); calls: %v", got, invocations(fake))
+	}
+	for _, model := range []string{"anthropic/claude", "openai/gpt-4o"} {
+		if findInvocation(fake, "launch", model) != nil {
+			t.Errorf("a launch carried model %q; model must not influence the workshop name; calls: %v", model, invocations(fake))
+		}
 	}
 }
 

@@ -328,7 +328,7 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath string, sel runSelection, 
 	plan := runPlan{
 		workflow: sel.label,
 		runnerConfig: taboo.Config{
-			Workshop:   cfg.Workshop,
+			Workshop:   taboo.WorkshopName(cfg.Workshop, profile.Name()),
 			Base:       cfg.Base,
 			Agent:      profile,
 			RepoPath:   repoPath,
