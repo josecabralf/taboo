@@ -128,7 +128,6 @@ func TestInit_RefusesExistingWithoutForce(t *testing.T) {
 func TestInit_RefusesNonDirTaboo(t *testing.T) {
 	t.Parallel()
 	repo := gitRepo(t)
-	// Create .taboo as a FILE, not a directory.
 	if err := os.WriteFile(filepath.Join(repo, ".taboo"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("pre-create .taboo file: %v", err)
 	}

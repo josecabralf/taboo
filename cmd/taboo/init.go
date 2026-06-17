@@ -19,12 +19,9 @@ const defaultBase = "ubuntu@24.04"
 // initOptions are the resolved-or-flag values init scaffolds from. They are
 // filled from flags, defaulted, and (interactively) confirmed via the wizard.
 type initOptions struct {
-	// agent is the chosen agent name.
 	agent string
-	// model is the chosen model.
 	model string
-	// base is the workshop base image.
-	base string
+	base  string
 	// repo is the host repository path (absolute after finalize).
 	repo string
 	// workshop is the workshop name (derived from repo when unset).

@@ -69,8 +69,6 @@ func (a copilot) BuildCommand(opts CommandOptions) AgentCommand {
 	if opts.ResumeSession != "" {
 		argv = append(argv, "--resume="+opts.ResumeSession)
 	}
-	// The prompt rides as the value of -p, which also selects non-interactive mode;
-	// it is always emitted (even empty) because omitting -p would start the TUI.
 	argv = append(argv, "-p", opts.Prompt)
 	return AgentCommand{Argv: argv}
 }

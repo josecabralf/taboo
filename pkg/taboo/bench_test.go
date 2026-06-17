@@ -67,7 +67,6 @@ func (p *phaseTimer) Run(ctx context.Context, c Cmd) error {
 	return err
 }
 
-// stat aggregates one phase's timings.
 type stat struct {
 	verb           string
 	count          int
