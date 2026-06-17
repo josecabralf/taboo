@@ -248,6 +248,7 @@ func TestClean_DryRunEmitsNothing(t *testing.T) {
 }
 
 func TestClean_ConfirmDeclineAborts(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTabooProject(t, root, cleanProjectBody)
 	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
@@ -263,6 +264,34 @@ func TestClean_ConfirmDeclineAborts(t *testing.T) {
 	}
 	if findInvocation(fake, "worktree", "remove") != nil {
 		t.Errorf("a declined clean must mutate nothing; calls: %v", invocations(fake))
+	}
+}
+
+// errReader always fails its Read with a non-EOF error, modeling a broken stdin.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("stdin broken") }
+
+// TestClean_ConfirmReadErrorAborts locks confirmClean's read-error policy: a
+// non-EOF stdin read error is treated as a decline, so the clean aborts cleanly
+// (no error returned, "Aborted." on stderr) and mutates nothing.
+func TestClean_ConfirmReadErrorAborts(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTabooProject(t, root, cleanProjectBody)
+	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+	env.Interactive = func() bool { return true }
+	env.Stdin = errReader{}
+	_, stderr, err := cleanCmd(t, env)
+	if err != nil {
+		t.Fatalf("read-error clean error = %v, want nil", err)
+	}
+	if !strings.Contains(stderr, "Aborted.") {
+		t.Errorf("stderr missing abort notice:\n%s", stderr)
+	}
+	if findInvocation(fake, "worktree", "remove") != nil {
+		t.Errorf("a read-error clean must mutate nothing; calls: %v", invocations(fake))
 	}
 }
 

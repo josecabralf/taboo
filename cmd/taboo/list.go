@@ -78,10 +78,7 @@ func runList(ctx context.Context, env Env, asJSON bool) error {
 		return err
 	}
 
-	var prefix string
-	if cfg.Defaults != nil {
-		prefix = cfg.Defaults.BranchPrefix
-	}
+	prefix := branchPrefix(cfg)
 	branches, err := gatherBranches(ctx, env, repo, prefix)
 	if err != nil {
 		return err

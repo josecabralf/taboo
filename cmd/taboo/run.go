@@ -179,8 +179,16 @@ func promptConfirm(env Env, plan runPlan) (bool, error) {
 	if plan.adhoc {
 		target = "an ad-hoc prompt"
 	}
-	_, _ = fmt.Fprintf(env.Stderr, "About to run %s on branch %q (agent %s, workshop %s). Continue? [y/N] ",
+	msg := fmt.Sprintf("About to run %s on branch %q (agent %s, workshop %s). Continue? [y/N] ",
 		target, plan.branch, plan.runnerConfig.Agent.Name(), plan.runnerConfig.Workshop)
+	return promptYesNo(env, msg)
+}
+
+// promptYesNo prints message to stderr and reads a y/N answer from stdin,
+// returning true only on an explicit "y"/"yes". A blank line, EOF, or anything
+// else declines. A non-EOF read error is returned so the caller can decide.
+func promptYesNo(env Env, message string) (bool, error) {
+	_, _ = fmt.Fprint(env.Stderr, message)
 	line, err := bufio.NewReader(env.Stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err

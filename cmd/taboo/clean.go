@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -48,7 +47,7 @@ func newCleanCmd(env Env) *cobra.Command {
 		Use:   "clean",
 		Short: "Tear down the project's taboo-managed worktrees, workshops, and branches",
 		Long: "clean removes the lifecycle artifacts taboo created for this project. By default it " +
-			"removes the project's worktrees; --workshops also tears down the workshops and --all does " +
+			"removes the project's worktrees; --workshops switches to the workshops instead, and --all does " +
 			"both, while --prune-branches deletes the run branches under the configured branch-prefix. " +
 			"It probes the host through the same command seam as the rest of taboo; --dry-run prints the " +
 			"plan without mutating anything.",
@@ -141,14 +140,16 @@ func planEmpty(plan cleanPlan) bool {
 // --prune-branches. Every probe is read-only.
 func buildCleanPlan(ctx context.Context, env Env, cfg *taboo.ProjectConfig, projectDir, repo, prefix string, opts *cleanOptions) (cleanPlan, error) {
 	plan := cleanPlan{repo: repo, projectDir: projectDir}
-	if opts.all || !opts.workshops {
+	doWorktrees := opts.all || !opts.workshops
+	doWorkshops := opts.all || opts.workshops
+	if doWorktrees {
 		worktrees, err := gatherWorktrees(ctx, env, projectDir, repo)
 		if err != nil {
 			return cleanPlan{}, err
 		}
 		plan.worktrees = worktrees
 	}
-	if opts.all || opts.workshops {
+	if doWorkshops {
 		plan.workshops = provisionedWorkshops(ctx, env, projectDir, cfg)
 	}
 	if opts.pruneBranches {
@@ -218,19 +219,19 @@ func printCleanPlan(w io.Writer, plan cleanPlan) {
 // stdin. It returns true only for an affirmative "y"/"yes"; any read error other than
 // a clean EOF is treated as a decline.
 func confirmClean(env Env, plan cleanPlan) bool {
-	_, _ = fmt.Fprintf(env.Stderr,
-		"About to remove %d worktree(s), tear down %d workshop(s), delete %d branch(es). Continue? [y/N] ",
-		len(plan.worktrees), len(plan.workshops), len(plan.branches))
-	line, err := bufio.NewReader(env.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false
+	var parts []string
+	if n := len(plan.worktrees); n > 0 {
+		parts = append(parts, fmt.Sprintf("remove %d worktree(s)", n))
 	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true
-	default:
-		return false
+	if n := len(plan.workshops); n > 0 {
+		parts = append(parts, fmt.Sprintf("tear down %d workshop(s)", n))
 	}
+	if n := len(plan.branches); n > 0 {
+		parts = append(parts, fmt.Sprintf("delete %d branch(es)", n))
+	}
+	msg := fmt.Sprintf("About to %s. Continue? [y/N] ", strings.Join(parts, ", "))
+	ok, err := promptYesNo(env, msg)
+	return err == nil && ok
 }
 
 // mergedBranches probes `git -C <repo> branch --merged` and returns the set of
@@ -271,7 +272,7 @@ func executeClean(ctx context.Context, env Env, plan cleanPlan) error {
 			errs = append(errs, err)
 			continue
 		}
-		_, _ = fmt.Fprintf(env.Stderr, "removed workshop %s\n", name)
+		_, _ = fmt.Fprintf(env.Stderr, "tore down workshop %s\n", name)
 	}
 	for _, b := range plan.branches {
 		if err := hostRun(ctx, env, "git", "-C", plan.repo, "branch", "-D", b); err != nil {
