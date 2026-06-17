@@ -191,36 +191,6 @@ func TestRun_TracerBullet(t *testing.T) {
 	}
 }
 
-// TestRun_DerivesPerAgentWorkshop asserts the launched workshop name is derived
-// per-agent as "<base>-<agent>", so each distinct agent gets its own workshop.
-// The "fix" workflow inherits the top-level opencode agent (-> demo-opencode);
-// a "refactor" workflow pins claude-code (-> demo-claude-code). The agent name
-// is model-independent, so refactor may inherit the top-level model.
-func TestRun_DerivesPerAgentWorkshop(t *testing.T) {
-	root := t.TempDir()
-	body := runProjectBody +
-		"  refactor:\n    agent: claude-code\n    prompt: refactor it\n"
-	writeTabooProject(t, root, body)
-
-	fakeRefactor := newRunFake()
-	envRefactor := configEnv(t, fakeRefactor, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
-	if _, _, err := runCmd(t, envRefactor, "refactor"); err != nil {
-		t.Fatalf("run refactor error = %v, want nil", err)
-	}
-	if findInvocation(fakeRefactor, "launch", "demo-claude-code") == nil {
-		t.Errorf("expected launch of demo-claude-code; calls: %v", invocations(fakeRefactor))
-	}
-
-	fakeFix := newRunFake()
-	envFix := configEnv(t, fakeFix, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
-	if _, _, err := runCmd(t, envFix, "fix"); err != nil {
-		t.Fatalf("run fix error = %v, want nil", err)
-	}
-	if findInvocation(fakeFix, "launch", "demo-opencode") == nil {
-		t.Errorf("expected launch of demo-opencode; calls: %v", invocations(fakeFix))
-	}
-}
-
 // TestRun_PerAgentWorkshopProvisioning locks the provisioning behavior across
 // runs that share a workshop world (one stateful fake that remembers which
 // workshops were launched): two workflows with different agents each provision
@@ -249,9 +219,6 @@ func TestRun_PerAgentWorkshopProvisioning(t *testing.T) {
 		if got := countInvocations(fake, "launch", claudeWS); got != 1 {
 			t.Errorf("launches of %q = %d, want 1; calls: %v", claudeWS, got, invocations(fake))
 		}
-		if opencodeWS == claudeWS {
-			t.Errorf("derived workshop names must differ: %q == %q", opencodeWS, claudeWS)
-		}
 	})
 
 	t.Run("same agent reuses one workshop", func(t *testing.T) {
@@ -276,14 +243,12 @@ func TestRun_PerAgentWorkshopProvisioning(t *testing.T) {
 	})
 }
 
-// TestRun_ModelVariationReusesWorkshop locks the acceptance criterion that
-// varying ONLY the model between two workflows of the same agent shares one
-// workshop: model is excluded from WorkshopName by design (the derived name is
-// "<base>-<agent>", model-independent). The "fix" workflow uses the top-level
-// model anthropic/claude; a "tune" workflow inherits the same opencode agent
-// but pins a different model openai/gpt-4o. On one stateful fake, running both
-// produces exactly one launch of demo-opencode (the second reuses it), and no
-// launch carries a model string.
+// TestRun_ModelVariationReusesWorkshop locks the acceptance criterion that two
+// workflows of the same agent differing only in model share one workshop, since
+// model is excluded from WorkshopName by design. The "fix" workflow uses the
+// top-level model anthropic/claude; a "tune" workflow inherits the same opencode
+// agent but pins openai/gpt-4o. Running both produces exactly one launch of
+// demo-opencode (the second reuses it), and no launch carries a model string.
 func TestRun_ModelVariationReusesWorkshop(t *testing.T) {
 	root := t.TempDir()
 	body := runProjectBody +
