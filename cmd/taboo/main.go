@@ -52,6 +52,7 @@ func newRootCmd(env Env) *cobra.Command {
 	root.AddCommand(newValidateCmd(env))
 	root.AddCommand(newRunCmd(env))
 	root.AddCommand(newListCmd(env))
+	root.AddCommand(newCleanCmd(env))
 	return root
 }
 
