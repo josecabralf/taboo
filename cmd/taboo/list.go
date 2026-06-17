@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -14,9 +15,9 @@ import (
 )
 
 // newListCmd builds the `list` subcommand: a read-only, per-.taboo lifecycle
-// view of the project's workshops (and, in later cycles, its worktrees and
-// branches). It loads the project config and probes the host through the
-// Commander seam to report current state, mutating nothing.
+// view of the project's workshops, worktrees, and branches. It loads the
+// project config and probes the host through the Commander seam to report
+// current state, mutating nothing.
 func newListCmd(env Env) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
@@ -88,6 +89,17 @@ func runList(ctx context.Context, env Env, asJSON bool) error {
 
 	result := jsonListResult{Workshops: workshops, Worktrees: worktrees, Branches: branches}
 	if asJSON {
+		// Coerce nil sections to empty slices so they marshal as the
+		// conventional machine shape [] rather than null.
+		if result.Workshops == nil {
+			result.Workshops = []jsonWorkshop{}
+		}
+		if result.Worktrees == nil {
+			result.Worktrees = []jsonWorktree{}
+		}
+		if result.Branches == nil {
+			result.Branches = []string{}
+		}
 		enc := json.NewEncoder(env.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(result)
@@ -102,28 +114,32 @@ func runList(ctx context.Context, env Env, asJSON bool) error {
 func renderListResult(env Env, r jsonListResult) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo list — workshops, worktrees, branches")
 
-	_, _ = fmt.Fprintln(env.Stdout, "workshops:")
-	if len(r.Workshops) == 0 {
-		_, _ = fmt.Fprintln(env.Stdout, "  (none)")
-	}
+	workshops := make([]string, 0, len(r.Workshops))
 	for _, w := range r.Workshops {
-		_, _ = fmt.Fprintf(env.Stdout, "  %s  %s\n", w.Name, w.Status)
+		workshops = append(workshops, w.Name+"  "+w.Status)
 	}
+	renderSection(env.Stdout, "workshops:", workshops)
 
-	_, _ = fmt.Fprintln(env.Stdout, "worktrees:")
-	if len(r.Worktrees) == 0 {
-		_, _ = fmt.Fprintln(env.Stdout, "  (none)")
-	}
+	worktrees := make([]string, 0, len(r.Worktrees))
 	for _, w := range r.Worktrees {
-		_, _ = fmt.Fprintf(env.Stdout, "  %s  %s\n", w.Branch, w.Path)
+		worktrees = append(worktrees, w.Branch+"  "+w.Path)
 	}
+	renderSection(env.Stdout, "worktrees:", worktrees)
 
-	_, _ = fmt.Fprintln(env.Stdout, "branches:")
-	if len(r.Branches) == 0 {
-		_, _ = fmt.Fprintln(env.Stdout, "  (none)")
+	renderSection(env.Stdout, "branches:", r.Branches)
+}
+
+// renderSection writes one section of the human view: the header line, then the
+// pre-formatted lines indented two spaces, falling back to "  (none)" when there
+// are none.
+func renderSection(w io.Writer, header string, lines []string) {
+	_, _ = fmt.Fprintln(w, header)
+	if len(lines) == 0 {
+		_, _ = fmt.Fprintln(w, "  (none)")
+		return
 	}
-	for _, b := range r.Branches {
-		_, _ = fmt.Fprintf(env.Stdout, "  %s\n", b)
+	for _, line := range lines {
+		_, _ = fmt.Fprintf(w, "  %s\n", line)
 	}
 }
 
@@ -170,40 +186,36 @@ func gatherWorktrees(ctx context.Context, env Env, projectDir, repo string) ([]j
 	managedRoot := filepath.Join(projectDir, "worktrees")
 	var wts []jsonWorktree
 	for _, wt := range parseWorktrees(out) {
-		if !underDir(wt.path, managedRoot) {
+		if !underDir(wt.Path, managedRoot) {
 			continue
 		}
-		wts = append(wts, jsonWorktree{Branch: wt.branch, Path: wt.path})
+		wts = append(wts, wt)
 	}
 	return wts, nil
 }
 
-// worktree is one entry from `git worktree list --porcelain`.
-type worktree struct {
-	path   string
-	branch string
-}
-
 // parseWorktrees splits porcelain output (blank-line-separated entries) into
-// worktrees, reading the "worktree <path>" and "branch refs/heads/<name>" lines.
-// An entry with no branch line (detached HEAD) gets branch "(detached)".
-func parseWorktrees(out string) []worktree {
-	var wts []worktree
+// jsonWorktree entries, reading the "worktree <path>" and "branch
+// refs/heads/<name>" lines into the Path and Branch fields. An entry with no
+// branch line (detached HEAD) gets branch "(detached)"; an entry with no path is
+// skipped.
+func parseWorktrees(out string) []jsonWorktree {
+	var wts []jsonWorktree
 	for _, block := range strings.Split(out, "\n\n") {
-		var wt worktree
+		var wt jsonWorktree
 		for _, line := range strings.Split(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "worktree "):
-				wt.path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+				wt.Path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
 			case strings.HasPrefix(line, "branch refs/heads/"):
-				wt.branch = strings.TrimSpace(strings.TrimPrefix(line, "branch refs/heads/"))
+				wt.Branch = strings.TrimSpace(strings.TrimPrefix(line, "branch refs/heads/"))
 			}
 		}
-		if wt.path == "" {
+		if wt.Path == "" {
 			continue
 		}
-		if wt.branch == "" {
-			wt.branch = "(detached)"
+		if wt.Branch == "" {
+			wt.Branch = "(detached)"
 		}
 		wts = append(wts, wt)
 	}
