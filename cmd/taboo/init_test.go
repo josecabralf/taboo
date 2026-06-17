@@ -176,6 +176,28 @@ func TestInit_TemplateScaffoldsGo(t *testing.T) {
 		t.Errorf("go.mod should not contain replace\nfull:\n%s", goMod)
 	}
 
+	// Fanout: --template fanout scaffolds the richer pool/structured-output main.go.
+	root4 := gitRepo(t)
+	env4 := initEnv(t, &fakeCommander{}, root4)
+	if _, err := runInit(t, env4,
+		"--agent", "opencode", "--model", "m", "--repo", root4, "--template", "fanout"); err != nil {
+		t.Fatalf("init --template fanout error = %v, want nil", err)
+	}
+	for _, name := range []string{"main.go", "go.mod"} {
+		if _, statErr := os.Stat(filepath.Join(root4, ".taboo", name)); statErr != nil {
+			t.Errorf("--template fanout should write %s: %v", name, statErr)
+		}
+	}
+	fanoutMain, err := os.ReadFile(filepath.Join(root4, ".taboo", "main.go"))
+	if err != nil {
+		t.Fatalf("read fanout main.go: %v", err)
+	}
+	for _, want := range []string{"NewPool", "JSONResult"} {
+		if !strings.Contains(string(fanoutMain), want) {
+			t.Errorf("--template fanout main.go missing %q\nfull:\n%s", want, fanoutMain)
+		}
+	}
+
 	// Bogus: an unknown --template fails fast before writing .taboo.
 	root3 := gitRepo(t)
 	env3 := initEnv(t, &fakeCommander{}, root3)
@@ -186,6 +208,26 @@ func TestInit_TemplateScaffoldsGo(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(root3, ".taboo")); !os.IsNotExist(statErr) {
 		t.Errorf(".taboo should not exist after a rejected --template, stat err = %v", statErr)
+	}
+}
+
+// TestValidateTemplate asserts the three valid templates pass and an unknown one
+// errors with a message that lists every valid name.
+func TestValidateTemplate(t *testing.T) {
+	t.Parallel()
+	for _, ok := range []string{"none", "single", "fanout"} {
+		if err := validateTemplate(ok); err != nil {
+			t.Errorf("validateTemplate(%q) = %v, want nil", ok, err)
+		}
+	}
+	err := validateTemplate("bogus")
+	if err == nil {
+		t.Fatal("validateTemplate(\"bogus\") = nil, want error")
+	}
+	for _, name := range []string{"none", "single", "fanout"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error %q does not list valid template %q", err.Error(), name)
+		}
 	}
 }
 
@@ -357,6 +399,67 @@ func TestInit_NextStepsAndDoctorOffer(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(out), "next steps") {
 		t.Errorf("output missing next steps\nfull:\n%s", out)
+	}
+}
+
+// TestInit_NextStepsAreGatedAndSequential asserts the trailing next-steps are
+// gated on the seeded workflows / Go scaffold and that, however many apply, they
+// stay sequentially numbered after the three fixed steps (no skipped numbers).
+func TestInit_NextStepsAreGatedAndSequential(t *testing.T) {
+	t.Parallel()
+
+	// Default run: suggests the first workflow run, but not the Go scaffold.
+	repo := gitRepo(t)
+	env := initEnv(t, &fakeCommander{}, repo)
+	out, err := runInit(t, env, "--agent", "opencode", "--model", "m", "--repo", repo)
+	if err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+	if !strings.Contains(out, "run fix") {
+		t.Errorf("default run should suggest `taboo run fix`\nfull:\n%s", out)
+	}
+	if strings.Contains(out, "go run .") {
+		t.Errorf("default run should not suggest the Go scaffold\nfull:\n%s", out)
+	}
+
+	// --workflows none: omits the `run fix` suggestion.
+	repo2 := gitRepo(t)
+	env2 := initEnv(t, &fakeCommander{}, repo2)
+	out2, err := runInit(t, env2,
+		"--agent", "opencode", "--model", "m", "--repo", repo2, "--workflows", "none")
+	if err != nil {
+		t.Fatalf("init --workflows none error = %v", err)
+	}
+	if strings.Contains(out2, "run fix") {
+		t.Errorf("--workflows none should omit the `run fix` suggestion\nfull:\n%s", out2)
+	}
+
+	// --template single: suggests building the Go scaffold.
+	repo3 := gitRepo(t)
+	env3 := initEnv(t, &fakeCommander{}, repo3)
+	out3, err := runInit(t, env3,
+		"--agent", "opencode", "--model", "m", "--repo", repo3, "--template", "single")
+	if err != nil {
+		t.Fatalf("init --template single error = %v", err)
+	}
+	if !strings.Contains(out3, "go mod tidy && go run .") {
+		t.Errorf("--template single should suggest the Go scaffold\nfull:\n%s", out3)
+	}
+
+	// --workflows none --template single: with the workflow step skipped, the Go
+	// scaffold step must number 4 (not 5), proving the trailing steps renumber.
+	repo4 := gitRepo(t)
+	env4 := initEnv(t, &fakeCommander{}, repo4)
+	out4, err := runInit(t, env4,
+		"--agent", "opencode", "--model", "m", "--repo", repo4, "--workflows", "none", "--template", "single")
+	if err != nil {
+		t.Fatalf("init --workflows none --template single error = %v", err)
+	}
+	if !strings.Contains(out4, "  4. Build the Go scaffold:") {
+		t.Errorf("scaffold step should be numbered 4 with the workflow step skipped\nfull:\n%s", out4)
+	}
+	if strings.Contains(out4, "  5. ") {
+		t.Errorf("next steps should have no gap (no step 5)\nfull:\n%s", out4)
 	}
 }
 

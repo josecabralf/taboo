@@ -38,9 +38,11 @@ type initOptions struct {
 }
 
 // newInitCmd builds the `init` subcommand. It scaffolds a .taboo/ directory into
-// a target repo, collecting agent/model/base/repo interactively (a huh wizard)
-// or non-interactively (one flag per prompt). It writes taboo.yaml, .gitignore,
-// and .env.example, never launches a workshop, and prints next steps.
+// a target repo, collecting agent/model/base/repo (and, in the wizard, whether to
+// seed workflows and which Go template) interactively (a huh wizard) or
+// non-interactively (one flag per prompt). It writes taboo.yaml, .gitignore, and
+// .env.example, seeds the example workflow prompts unless opted out, optionally
+// scaffolds a Go main.go + go.mod, never launches a workshop, and prints next steps.
 func newInitCmd(env Env) *cobra.Command {
 	opts := initOptions{}
 	cmd := &cobra.Command{
@@ -66,7 +68,7 @@ func newInitCmd(env Env) *cobra.Command {
 	cmd.Flags().StringVar(&opts.base, "base", "", "workshop base image (default: "+defaultBase+")")
 	cmd.Flags().StringVar(&opts.repo, "repo", "", "host repository path to scaffold into (default: current directory)")
 	cmd.Flags().StringVar(&opts.workshop, "workshop", "", "workshop name (default: derived from the repo directory name)")
-	cmd.Flags().StringVar(&opts.workflows, "workflows", "", "example workflows to seed (default: fix, refactor); pass \"none\" to skip")
+	cmd.Flags().StringVar(&opts.workflows, "workflows", "", "seed the example fix and refactor workflows (default); pass \"none\" to skip")
 	cmd.Flags().StringVar(&opts.template, "template", "none", "scaffold a Go main.go: none (default), single, or fanout")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "regenerate the scaffold files in an existing .taboo directory")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "list the files init would write without writing them")
@@ -263,13 +265,19 @@ func printNextSteps(env Env, opts *initOptions, projectDir string) {
 	_, _ = fmt.Fprintf(env.Stdout, "  2. Review %s and adjust as needed.\n",
 		filepath.Join(projectDir, "taboo.yaml"))
 	_, _ = fmt.Fprintln(env.Stdout, "  3. Run `taboo doctor` to verify your host is ready.")
+	// The trailing steps are each conditional, so collect the ones that apply and
+	// number them sequentially after the three fixed steps — no skipped numbers.
+	var extra []string
 	// Only suggest the first run when the example workflows were actually seeded.
 	if opts.workflows != "none" {
-		_, _ = fmt.Fprintln(env.Stdout, "  4. Try `taboo run fix` (or edit prompts/ and taboo.yaml).")
+		extra = append(extra, "Try `taboo run fix` (or edit prompts/ and taboo.yaml).")
 	}
 	// Only suggest building the Go scaffold when --template emitted one.
 	if opts.template != "none" {
-		_, _ = fmt.Fprintf(env.Stdout, "  5. Build the Go scaffold: cd %s && go mod tidy && go run .\n", projectDir)
+		extra = append(extra, fmt.Sprintf("Build the Go scaffold: cd %s && go mod tidy && go run .", projectDir))
+	}
+	for i, step := range extra {
+		_, _ = fmt.Fprintf(env.Stdout, "  %d. %s\n", i+4, step)
 	}
 }
 

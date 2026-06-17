@@ -84,9 +84,10 @@ func TestPlan_SeedsPromptFiles(t *testing.T) {
 }
 
 // TestPlan_TemplateSingle asserts plan() adds a parseable main.go (importing
-// pkg/taboo and calling LoadConfig) and a go.mod that pins the taboo library to
-// the exact libraryVersion with no replace and no @latest when Template is
-// "single", and adds neither file when Template is "none".
+// pkg/taboo and calling LoadConfig) and a go.mod that names the module after the
+// workshop, carries the go directive, and pins the taboo library to the exact
+// libraryVersion with no replace and no @-pinned/latest version when Template is
+// "single", and adds neither file when Template is "none" or empty.
 func TestPlan_TemplateSingle(t *testing.T) {
 	t.Parallel()
 	in := newScaffoldInputs(t, "opencode", "some/model")
@@ -119,19 +120,31 @@ func TestPlan_TemplateSingle(t *testing.T) {
 		t.Fatalf("plan() missing go.mod")
 	}
 	mod := string(byPath["go.mod"])
-	if !strings.Contains(mod, "module ") {
-		t.Errorf("go.mod missing module directive\nfull:\n%s", mod)
+	// newScaffoldInputs uses Workshop "demo", and renderGoMod names the module
+	// after the workshop — lock that naming contract, not just any module line.
+	if !strings.Contains(mod, "module demo\n") {
+		t.Errorf("go.mod should name the module after the workshop (module demo)\nfull:\n%s", mod)
 	}
-	if !strings.Contains(mod, "require github.com/josecabralf/taboo "+libraryVersion) {
-		t.Errorf("go.mod missing pinned require for %q\nfull:\n%s", libraryVersion, mod)
+	if !strings.Contains(mod, "go "+scaffoldGoVersion) {
+		t.Errorf("go.mod missing go directive for %q\nfull:\n%s", scaffoldGoVersion, mod)
+	}
+	// The reproducibility contract: the require line pins the exact libraryVersion
+	// — no @-pinned pseudo-version, no @latest, no replace override.
+	wantRequire := "require github.com/josecabralf/taboo " + libraryVersion + "\n"
+	if !strings.Contains(mod, wantRequire) {
+		t.Errorf("go.mod must pin the exact library version %q\nfull:\n%s", libraryVersion, mod)
 	}
 	if strings.Contains(mod, "replace") {
 		t.Errorf("go.mod must not contain replace\nfull:\n%s", mod)
+	}
+	if strings.Contains(mod, "@") {
+		t.Errorf("go.mod must not @-pin a version\nfull:\n%s", mod)
 	}
 	if strings.Contains(mod, "latest") {
 		t.Errorf("go.mod must not contain latest\nfull:\n%s", mod)
 	}
 
+	// none: emits no Go files.
 	off := newScaffoldInputs(t, "opencode", "some/model")
 	off.Template = "none"
 	offFiles, err := off.plan()
@@ -141,6 +154,22 @@ func TestPlan_TemplateSingle(t *testing.T) {
 	for _, f := range offFiles {
 		if f.Path == "main.go" || f.Path == "go.mod" {
 			t.Errorf("plan() with Template none emitted %q", f.Path)
+		}
+	}
+
+	// Empty (the zero value from newScaffoldInputs) is treated like "none": plan()
+	// guards on Template != "" && != "none", so neither Go file is emitted.
+	zero := newScaffoldInputs(t, "opencode", "some/model")
+	if zero.Template != "" {
+		t.Fatalf("newScaffoldInputs Template = %q, want zero value", zero.Template)
+	}
+	zeroFiles, err := zero.plan()
+	if err != nil {
+		t.Fatalf("plan() (empty template): %v", err)
+	}
+	for _, f := range zeroFiles {
+		if f.Path == "main.go" || f.Path == "go.mod" {
+			t.Errorf("plan() with empty Template emitted %q", f.Path)
 		}
 	}
 }

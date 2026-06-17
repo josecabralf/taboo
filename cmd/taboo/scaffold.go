@@ -175,8 +175,8 @@ func run(ctx context.Context) error {
 // the taboo library. ` + "`taboo init --template single`" + ` scaffolds it as a skeleton
 // to grow into fan-out or structured output (see
 // github.com/josecabralf/taboo/pkg/taboo). It reads the same taboo.yaml the CLI
-// uses, so graduating from ` + "`taboo run`" + ` to ` + "`go run .`" + ` needs no config
-// re-specification.
+// uses, so moving from ` + "`taboo run`" + ` to ` + "`go run .`" + ` reuses the same config
+// with no extra setup.
 package main
 
 import (
