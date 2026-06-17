@@ -5,13 +5,15 @@
 #
 #   - make            drives the targets (CI calls `workshop run make <target>`)
 #   - git             commander unit tests run `git version`
+#   - gcc, libc6-dev  `make test-race` — the race detector needs cgo, a C
+#                     compiler, and the libc headers (gcc alone omits them)
 #   - golangci-lint   `make lint` (not bundled by the go SDK)
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-apt-get install -y make git curl
+apt-get install -y make git curl gcc libc6-dev
 
 # --- golangci-lint ---------------------------------------------------------
 # Pin the same version CI uses (see .github/workflows/ci.yml).
