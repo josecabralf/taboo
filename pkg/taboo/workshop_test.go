@@ -6,6 +6,27 @@ import (
 	"time"
 )
 
+func TestWorkshopName(t *testing.T) {
+	tests := []struct {
+		name  string
+		base  string
+		agent string
+		want  string
+	}{
+		{name: "opencode", base: "demo", agent: "opencode", want: "demo-opencode"},
+		{name: "claude-code", base: "demo", agent: "claude-code", want: "demo-claude-code"},
+		{name: "copilot", base: "myrepo", agent: "copilot", want: "myrepo-copilot"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := WorkshopName(tt.base, tt.agent); got != tt.want {
+				t.Errorf("WorkshopName(%q, %q) = %q, want %q", tt.base, tt.agent, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWorkshopArgs(t *testing.T) {
 	const project = "/var/taboo/proj"
 	const ws = "taboo-run"
