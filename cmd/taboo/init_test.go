@@ -69,6 +69,126 @@ func TestInit_TracerBullet(t *testing.T) {
 	}
 }
 
+// TestInit_SeedsWorkflowsByDefault asserts init is batteries-included: a default
+// run seeds the fix/refactor workflows and their prompt files, while
+// --workflows none opts out, leaving no workflows and no prompts/ directory.
+func TestInit_SeedsWorkflowsByDefault(t *testing.T) {
+	t.Parallel()
+
+	// Default case: workflows and prompt files are seeded.
+	root := gitRepo(t)
+	fake := &fakeCommander{}
+	env := initEnv(t, fake, root)
+	if _, err := runInit(t, env, "--agent", "opencode", "--model", "m", "--repo", root); err != nil {
+		t.Fatalf("init error = %v, want nil", err)
+	}
+	cfg, err := taboo.LoadConfig(filepath.Join(root, ".taboo", "taboo.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.DefaultWorkflow != "fix" {
+		t.Errorf("cfg.DefaultWorkflow = %q, want %q", cfg.DefaultWorkflow, "fix")
+	}
+	for _, key := range []string{"fix", "refactor"} {
+		if _, ok := cfg.Workflows[key]; !ok {
+			t.Errorf("cfg.Workflows missing %q: %v", key, cfg.Workflows)
+		}
+	}
+	for _, name := range []string{"fix.md", "refactor.md"} {
+		if _, statErr := os.Stat(filepath.Join(root, ".taboo", "prompts", name)); statErr != nil {
+			t.Errorf("expected prompts/%s written: %v", name, statErr)
+		}
+	}
+	profile, _ := taboo.NewProfile("opencode", "m")
+	envExample, err := os.ReadFile(filepath.Join(root, ".taboo", ".env.example"))
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	for _, k := range profile.CredentialEnvKeys() {
+		if !strings.Contains(string(envExample), k+"=") {
+			t.Errorf(".env.example missing %q\nfull:\n%s", k+"=", envExample)
+		}
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("init made %d Commander calls, want 0: %v", len(fake.calls), invocations(fake))
+	}
+
+	// Opt-out case: --workflows none leaves no workflows and no prompts/ dir.
+	root2 := gitRepo(t)
+	env2 := initEnv(t, &fakeCommander{}, root2)
+	if _, err := runInit(t, env2,
+		"--agent", "opencode", "--model", "m", "--repo", root2, "--workflows", "none"); err != nil {
+		t.Fatalf("init --workflows none error = %v, want nil", err)
+	}
+	cfg2, err := taboo.LoadConfig(filepath.Join(root2, ".taboo", "taboo.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfig (opt-out): %v", err)
+	}
+	if len(cfg2.Workflows) != 0 {
+		t.Errorf("cfg.Workflows = %v, want empty with --workflows none", cfg2.Workflows)
+	}
+	if cfg2.DefaultWorkflow != "" {
+		t.Errorf("cfg.DefaultWorkflow = %q, want empty with --workflows none", cfg2.DefaultWorkflow)
+	}
+	if _, statErr := os.Stat(filepath.Join(root2, ".taboo", "prompts")); !os.IsNotExist(statErr) {
+		t.Errorf("prompts/ should not exist with --workflows none, stat err = %v", statErr)
+	}
+}
+
+// TestInit_TemplateScaffoldsGo asserts the --template flag gates the optional Go
+// scaffold: default writes no Go, single writes a reproducible main.go + go.mod,
+// and a bogus value is rejected before anything is written.
+func TestInit_TemplateScaffoldsGo(t *testing.T) {
+	t.Parallel()
+
+	// Default: no --template scaffolds neither Go file.
+	root := gitRepo(t)
+	env := initEnv(t, &fakeCommander{}, root)
+	if _, err := runInit(t, env, "--agent", "opencode", "--model", "m", "--repo", root); err != nil {
+		t.Fatalf("init error = %v, want nil", err)
+	}
+	for _, name := range []string{"main.go", "go.mod"} {
+		if _, statErr := os.Stat(filepath.Join(root, ".taboo", name)); !os.IsNotExist(statErr) {
+			t.Errorf("default run should not write %s, stat err = %v", name, statErr)
+		}
+	}
+
+	// Single: --template single scaffolds main.go and a reproducible go.mod.
+	root2 := gitRepo(t)
+	env2 := initEnv(t, &fakeCommander{}, root2)
+	if _, err := runInit(t, env2,
+		"--agent", "opencode", "--model", "m", "--repo", root2, "--template", "single"); err != nil {
+		t.Fatalf("init --template single error = %v, want nil", err)
+	}
+	for _, name := range []string{"main.go", "go.mod"} {
+		if _, statErr := os.Stat(filepath.Join(root2, ".taboo", name)); statErr != nil {
+			t.Errorf("--template single should write %s: %v", name, statErr)
+		}
+	}
+	goMod, err := os.ReadFile(filepath.Join(root2, ".taboo", "go.mod"))
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	if !strings.Contains(string(goMod), "require github.com/josecabralf/taboo ") {
+		t.Errorf("go.mod missing pinned require\nfull:\n%s", goMod)
+	}
+	if strings.Contains(string(goMod), "replace") {
+		t.Errorf("go.mod should not contain replace\nfull:\n%s", goMod)
+	}
+
+	// Bogus: an unknown --template fails fast before writing .taboo.
+	root3 := gitRepo(t)
+	env3 := initEnv(t, &fakeCommander{}, root3)
+	_, err = runInit(t, env3,
+		"--agent", "opencode", "--model", "m", "--repo", root3, "--template", "bogus")
+	if err == nil || !strings.Contains(err.Error(), "template") {
+		t.Fatalf("init --template bogus error = %v, want one mentioning 'template'", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root3, ".taboo")); !os.IsNotExist(statErr) {
+		t.Errorf(".taboo should not exist after a rejected --template, stat err = %v", statErr)
+	}
+}
+
 // TestInit_DryRunWritesNothing asserts --dry-run lists each target file path and
 // writes no files.
 func TestInit_DryRunWritesNothing(t *testing.T) {

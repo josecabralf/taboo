@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/x/term"
@@ -26,6 +27,10 @@ type initOptions struct {
 	repo string
 	// workshop is the workshop name (derived from repo when unset).
 	workshop string
+	// workflows selects which example workflows to seed; "none" opts out (default: seed fix and refactor).
+	workflows string
+	// template selects the optional Go scaffold: "none" (default), "single", or "fanout".
+	template string
 	// force overwrites an existing .taboo when true.
 	force bool
 	// dryRun lists the files it would write and touches nothing when true.
@@ -61,6 +66,8 @@ func newInitCmd(env Env) *cobra.Command {
 	cmd.Flags().StringVar(&opts.base, "base", "", "workshop base image (default: "+defaultBase+")")
 	cmd.Flags().StringVar(&opts.repo, "repo", "", "host repository path to scaffold into (default: current directory)")
 	cmd.Flags().StringVar(&opts.workshop, "workshop", "", "workshop name (default: derived from the repo directory name)")
+	cmd.Flags().StringVar(&opts.workflows, "workflows", "", "example workflows to seed (default: fix, refactor); pass \"none\" to skip")
+	cmd.Flags().StringVar(&opts.template, "template", "none", "scaffold a Go main.go: none (default), single, or fanout")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "regenerate the scaffold files in an existing .taboo directory")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "list the files init would write without writing them")
 	return cmd
@@ -71,6 +78,10 @@ func newInitCmd(env Env) *cobra.Command {
 // profile, refuses to clobber an existing .taboo without --force, and either
 // previews (--dry-run) or writes the scaffold and prints next steps.
 func runInitCmd(env Env, opts *initOptions) error {
+	// Reject an unknown --template before any side effects (wizard, writes).
+	if err := validateTemplate(opts.template); err != nil {
+		return err
+	}
 	if err := applyDefaults(env, opts); err != nil {
 		return err
 	}
@@ -108,6 +119,9 @@ func runInitCmd(env Env, opts *initOptions) error {
 		Agent:    opts.agent,
 		Model:    opts.model,
 		Profile:  profile,
+		// Seed the example workflows unless the user opted out with --workflows none.
+		SeedWorkflows: opts.workflows != "none",
+		Template:      opts.template,
 	}
 	files, err := in.plan()
 	if err != nil {
@@ -122,6 +136,17 @@ func runInitCmd(env Env, opts *initOptions) error {
 	}
 	printNextSteps(env, opts, projectDir)
 	return nil
+}
+
+// validTemplates are the accepted --template values; "none" scaffolds no Go.
+var validTemplates = []string{"none", "single", "fanout"}
+
+// validateTemplate rejects an unknown --template value, naming the valid set.
+func validateTemplate(t string) error {
+	if slices.Contains(validTemplates, t) {
+		return nil
+	}
+	return fmt.Errorf("unknown template %q; valid templates: %s", t, strings.Join(validTemplates, ", "))
 }
 
 // applyDefaults fills the pre-wizard defaults: base falls back to defaultBase
@@ -238,6 +263,14 @@ func printNextSteps(env Env, opts *initOptions, projectDir string) {
 	_, _ = fmt.Fprintf(env.Stdout, "  2. Review %s and adjust as needed.\n",
 		filepath.Join(projectDir, "taboo.yaml"))
 	_, _ = fmt.Fprintln(env.Stdout, "  3. Run `taboo doctor` to verify your host is ready.")
+	// Only suggest the first run when the example workflows were actually seeded.
+	if opts.workflows != "none" {
+		_, _ = fmt.Fprintln(env.Stdout, "  4. Try `taboo run fix` (or edit prompts/ and taboo.yaml).")
+	}
+	// Only suggest building the Go scaffold when --template emitted one.
+	if opts.template != "none" {
+		_, _ = fmt.Fprintf(env.Stdout, "  5. Build the Go scaffold: cd %s && go mod tidy && go run .\n", projectDir)
+	}
 }
 
 // isInteractive reports whether stdin is a real terminal we can run the wizard

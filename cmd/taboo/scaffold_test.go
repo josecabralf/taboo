@@ -1,6 +1,8 @@
 package main
 
 import (
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -48,6 +50,133 @@ func TestPlan_StableOrder(t *testing.T) {
 	}
 }
 
+// TestPlan_SeedsPromptFiles asserts plan() appends non-empty prompts/fix.md and
+// prompts/refactor.md when SeedWorkflows is set, and emits no prompts/ files when
+// it is not.
+func TestPlan_SeedsPromptFiles(t *testing.T) {
+	t.Parallel()
+	in := newScaffoldInputs(t, "opencode", "some/model")
+	in.SeedWorkflows = true
+	files, err := in.plan()
+	if err != nil {
+		t.Fatalf("plan(): %v", err)
+	}
+	byPath := map[string][]byte{}
+	for _, f := range files {
+		byPath[f.Path] = f.Contents
+	}
+	for _, want := range []string{"prompts/fix.md", "prompts/refactor.md"} {
+		if len(byPath[want]) == 0 {
+			t.Errorf("plan() missing or empty %q", want)
+		}
+	}
+
+	off := newScaffoldInputs(t, "opencode", "some/model")
+	offFiles, err := off.plan()
+	if err != nil {
+		t.Fatalf("plan() (no seed): %v", err)
+	}
+	for _, f := range offFiles {
+		if strings.HasPrefix(f.Path, "prompts/") {
+			t.Errorf("plan() without SeedWorkflows emitted %q", f.Path)
+		}
+	}
+}
+
+// TestPlan_TemplateSingle asserts plan() adds a parseable main.go (importing
+// pkg/taboo and calling LoadConfig) and a go.mod that pins the taboo library to
+// the exact libraryVersion with no replace and no @latest when Template is
+// "single", and adds neither file when Template is "none".
+func TestPlan_TemplateSingle(t *testing.T) {
+	t.Parallel()
+	in := newScaffoldInputs(t, "opencode", "some/model")
+	in.Template = "single"
+	files, err := in.plan()
+	if err != nil {
+		t.Fatalf("plan(): %v", err)
+	}
+	byPath := map[string][]byte{}
+	for _, f := range files {
+		byPath[f.Path] = f.Contents
+	}
+
+	if byPath["main.go"] == nil {
+		t.Fatalf("plan() missing main.go")
+	}
+	fset := token.NewFileSet()
+	if _, perr := parser.ParseFile(fset, "main.go", byPath["main.go"], parser.AllErrors); perr != nil {
+		t.Errorf("main.go does not parse: %v", perr)
+	}
+	main := string(byPath["main.go"])
+	if !strings.Contains(main, "github.com/josecabralf/taboo/pkg/taboo") {
+		t.Errorf("main.go missing taboo import\nfull:\n%s", main)
+	}
+	if !strings.Contains(main, "LoadConfig") {
+		t.Errorf("main.go missing LoadConfig call\nfull:\n%s", main)
+	}
+
+	if byPath["go.mod"] == nil {
+		t.Fatalf("plan() missing go.mod")
+	}
+	mod := string(byPath["go.mod"])
+	if !strings.Contains(mod, "module ") {
+		t.Errorf("go.mod missing module directive\nfull:\n%s", mod)
+	}
+	if !strings.Contains(mod, "require github.com/josecabralf/taboo "+libraryVersion) {
+		t.Errorf("go.mod missing pinned require for %q\nfull:\n%s", libraryVersion, mod)
+	}
+	if strings.Contains(mod, "replace") {
+		t.Errorf("go.mod must not contain replace\nfull:\n%s", mod)
+	}
+	if strings.Contains(mod, "latest") {
+		t.Errorf("go.mod must not contain latest\nfull:\n%s", mod)
+	}
+
+	off := newScaffoldInputs(t, "opencode", "some/model")
+	off.Template = "none"
+	offFiles, err := off.plan()
+	if err != nil {
+		t.Fatalf("plan() (none): %v", err)
+	}
+	for _, f := range offFiles {
+		if f.Path == "main.go" || f.Path == "go.mod" {
+			t.Errorf("plan() with Template none emitted %q", f.Path)
+		}
+	}
+}
+
+// TestPlan_TemplateFanout asserts plan() adds a parseable main.go that
+// demonstrates parallel fan-out (taboo.NewPool) and structured output
+// (taboo.JSONResult) when Template is "fanout".
+func TestPlan_TemplateFanout(t *testing.T) {
+	t.Parallel()
+	in := newScaffoldInputs(t, "opencode", "some/model")
+	in.Template = "fanout"
+	files, err := in.plan()
+	if err != nil {
+		t.Fatalf("plan(): %v", err)
+	}
+	byPath := map[string][]byte{}
+	for _, f := range files {
+		byPath[f.Path] = f.Contents
+	}
+
+	if byPath["main.go"] == nil {
+		t.Fatalf("plan() missing main.go")
+	}
+	fset := token.NewFileSet()
+	if _, perr := parser.ParseFile(fset, "main.go", byPath["main.go"], parser.AllErrors); perr != nil {
+		t.Errorf("main.go does not parse: %v", perr)
+	}
+	main := string(byPath["main.go"])
+	if !strings.Contains(main, "NewPool") {
+		t.Errorf("main.go missing NewPool\nfull:\n%s", main)
+	}
+	if !strings.Contains(main, "JSONResult") {
+		t.Errorf("main.go missing JSONResult\nfull:\n%s", main)
+	}
+}
+
 // TestRenderTabooYAML_RoundTrips asserts the marshaled taboo.yaml loads back
 // through taboo.LoadConfig with every scalar preserved and strategy defaulted to
 // "branch".
@@ -84,6 +213,38 @@ func TestRenderTabooYAML_RoundTrips(t *testing.T) {
 	}
 	if cfg.Strategy != "branch" {
 		t.Errorf("cfg.Strategy = %q, want branch", cfg.Strategy)
+	}
+}
+
+// TestRenderTabooYAML_SeedsWorkflows asserts that with SeedWorkflows set, the
+// marshaled taboo.yaml carries a real workflows: block (fix and refactor, each
+// pointing at a prompt file) and default-workflow: fix, all round-tripping
+// through taboo.LoadConfig.
+func TestRenderTabooYAML_SeedsWorkflows(t *testing.T) {
+	t.Parallel()
+	in := newScaffoldInputs(t, "opencode", "some/model")
+	in.SeedWorkflows = true
+	data, err := renderTabooYAML(in)
+	if err != nil {
+		t.Fatalf("renderTabooYAML: %v", err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "taboo.yaml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write taboo.yaml: %v", err)
+	}
+	cfg, err := taboo.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.DefaultWorkflow != "fix" {
+		t.Errorf("cfg.DefaultWorkflow = %q, want fix", cfg.DefaultWorkflow)
+	}
+	if got := cfg.Workflows["fix"].PromptFile; got != "prompts/fix.md" {
+		t.Errorf("cfg.Workflows[fix].PromptFile = %q, want prompts/fix.md", got)
+	}
+	if got := cfg.Workflows["refactor"].PromptFile; got != "prompts/refactor.md" {
+		t.Errorf("cfg.Workflows[refactor].PromptFile = %q, want prompts/refactor.md", got)
 	}
 }
 
