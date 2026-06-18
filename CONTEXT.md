@@ -110,7 +110,13 @@ record only if that stance reverses.
 under any SDK entry (`plugs: { <name>: { interface: mount, workshop-target:
 <path> } }`) — no custom mount-SDK needs authoring; it auto-connects to
 `system:mount` and gets a default host source, which `remount` then repoints.
-taboo owns this `workshop.yaml` template. Two `remount` caveats:
+taboo owns the rendered `.taboo/workshop.yaml`, but **no longer authors it from
+scratch**: for a managed project it is *derived* from the project's own
+`workshop.yaml` by opaque-tree injection (see "Derive the workshop from the
+project's definition" below and ADR 0009). The relocatable mount targets
+(`/workspace`, `/sessions`) move under a reserved `/taboo/...` prefix so they
+cannot collide with the project's own mounts; the git-common target stays at the
+host `.git` path (the two-mount rule pins it there). Two `remount` caveats:
 
 - `remount` is atomic **only** when the new source is empty / non-existent and on
   the same filesystem as the current source. A worktree is non-empty, so the
@@ -207,8 +213,44 @@ from `opencode run --format json` stdout (`sessionID`), since the SQLite store i
 opaque from the host. `AgentProfile.Sessions()` returns the env var + on-disk
 subpath per agent (`{XDG_DATA_HOME, "opencode"}` for OpenCode).
 
+### Derive the workshop from the project's definition
+
+So the agent can run the project's own validation flow (lint/format/test) inside
+its loop — a TDD inner loop, not a commit-blind one — its workshop must carry the
+project's toolchain, not just the agent CLI. taboo therefore **derives** the
+agent's workshop from the project's *own* `workshop.yaml` instead of rendering a
+minimal one: it reads the project definition and **opaque-tree injects** only the
+agent SDK (with the mount plugs), a minted `name:`, and the inherited `base:`,
+passing every other field (`actions:`, slots, custom plugs) through verbatim. The
+result is the gitignored `.taboo/workshop.yaml`, regenerated every run. This buys
+the invariant **the agent's sandbox is the dev's sandbox** and *inverts* taboo's
+earlier ownership model (taboo augments the project's definition, it no longer
+authors one). Settled in **ADR 0009**; key points:
+
+- **Scope: workshop-using projects only.** A project without a `workshop.yaml` is
+  a hard early error; taboo does not infer a toolchain.
+- **In-project SDK resolution.** `project-<x>` SDKs the source def references are
+  symlinked into `.taboo/.workshop/<x>` (reconciled every run); store SDKs need
+  nothing. `clean` deletes the links, never recurses through them into the repo's
+  real `.workshop/`.
+- **Drift.** The derived def is fingerprinted; the long-lived workshop is
+  `refresh`ed/relaunched when the project's `workshop.yaml` changes, reused
+  otherwise.
+- **Source-independent provisioning holds.** SDK setup hooks run before the
+  project is mounted, so the `.taboo` quarantine cannot break toolchain install.
+- `renderDefinition` retires for the managed-project flow.
+
 ## Known risks
 
+- **Shared-rootfs toolchain conflict.** The agent SDK and the project's toolchain
+  SDKs now provision the *same* rootfs (ADR 0009). A version/PATH clash (e.g. both
+  install a runtime) is possible but low-probability; agent CLIs install to
+  `/usr/local/bin` and most toolchains arrive via their own SDKs. Watch for it.
+- **Cold toolchain cache every run.** The per-run `stop → remount → start` swap
+  wipes the rootfs, so the toolchain's dependency caches (`GOMODCACHE`, npm cache,
+  …) are cold on each run; the agent's first `make test` pays a `go mod download`
+  / `npm ci`. Deferred optimization: a persistent host-side cache bind-mount (the
+  sessions-mount pattern), which needs per-toolchain cache-path modeling.
 - **Table-parsing fragility.** `workshop`'s `list` / `changes` / `tasks` emit
   human tables, not JSON. Prefer `info` / `actions` (real YAML) and minimize
   reliance on table output; watch for breakage across workshop versions.

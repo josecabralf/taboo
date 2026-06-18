@@ -55,5 +55,5 @@ make test    # go test ./... -count=1 -cover   (also compiles + runs the godoc e
 
 - `README.md` — overview, install, library + CLI quickstarts, entry points.
 - `docs/` (Diátaxis; start at `docs/README.md`): `reference/` is the verified
-  library/CLI/config surface; `adr/0001`–`0008` record load-bearing decisions.
+  library/CLI/config surface; `adr/0001`–`0009` record load-bearing decisions.
   Link here instead of re-deriving the API.

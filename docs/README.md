@@ -48,4 +48,5 @@ The load-bearing decisions, one per file.
 - [ADR 0006 — defer warm fan-out, one workshop per repo](adr/0006-defer-warm-fanout-single-repo-workshops.md)
 - [ADR 0007 — nested worktree placement](adr/0007-nested-worktree-placement.md)
 - [ADR 0008 — model format hint and fuzzy agent match](adr/0008-model-format-hint-and-fuzzy-agent-match.md)
+- [ADR 0009 — derive the workshop from the project's definition](adr/0009-derive-workshop-from-project-definition.md)
 - [Spike 0001 — warm workshops and fan-out](spikes/0001-warm-workshops-fanout.md)
