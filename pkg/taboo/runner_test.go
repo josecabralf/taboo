@@ -2,8 +2,10 @@ package taboo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -383,6 +385,53 @@ func TestEnsureWorkshop_UnchangedReusesNoRefresh(t *testing.T) {
 	}
 }
 
+// TestReadFingerprint_SurfacesNonNotExistError pins the recovery boundary: an
+// absent sidecar is the expected "no record" case ("", nil), but a real read
+// failure must NOT masquerade as absent — masking it would force a spurious
+// refresh and bury the underlying I/O fault. A directory at the fingerprint path
+// makes os.ReadFile fail with a non-NotExist error, which readFingerprint must
+// surface unchanged.
+func TestReadFingerprint_SurfacesNonNotExistError(t *testing.T) {
+	cfg := testConfig(t)
+	r := New(cfg, &fakeCommander{})
+
+	// A directory where the sidecar file is expected -> ReadFile fails with a
+	// non-NotExist error (EISDIR).
+	if err := os.MkdirAll(r.fingerprintPath(), 0o750); err != nil {
+		t.Fatalf("mkdir fingerprint path: %v", err)
+	}
+
+	got, err := r.readFingerprint()
+	if err == nil {
+		t.Fatalf("readFingerprint() = %q, nil; want a surfaced non-NotExist error", got)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("readFingerprint() error = %v; a non-NotExist error must not be reported as absent", err)
+	}
+}
+
+// TestEnsureWorkshop_PropagatesFingerprintReadError pins that ensureWorkshop does
+// not swallow a fingerprint read failure: when the workshop is present (info
+// succeeds) but the sidecar is unreadable for a reason OTHER than absence, taboo
+// must abort rather than silently forcing a refresh on a corrupt read.
+func TestEnsureWorkshop_PropagatesFingerprintReadError(t *testing.T) {
+	cfg := testConfig(t)
+	fc := &fakeCommander{} // info succeeds -> workshop present
+	r := New(cfg, fc)
+
+	// A directory at the sidecar path -> readFingerprint hits a non-NotExist error.
+	if err := os.MkdirAll(r.fingerprintPath(), 0o750); err != nil {
+		t.Fatalf("mkdir fingerprint path: %v", err)
+	}
+
+	if err := r.ensureWorkshop(context.Background(), "fp"); err == nil {
+		t.Fatal("ensureWorkshop() = nil; want the surfaced fingerprint read error")
+	}
+	if got := fc.verbs(); slices.Contains(got, "refresh") {
+		t.Errorf("calls = %v; a read error must abort, not force a refresh", got)
+	}
+}
+
 // TestWriteDefinition_DerivesFromProjectDef pins the cut-over: writeDefinition no
 // longer renders a definition from scratch — it READS the project's own
 // workshop.yaml (at RepoPath) and DERIVES the agent's definition from it. The
@@ -740,7 +789,10 @@ func TestSetup_ChangedProjectDefRefreshesWorkshop(t *testing.T) {
 	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/run-1", Prompt: "x"}); err != nil {
 		t.Fatalf("Setup run 1: %v", err)
 	}
-	fp1 := r.readFingerprint()
+	fp1, err := r.readFingerprint()
+	if err != nil {
+		t.Fatalf("readFingerprint run 1: %v", err)
+	}
 	if fp1 == "" {
 		t.Fatal("run 1 did not persist a fingerprint")
 	}
@@ -763,7 +815,11 @@ func TestSetup_ChangedProjectDefRefreshesWorkshop(t *testing.T) {
 	}
 
 	// The fingerprint was re-derived and re-persisted for the changed def.
-	if fp2 := r.readFingerprint(); fp2 == fp1 {
+	fp2, err := r.readFingerprint()
+	if err != nil {
+		t.Fatalf("readFingerprint run 2: %v", err)
+	}
+	if fp2 == fp1 {
 		t.Errorf("fingerprint unchanged (%q) after a changed def; it must be recompared and updated each run", fp2)
 	}
 

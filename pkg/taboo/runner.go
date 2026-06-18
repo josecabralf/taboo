@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -108,20 +109,25 @@ func (r *Runner) fingerprintPath() string {
 }
 
 // readFingerprint returns the persisted provisioning fingerprint, or "" if none
-// is recorded (or it is unreadable) — "" never matches a real digest, so an
-// absent record forces a reconcile, which is the safe default.
-func (r *Runner) readFingerprint() string {
+// is recorded — "" never matches a real digest, so an absent record forces a
+// reconcile, which is the safe default. A missing sidecar is the expected absent
+// case (fs.ErrNotExist -> "", nil); any OTHER read error is surfaced rather than
+// silently masquerading as absent and forcing a spurious refresh.
+func (r *Runner) readFingerprint() (string, error) {
 	b, err := os.ReadFile(r.fingerprintPath())
 	if err != nil {
-		return ""
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
 	}
-	return strings.TrimSpace(string(b))
+	return strings.TrimSpace(string(b)), nil
 }
 
 // writeFingerprint records fingerprint as what the live workshop was just
 // provisioned with, so the next run can take the reuse fast path.
 func (r *Runner) writeFingerprint(fingerprint string) error {
-	// path is from config, cleaned by filepath.Join
+	// path is derived from config, not user input
 	return os.WriteFile(r.fingerprintPath(), []byte(fingerprint), 0o600) //nolint:gosec
 }
 
@@ -458,7 +464,11 @@ func (r *Runner) ensureWorkshop(ctx context.Context, fingerprint string) error {
 		}
 		return r.writeFingerprint(fingerprint)
 	}
-	if r.readFingerprint() == fingerprint {
+	recorded, err := r.readFingerprint()
+	if err != nil {
+		return err
+	}
+	if recorded == fingerprint {
 		return nil // unchanged — reuse the existing workshop as-is
 	}
 	// `workshop refresh` reconciles the live workshop to the new
