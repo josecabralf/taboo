@@ -91,27 +91,30 @@ func (r *Runner) sourceDefinitionPath() string {
 }
 
 // writeDefinition derives the agent's workshop definition from source (the
-// project's own workshop.yaml bytes) and writes it to definitionPath.
-func (r *Runner) writeDefinition(source []byte) error {
-	out, err := deriveDefinition(r.cfg, source)
+// project's own workshop.yaml bytes), writes it to definitionPath, and returns
+// the source's in-project SDK names (for the caller to reconcile into symlinks).
+func (r *Runner) writeDefinition(source []byte) (projectNames []string, err error) {
+	out, projectNames, err := deriveDefinition(r.cfg, source)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	path := filepath.Clean(r.definitionPath())
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
+		return nil, err
 	}
 
 	// path is from config, cleaned by filepath.Join and filepath.Clean
-	return os.WriteFile(path, []byte(out), 0o600) //nolint:gosec
+	if err := os.WriteFile(path, []byte(out), 0o600); err != nil { //nolint:gosec
+		return nil, err
+	}
+	return projectNames, nil
 }
 
 // reconcileProjectSDKs makes <projectDir>/.workshop/<name> a symlink to
 // <repoPath>/.workshop/<name> for each wanted name, and prunes stale symlinks
-// (links whose name is no longer wanted). It keys pruning on the SYMLINK BIT, never
-// membership, so it never deletes the seeded agent SDK (a real dir) or any other
-// real file; it uses os.Remove (never os.RemoveAll) and os.Lstat (never follows
-// the link), so it can never recurse into the project's real .workshop/<name>.
+// (links whose name is no longer wanted). Safety invariant: it only ever creates
+// or os.Removes entries it confirms are symlinks via os.Lstat — never a real dir
+// (such as the seeded agent SDK) and never a link's target.
 func reconcileProjectSDKs(projectDir, repoPath string, names []string) error {
 	dir := filepath.Join(projectDir, ".workshop")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -185,10 +188,11 @@ func (r *Runner) materialize() error {
 	if err := r.seedSDK(); err != nil {
 		return fmt.Errorf("seed agent SDK: %w", err)
 	}
-	if err := r.writeDefinition(source); err != nil {
+	projectNames, err := r.writeDefinition(source)
+	if err != nil {
 		return fmt.Errorf("write definition: %w", err)
 	}
-	if err := reconcileProjectSDKs(r.cfg.ProjectDir, r.cfg.RepoPath, projectSDKNames(source)); err != nil {
+	if err := reconcileProjectSDKs(r.cfg.ProjectDir, r.cfg.RepoPath, projectNames); err != nil {
 		return fmt.Errorf("reconcile project SDKs: %w", err)
 	}
 	return nil

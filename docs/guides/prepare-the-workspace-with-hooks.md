@@ -76,7 +76,7 @@ Hook output (stdout and stderr) goes to the run's `Stderr` writer, so set
   worktree directory. Use this for host-side preparation that writes into the
   worktree before it is handed to the agent.
 - `InWorkshop: true` runs the command inside the workshop through
-  `workshop exec`, with the working directory `/workspace`. The in-workshop hook
+  `workshop exec`, with the working directory `/taboo/workspace`. The in-workshop hook
   sees the same mounts and the agent's credential env keys, so it runs with the
   agent's environment. Use this for commands that need the workshop's toolchain,
   for example fetching dependencies into the in-workshop module cache the agent

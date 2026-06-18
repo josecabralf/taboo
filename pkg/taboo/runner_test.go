@@ -256,7 +256,7 @@ func TestWriteDefinition_DerivesFromProjectDef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read source def: %v", err)
 	}
-	if err := r.writeDefinition(sourceBytes); err != nil {
+	if _, err := r.writeDefinition(sourceBytes); err != nil {
 		t.Fatalf("writeDefinition: %v", err)
 	}
 

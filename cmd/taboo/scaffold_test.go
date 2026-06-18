@@ -286,7 +286,7 @@ func TestRenderGitignore_Entries(t *testing.T) {
 	for _, l := range strings.Split(string(data), "\n") {
 		lines[strings.TrimSpace(l)] = true
 	}
-	for _, want := range []string{"worktrees/", ".workshop/", "workshop.yaml", ".env", "logs/"} {
+	for _, want := range []string{"worktrees/", ".workshop/", "/workshop.yaml", ".env", "logs/"} {
 		if !lines[want] {
 			t.Errorf(".gitignore missing entry %q\nfull:\n%s", want, data)
 		}

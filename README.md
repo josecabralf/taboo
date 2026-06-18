@@ -4,7 +4,7 @@ taboo is a Go library that orchestrates AI coding agents inside Canonical
 workshop environments and lands their commits on a host git branch.
 
 Each agent run gets its own workshop, an LXD-backed dev sandbox provisioned by
-the `workshop` snap, with a fresh git worktree bind-mounted in at `/workspace`.
+the `workshop` snap, with a fresh git worktree bind-mounted in at `/taboo/workspace`.
 The repo's main `.git` is mounted at its identical host absolute path inside the
 workshop, so a linked worktree's `.git` pointer resolves the same on both sides
 (the two-mount rule in `pkg/taboo/template.go`, `gitCommonTarget`). The agent

@@ -137,10 +137,9 @@ func planEmpty(plan cleanPlan) bool {
 }
 
 // discoverSDKLinks returns the in-project-SDK quarantine symlinks taboo created
-// under <projectDir>/.workshop/. It keys on the symlink bit via os.Lstat, so it
-// lists only links — never the seeded agent SDK (a real dir). Callers remove them
-// with os.Remove, which deletes the link and never recurses into the project's
-// real .workshop/<x> that the link points at.
+// under <projectDir>/.workshop/. Safety invariant: it lists only entries it
+// confirms are symlinks via os.Lstat — never the seeded agent SDK (a real dir) —
+// so the caller's os.Remove deletes a link, never a link's target.
 func discoverSDKLinks(projectDir string) []string {
 	dir := filepath.Join(projectDir, ".workshop")
 	entries, err := os.ReadDir(dir)

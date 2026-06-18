@@ -318,7 +318,7 @@ func renderGitignore() []byte {
 	buf.WriteString("# Runtime state taboo writes that should never be committed.\n")
 	buf.WriteString("worktrees/\n")
 	buf.WriteString(".workshop/\n")
-	buf.WriteString("workshop.yaml\n") // the derived agent definition, regenerated every run
+	buf.WriteString("/workshop.yaml\n") // the derived agent definition taboo writes under .taboo each run (anchored, not the project's source workshop.yaml at the repo root)
 	buf.WriteString(".env\n")
 	buf.WriteString("logs/\n")
 	return buf.Bytes()

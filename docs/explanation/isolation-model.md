@@ -35,7 +35,7 @@ reports `fatal: not a git repository`.
 
 So taboo bind-mounts two things into the workshop:
 
-1. the run's worktree, at the fixed target `/workspace` (the `workspaceTarget`
+1. the run's worktree, at the fixed target `/taboo/workspace` (the `workspaceTarget`
    constant in `pkg/taboo/template.go`);
 2. the repository's main `.git`, the git common directory, at its identical host
    absolute path inside the workshop.
@@ -82,7 +82,7 @@ so it holds for every layout.
 
 ## Why the per-run swap is cheap
 
-Each run needs a different worktree mounted at `/workspace`, but the workshop is
+Each run needs a different worktree mounted at `/taboo/workspace`, but the workshop is
 long-lived and was launched once. So taboo repoints the existing mount rather than
 relaunching. The mechanism is `workshop remount`, which points an existing mount
 plug at a new host source.
@@ -148,8 +148,8 @@ hyphens. The CLI sets `ProjectDir` to `<repo>/.taboo`, so worktrees nest at
 `<repo>/.taboo/worktrees/<branch>`, inside the repository and git-ignored.
 
 Nesting a worktree under the same repository whose `.git` is the second mount looks
-risky, but it changes only the host path of the `/workspace` source. The two mounts
-themselves are untouched: the worktree still goes to `/workspace`, and `<repo>/.git`
+risky, but it changes only the host path of the `/taboo/workspace` source. The two mounts
+themselves are untouched: the worktree still goes to `/taboo/workspace`, and `<repo>/.git`
 still mounts at `<repo>/.git`. The worktree's `.git` pointer references the common
 directory, which is present through the git-common mount regardless of where the
 worktree physically sits. ADR 0007 records that this nested arrangement was verified

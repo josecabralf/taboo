@@ -312,7 +312,7 @@ type Hooks struct {
 
 `Hook` is a single setup command run at a lifecycle point. By default it runs on
 the host through the `Commander` seam, in the run's worktree. Setting
-`InWorkshop` runs it inside the workshop via `workshop exec` (cwd `/workspace`)
+`InWorkshop` runs it inside the workshop via `workshop exec` (cwd `/taboo/workspace`)
 with the agent's credential env keys and the same mounts.
 
 `OnWorkshopReady` hooks run after the workshop starts with the run's worktree
