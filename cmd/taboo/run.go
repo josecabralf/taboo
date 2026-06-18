@@ -57,6 +57,12 @@ type runOptions struct {
 	yes bool
 	// asJSON emits the machine result as a JSON object instead of the plain form.
 	asJSON bool
+	// varsFile is a JSON file of {"VAR":"value"} pairs substituted literally into
+	// {{VAR}} placeholders in the resolved prompt (no shell expansion of the values).
+	varsFile string
+	// vars are repeatable KEY=VALUE template variables substituted literally into
+	// {{KEY}} placeholders; they override matching --vars-file keys.
+	vars []string
 }
 
 // newRunCmd builds the `run` subcommand: it selects what to run (a named
@@ -76,7 +82,8 @@ func newRunCmd(env Env) *cobra.Command {
 			"resolves the prompt, model, timeout, iterations, and branch — where a CLI flag overrides " +
 			"the workflow, which overrides the top-level defaults — then executes the run through a " +
 			"workshop on a new per-run branch. Agent progress streams to stderr; the run result " +
-			"(branch, commit, output) is written to stdout.",
+			"(branch, commit, output) is written to stdout. --vars-file and --var inject " +
+			"caller-supplied values literally into the prompt's {{VAR}} placeholders (see each flag).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRun(cmd.Context(), env, &opts, args)
@@ -84,6 +91,8 @@ func newRunCmd(env Env) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.prompt, "prompt", "", "run instruction, overriding any configured prompt")
 	cmd.Flags().StringVar(&opts.promptFile, "prompt-file", "", "file whose contents are the run instruction (relative to the .taboo dir)")
+	cmd.Flags().StringVar(&opts.varsFile, "vars-file", "", "JSON file of {\"VAR\":\"value\"} pairs substituted literally into {{VAR}} placeholders (no shell expansion)")
+	cmd.Flags().StringArrayVar(&opts.vars, "var", nil, "KEY=VALUE template variable substituted literally into {{KEY}} (repeatable; overrides --vars-file)")
 	cmd.Flags().StringVar(&opts.agent, "agent", "", "override the resolved agent for this run")
 	cmd.Flags().StringVar(&opts.model, "model", "", "override the resolved agent's model for this run")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", 0, "override the per-exec timeout, e.g. 30m")
@@ -328,6 +337,11 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath string, sel runSelection, 
 		return runPlan{}, fmt.Errorf("%s: read prompt-file: %w", sel.describe(), err)
 	}
 
+	prompt, err = injectVars(prompt, opts, base)
+	if err != nil {
+		return runPlan{}, fmt.Errorf("%s: %w", sel.describe(), err)
+	}
+
 	repoPath, err := filepath.Abs(cfg.Repo)
 	if err != nil {
 		return runPlan{}, fmt.Errorf("resolve repo path %q: %w", cfg.Repo, err)
@@ -452,6 +466,50 @@ func resolvePrompt(opts *runOptions, wf taboo.Workflow, defaults *taboo.RunDefau
 		return readPromptFile(defaults.PromptFile, base)
 	}
 	return "", errNoPrompt
+}
+
+// injectVars fills the prompt's {{VAR}} placeholders from --vars-file and --var
+// (--var wins on a key clash). With no vars it returns the prompt unchanged, so a
+// prompt that legitimately contains {{...}} is left alone. It uses the pure
+// taboo.Substitute (a single literal pass), not the shell-expanding
+// PromptTemplate.Resolve, so injected values are never shell-expanded or
+// re-substituted — safe for untrusted text. See docs/run-vars.md.
+func injectVars(prompt string, opts *runOptions, base string) (string, error) {
+	vars, err := resolveVars(opts, base)
+	if err != nil {
+		return "", err
+	}
+	if len(vars) == 0 {
+		return prompt, nil
+	}
+	return taboo.Substitute(prompt, vars)
+}
+
+// resolveVars gathers the run's caller-supplied template variables, layering the
+// repeatable --var KEY=VALUE flags on top of the --vars-file JSON object so a --var
+// overrides a matching file key. The vars-file path is relative to the config dir
+// (like --prompt-file); a missing file or malformed JSON fails fast with a clear
+// error so a half-formed injection never reaches the agent.
+func resolveVars(opts *runOptions, base string) (map[string]string, error) {
+	vars := map[string]string{}
+	if opts.varsFile != "" {
+		path := resolvePromptFilePath(opts.varsFile, base)
+		data, err := os.ReadFile(path) // #nosec G304 -- caller-supplied vars path, read as literal text only
+		if err != nil {
+			return nil, fmt.Errorf("read vars-file: %w", err)
+		}
+		if err := json.Unmarshal(data, &vars); err != nil {
+			return nil, fmt.Errorf("parse vars-file %s: %w", opts.varsFile, err)
+		}
+	}
+	for _, kv := range opts.vars {
+		key, val, ok := strings.Cut(kv, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid --var %q: want KEY=VALUE", kv)
+		}
+		vars[key] = val
+	}
+	return vars, nil
 }
 
 // readPromptFile returns the contents of a prompt file, resolving a relative

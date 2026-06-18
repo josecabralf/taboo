@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -868,6 +869,179 @@ func TestRun_PromptFileFlagOverridesConfig(t *testing.T) {
 	}
 }
 
+// TestRun_VarsFileSubstitutesPlaceholder is the tracer bullet for caller-supplied
+// template vars: a --vars-file JSON object fills the {{VAR}} placeholders in the
+// resolved prompt, and the filled text is what reaches the agent exec.
+func TestRun_VarsFileSubstitutesPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, "") // create the .taboo dir first
+	writePromptFile(t, root, "vars.json", `{"ISSUE_TITLE":"fix the parser"}`)
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n  fix:\n    prompt: 'Title: {{ISSUE_TITLE}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--vars-file", "vars.json"); err != nil {
+		t.Fatalf("run --vars-file error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "Title: fix the parser") == nil {
+		t.Errorf("no exec carried the var-substituted prompt; calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "exec", "Title: {{ISSUE_TITLE}}") != nil {
+		t.Errorf("the raw placeholder reached the agent un-substituted; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_VarFlagOverridesVarsFile locks the var precedence: a repeatable --var
+// KEY=VALUE overrides the same key from --vars-file, and the override is what fills
+// the {{KEY}} placeholder in the prompt the agent receives.
+func TestRun_VarFlagOverridesVarsFile(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, "")
+	writePromptFile(t, root, "vars.json", `{"NAME":"from-file"}`)
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n  fix:\n    prompt: 'Hi {{NAME}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--vars-file", "vars.json", "--var", "NAME=from-flag"); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "Hi from-flag") == nil {
+		t.Errorf("--var did not override the vars-file key; calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "exec", "Hi from-file") != nil {
+		t.Errorf("vars-file value leaked past the --var override; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_VarFlagAlone asserts --var fills a placeholder with no --vars-file present,
+// so a quick one-off needs no file.
+func TestRun_VarFlagAlone(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, "")
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n  fix:\n    prompt: 'Fix {{TARGET}} now'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--var", "TARGET=the parser"); err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "Fix the parser now") == nil {
+		t.Errorf("--var alone did not fill the placeholder; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_VarsErrors covers the fail-fast paths for caller-supplied vars: a
+// --vars-file that does not exist, a --vars-file with malformed JSON, and a --var
+// without a "=" each abort the run with a clear, specific error before any execution,
+// so a half-formed injection never reaches the agent.
+func TestRun_VarsErrors(t *testing.T) {
+	base := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n  fix:\n    prompt: 'do {{X}}'\n"
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T, root string)
+		args    []string
+		wantMsg string
+	}{
+		{name: "missing vars-file", args: []string{"fix", "--vars-file", "gone.json"}, wantMsg: "vars-file"},
+		{name: "malformed JSON", setup: func(t *testing.T, root string) {
+			t.Helper()
+			writePromptFile(t, root, "bad.json", "{not json")
+		}, args: []string{"fix", "--vars-file", "bad.json"}, wantMsg: "vars-file"},
+		{name: "var without equals", args: []string{"fix", "--var", "NOEQUALS"}, wantMsg: "--var"},
+		{name: "var with empty key", args: []string{"fix", "--var", "=value"}, wantMsg: "--var"},
+		{name: "unresolved placeholder", args: []string{"fix", "--var", "Y=z"}, wantMsg: "undefined variable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTabooProject(t, root, base)
+			if tc.setup != nil {
+				tc.setup(t, root)
+			}
+			fake := newRunFake()
+			env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+			_, _, err := runCmd(t, env, tc.args...)
+			if err == nil {
+				t.Fatalf("run %v error = nil, want a fail-fast error", tc.args)
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error = %q, want it to mention %q", err.Error(), tc.wantMsg)
+			}
+			if findInvocation(fake, "worktree") != nil || findInvocation(fake, "exec") != nil {
+				t.Errorf("a vars error must not execute; calls: %v", invocations(fake))
+			}
+		})
+	}
+}
+
+// TestRun_VarsLiteralNoShellExpansion is the safety lock: a value containing $(...),
+// backticks, $VAR, and {{OTHER}} is injected verbatim — never shell-expanded or
+// re-substituted — and the run path never routes the prompt through a shell.
+// Rationale: docs/run-vars.md and taboo.Substitute.
+func TestRun_VarsLiteralNoShellExpansion(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, "") // create the .taboo dir first
+	payload := "$(echo pwned) `id` $HOME {{OTHER}}"
+	writePromptFile(t, root, "vars.json", `{"BODY":`+strconv.Quote(payload)+`}`)
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n  fix:\n    prompt: 'Body: {{BODY}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--vars-file", "vars.json"); err != nil {
+		t.Fatalf("run --vars-file error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", "Body: "+payload) == nil {
+		t.Errorf("the injected value was not inserted verbatim (shell-expanded or re-substituted?); calls: %v", invocations(fake))
+	}
+	if findInvocation(fake, "sh", "-c") != nil {
+		t.Errorf("prompt was routed through a shell-expand seam; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_VarsMultilineRoundTrip asserts a multi-paragraph value (an issue body, a diff)
+// survives injection intact: every line, including a blank line, reaches the agent unchanged
+// as a single prompt.
+func TestRun_VarsMultilineRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, "") // create the .taboo dir first
+	const multiline = "first line\nsecond line\n\nfourth after a blank"
+	writePromptFile(t, root, "vars.json", `{"DIFF":`+strconv.Quote(multiline)+`}`)
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: /home/dev/repos/myproject\n" +
+		"workflows:\n  fix:\n    prompt: '{{DIFF}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	if _, _, err := runCmd(t, env, "fix", "--vars-file", "vars.json"); err != nil {
+		t.Fatalf("run --vars-file error = %v, want nil", err)
+	}
+	if findInvocation(fake, "exec", multiline) == nil {
+		t.Errorf("the multiline value did not survive injection intact; calls: %v", invocations(fake))
+	}
+}
+
 // TestRun_TimeoutFlagOverridesConfig asserts --timeout overrides the workflow
 // timeout: the agent exec is bounded by the flag's duration, visible as
 // `--timeout <dur>` at the workshop exec seam, and the configured value is unused.
@@ -1166,7 +1340,7 @@ func TestRun_DefaultWorkflowUndefined(t *testing.T) {
 // the acceptance-criterion list; cobra's auto-added "help" flag is ignored.
 func TestRun_FlagSet(t *testing.T) {
 	want := []string{
-		"prompt", "prompt-file", "branch", "model", "agent",
+		"prompt", "prompt-file", "vars-file", "var", "branch", "model", "agent",
 		"timeout", "iterations", "signal", "dry-run", "yes", "json",
 	}
 	var got []string
