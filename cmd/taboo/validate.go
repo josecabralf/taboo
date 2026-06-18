@@ -103,7 +103,57 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 		checks = append(checks, promptFileChecks(cfg, path, statFile)...)
 	}
 	checks = append(checks, repoValidateChecks(ctx, env, cfg)...)
+	if includePromptFiles {
+		checks = append(checks, deriveChecks(cfg, statFile)...)
+	}
 	return checks
+}
+
+// deriveChecks traces that the agent workshop derives from the project's source
+// workshop.yaml. It is gated to validate (whole-config lint), never run's
+// preflight. A missing source workshop.yaml is a hard source-definition error
+// (the remedy names the file) and skips derive; otherwise it dry-runs the full
+// derivation in memory (no launch, no FS writes) and reports derive as a hard
+// error carrying the underlying message when the source is malformed, ok
+// otherwise.
+func deriveChecks(cfg taboo.ProjectConfig, statFile func(string) bool) []check {
+	if cfg.Repo == "" {
+		// Mirror doctor's workshopProjectChecks: without a configured repo there is
+		// no <repo>/workshop.yaml to derive from. Guarding here also avoids statting
+		// a bare relative "workshop.yaml" against the validate CWD (a false positive
+		// if a stray one happens to sit there). repoValidateChecks already flags the
+		// unset repo as a hard error, so don't double-report.
+		return nil
+	}
+	src := filepath.Join(cfg.Repo, "workshop.yaml")
+	if !statFile(src) {
+		return []check{
+			fail("source-definition", "no workshop.yaml found in "+cfg.Repo+": taboo derives the "+
+				"agent's workshop from the project's workshop.yaml; add a workshop.yaml, then re-run"),
+			fail("derive", "skipped: no source workshop.yaml to derive from (see source-definition above)"),
+		}
+	}
+	profile, err := taboo.NewProfile(cfg.Agent, cfg.Model)
+	if err != nil {
+		return nil // unknown agent: agentChecks already flags it, don't double-report.
+	}
+	runnerCfg := taboo.Config{
+		Workshop: taboo.WorkshopName(cfg.Workshop, profile.Name()),
+		Agent:    profile,
+		RepoPath: cfg.Repo,
+	}
+	// src comes from the configured repo path, not untrusted input.
+	source, err := os.ReadFile(src) // #nosec G304
+	if err != nil {
+		return []check{ok("source-definition", "resolves to "+src), fail("derive", err.Error())}
+	}
+	if _, err := taboo.DryRunDerive(runnerCfg, source); err != nil {
+		return []check{ok("source-definition", "resolves to "+src), fail("derive", err.Error())}
+	}
+	return []check{
+		ok("source-definition", "resolves to "+src),
+		ok("derive", "agent workshop derives cleanly from "+src),
+	}
 }
 
 // decodeValidate strict-decodes data as a single taboo.yaml document into the

@@ -337,6 +337,67 @@ func TestDeriveDefinition_RejectsNonMappingSource(t *testing.T) {
 	}
 }
 
+// DryRunDerive validates a source by running the full derivation and discarding
+// the rendered definition: a valid minimal source (a mapping root with no name —
+// derive adds it) returns no error, while a malformed source (a bare scalar, a
+// multi-document body) forwards deriveDefinition's error rather than swallowing
+// it.
+func TestDryRunDerive_ValidSourceDerivesClean(t *testing.T) {
+	cfg := Config{
+		Workshop: "taboo-run-abc",
+		Base:     "ubuntu@24.04",
+		Agent:    OpenCode(openCodeModel),
+		RepoPath: "/home/dev/repos/myproject",
+	}
+
+	if _, err := DryRunDerive(cfg, []byte("base: ubuntu@24.04\nsdks: []\n")); err != nil {
+		t.Errorf("DryRunDerive(valid source) error = %v, want nil", err)
+	}
+
+	for _, tc := range []struct{ name, src string }{
+		{"bare scalar", "just a string\n"},
+		{"multi document", "name: a\nbase: ubuntu@24.04\n---\nname: b\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := DryRunDerive(cfg, []byte(tc.src)); err == nil {
+				t.Errorf("DryRunDerive(%q) error = nil, want a forwarded error", tc.src)
+			}
+		})
+	}
+}
+
+// ghostProfile is a fake AgentProfile naming an agent with NO embedded SDK dir
+// under pkg/taboo/sdk/. Its other methods return zero values; only Name() drives
+// the embedded-SDK check.
+type ghostProfile struct{}
+
+func (ghostProfile) Name() string                             { return "ghost" }
+func (ghostProfile) BuildCommand(CommandOptions) AgentCommand { return AgentCommand{} }
+func (ghostProfile) CredentialEnvKeys() []string              { return nil }
+func (ghostProfile) Sessions() (SessionSpec, bool)            { return SessionSpec{}, false }
+
+// DryRunDerive also verifies the configured agent's SDK is embedded and so
+// seedable: an agent registered but missing its sdk/<name>/ tree (registry/embed
+// drift) would only fail later at seed time, burning a workshop. A valid source
+// must still surface that as an error naming the missing SDK / the agent, before
+// any launch.
+func TestDryRunDerive_MissingAgentSDKFails(t *testing.T) {
+	cfg := Config{
+		Workshop: "taboo-run-abc",
+		Base:     "ubuntu@24.04",
+		Agent:    ghostProfile{}, // no sdk/ghost embedded
+		RepoPath: "/home/dev/repos/myproject",
+	}
+
+	_, err := DryRunDerive(cfg, []byte("base: ubuntu@24.04\nsdks: []\n"))
+	if err == nil {
+		t.Fatal("DryRunDerive(missing agent SDK) error = nil, want an error naming the missing SDK")
+	}
+	if !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("error = %q, want it to mention the agent name \"ghost\"", err)
+	}
+}
+
 // A bare `sdks:` line decodes to a null value, not a sequence. Derivation must
 // treat it as an empty list and still append the agent SDK, rather than silently
 // dropping it (the pre-fix bug only handled an absent sdks: key).

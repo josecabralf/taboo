@@ -57,7 +57,28 @@ func configChecks(
 	checks := []check{ok("config", "loaded "+path)}
 	checks = append(checks, credentialChecks(env, cfg)...)
 	checks = append(checks, repoChecks(ctx, env, cfg)...)
+	checks = append(checks, workshopProjectChecks(statFile, cfg)...)
 	return checks
+}
+
+// workshopProjectChecks reports whether the configured repo is a workshop
+// project, naming the single hardcoded <repo>/workshop.yaml source path it builds
+// (filepath.Join — there is no selection or disambiguation here). It flags a repo
+// with no workshop.yaml as a hard error. The check is presence-only: it does NOT
+// derive the workshop.yaml (that is validate's source-definition/derive job).
+func workshopProjectChecks(statFile func(string) bool, cfg *taboo.ProjectConfig) []check {
+	if cfg.Repo == "" {
+		return nil // mirror repoChecks: nothing to check without a configured repo.
+	}
+	src := filepath.Join(cfg.Repo, "workshop.yaml")
+	if !statFile(src) {
+		return []check{
+			fail("workshop-project", "not a workshop project: no workshop.yaml in "+cfg.Repo+" — add a workshop.yaml, then re-run"),
+		}
+	}
+	return []check{
+		ok("workshop-project", "configured repo is a workshop project (workshop.yaml present at "+src+")"),
+	}
 }
 
 // configLoadMessage turns a LoadConfig error into a user-facing message,

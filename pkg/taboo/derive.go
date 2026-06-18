@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"path"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -110,6 +112,27 @@ func ensureSDKSequence(root *yaml.Node) (*yaml.Node, error) {
 		}
 	}
 	return sdks, nil
+}
+
+// DryRunDerive validates that taboo could derive the agent's workshop from
+// source without launching anything or writing to the host filesystem. It runs
+// the full derivation and discards the rendered definition, returning only the
+// in-project SDK names and any error, so a caller can fail fast on a malformed
+// source. (It does stat the embedded SDK FS below — a read-only probe of the
+// compiled-in tree, not a host write.)
+func DryRunDerive(cfg Config, source []byte) (projectNames []string, err error) {
+	_, projectNames, err = deriveDefinition(cfg, source)
+	if err != nil {
+		return projectNames, err
+	}
+	// The agent's SDK must be embedded for seedSDK to seed it. A registered agent
+	// missing its sdk/<name>/ tree (registry/embed drift) would otherwise fail
+	// only at seed time, burning a workshop; catch it here without writing.
+	if _, err := fs.Stat(sdkFS, path.Join("sdk", cfg.Agent.Name())); err != nil {
+		return projectNames, fmt.Errorf("agent %q has no embedded SDK to seed; "+
+			"this is a taboo build defect (registry/embed drift), please report this", cfg.Agent.Name())
+	}
+	return projectNames, nil
 }
 
 // requireSingleDocument rejects a multi-document source (`---` separators). The

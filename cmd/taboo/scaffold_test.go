@@ -302,7 +302,7 @@ func TestRenderTabooYAML_SeedsWorkflows(t *testing.T) {
 	}
 }
 
-// TestRenderGitignore_Entries asserts .gitignore contains exactly the five
+// TestRenderGitignore_Entries asserts .gitignore contains exactly the six
 // ignore entries, each on its own line.
 func TestRenderGitignore_Entries(t *testing.T) {
 	t.Parallel()
@@ -311,7 +311,7 @@ func TestRenderGitignore_Entries(t *testing.T) {
 	for _, l := range strings.Split(string(data), "\n") {
 		lines[strings.TrimSpace(l)] = true
 	}
-	for _, want := range []string{"worktrees/", ".workshop/", "/workshop.yaml", ".env", "logs/"} {
+	for _, want := range []string{"worktrees/", ".workshop/", "/workshop.yaml", "/workshop.fingerprint", ".env", "logs/"} {
 		if !lines[want] {
 			t.Errorf(".gitignore missing entry %q\nfull:\n%s", want, data)
 		}
