@@ -100,18 +100,8 @@ func runInitCmd(env Env, opts *initOptions) error {
 	if err := requireWorkshopProject(opts.repo); err != nil {
 		return err
 	}
-	// Collect the required values (agent, model) only when a flag left one unset:
-	// prompt at a TTY, else fail fast naming the flag. A fully flagged invocation
-	// skips the wizard entirely, so it scaffolds without prompting even from a
-	// terminal (and stays scriptable).
-	if opts.agent == "" || opts.model == "" {
-		if isInteractive(env) {
-			if err := runWizard(env, opts); err != nil {
-				return err
-			}
-		} else if err := requireValues(opts); err != nil {
-			return err
-		}
+	if err := collectValues(env, opts); err != nil {
+		return err
 	}
 	// Re-resolve in case the wizard changed repo (its prefill is editable): a
 	// relative path typed at the prompt must still be cleaned to an absolute one
@@ -155,6 +145,20 @@ func runInitCmd(env Env, opts *initOptions) error {
 	}
 	printNextSteps(env, opts, projectDir)
 	return nil
+}
+
+// collectValues fills the required values (agent, model) only when a flag left
+// one unset: prompt at a TTY, else fail fast naming the flag. A fully flagged
+// invocation skips the wizard entirely, so it scaffolds without prompting even
+// from a terminal (and stays scriptable).
+func collectValues(env Env, opts *initOptions) error {
+	if opts.agent != "" && opts.model != "" {
+		return nil
+	}
+	if isInteractive(env) {
+		return runWizard(env, opts)
+	}
+	return requireValues(opts)
 }
 
 // validTemplates are the accepted --template values; "none" scaffolds no Go.

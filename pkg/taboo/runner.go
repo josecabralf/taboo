@@ -134,7 +134,7 @@ func reconcileProjectSDKs(projectDir, repoPath string, names []string) error {
 func ensureSymlink(dir, repoPath, name string) error {
 	link := filepath.Join(dir, name)
 	target := filepath.Join(repoPath, ".workshop", name)
-	if fi, err := os.Lstat(link); err == nil {
+	if fi, err := os.Lstat(link); err == nil { //nolint:gosec // link is dir + an internal SDK name, not external path input
 		if fi.Mode()&os.ModeSymlink == 0 {
 			return nil // a real entry already occupies this name; never clobber it
 		}
@@ -145,7 +145,7 @@ func ensureSymlink(dir, repoPath, name string) error {
 		if cur == target {
 			return nil // already correct
 		}
-		if err := os.Remove(link); err != nil { // link-safe: removes the link only
+		if err := os.Remove(link); err != nil { //nolint:gosec // link-safe: removes the symlink only, name is internal
 			return err
 		}
 	}

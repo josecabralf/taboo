@@ -337,8 +337,8 @@ func TestDeriveDefinition_RejectsNonMappingSource(t *testing.T) {
 	}
 }
 
-// A bare `sdks:` line decodes to a null value, not a sequence. derive must treat
-// it as an empty list and still append the agent SDK, rather than silently
+// A bare `sdks:` line decodes to a null value, not a sequence. Derivation must
+// treat it as an empty list and still append the agent SDK, rather than silently
 // dropping it (the pre-fix bug only handled an absent sdks: key).
 func TestDeriveDefinition_BareSdksTreatedAsEmptyList(t *testing.T) {
 	source := []byte("name: x\nsdks:\n")

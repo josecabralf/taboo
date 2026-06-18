@@ -69,27 +69,9 @@ func deriveDefinition(cfg Config, source []byte) (out string, projectNames []str
 		return "", nil, err
 	}
 
-	sdks := mappingValue(root, "sdks")
-	switch {
-	case sdks == nil:
-		// No sdks: key at all — create a fresh sequence holding just the agent.
-		sdks = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-		var key yaml.Node
-		if err := key.Encode("sdks"); err != nil {
-			return "", nil, err
-		}
-		root.Content = append(root.Content, &key, sdks)
-	case sdks.Kind != yaml.SequenceNode:
-		// A bare `sdks:` line decodes to a null scalar (or an empty value): treat
-		// it as an empty list and convert the node in place. Any other shape (a
-		// mapping, a non-empty scalar, an alias) is a real authoring mistake.
-		if sdks.Kind == yaml.ScalarNode && (sdks.Tag == "!!null" || sdks.Value == "") {
-			sdks.Kind = yaml.SequenceNode
-			sdks.Tag = "!!seq"
-			sdks.Value = ""
-		} else {
-			return "", nil, fmt.Errorf("project workshop.yaml `sdks:` must be a list, got %s", nodeDescription(sdks.Kind))
-		}
+	sdks, err := ensureSDKSequence(root)
+	if err != nil {
+		return "", nil, err
 	}
 	// Read the in-project SDK names before appending the agent so the injected
 	// agent SDK is excluded.
@@ -101,6 +83,33 @@ func deriveDefinition(cfg Config, source []byte) (out string, projectNames []str
 		return "", nil, err
 	}
 	return string(marshaled), projectNames, nil
+}
+
+// ensureSDKSequence returns root's `sdks` node as a sequence, normalizing the
+// two acceptable non-sequence shapes in place: an absent key (a fresh empty
+// sequence is appended to root) and a bare `sdks:` line that decodes to a null
+// scalar (converted to an empty sequence). Any other shape — a mapping, a
+// non-empty scalar, an alias — is a real authoring mistake and is rejected.
+func ensureSDKSequence(root *yaml.Node) (*yaml.Node, error) {
+	sdks := mappingValue(root, "sdks")
+	switch {
+	case sdks == nil:
+		sdks = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		var key yaml.Node
+		if err := key.Encode("sdks"); err != nil {
+			return nil, err
+		}
+		root.Content = append(root.Content, &key, sdks)
+	case sdks.Kind != yaml.SequenceNode:
+		if sdks.Kind == yaml.ScalarNode && (sdks.Tag == "!!null" || sdks.Value == "") {
+			sdks.Kind = yaml.SequenceNode
+			sdks.Tag = "!!seq"
+			sdks.Value = ""
+		} else {
+			return nil, fmt.Errorf("project workshop.yaml `sdks:` must be a list, got %s", nodeDescription(sdks.Kind))
+		}
+	}
+	return sdks, nil
 }
 
 // requireSingleDocument rejects a multi-document source (`---` separators). The
@@ -146,7 +155,7 @@ func rejectDuplicateKeys(m *yaml.Node) error {
 }
 
 // rejectMergeKeys rejects a YAML merge key (`<<:`) in the root mapping or in any
-// of the sdks sequence elements' mappings. taboo's plain key walk does not
+// of the sdks sequence elements' mappings. The plain key walk does not
 // resolve merge keys, so they would hide the real name/sdks behind an unresolved
 // alias and mis-derive. Detecting at these levels is sufficient; the walk does
 // not recurse deeper.
