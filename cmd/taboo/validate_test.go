@@ -49,7 +49,7 @@ func TestValidate_TracerValidConfig(t *testing.T) {
 		"base: ubuntu@24.04\n" +
 		"agent: opencode\n" +
 		"model: openrouter/qwen/qwen3-coder-plus\n" +
-		"repo: /home/me/repo\n" +
+		"repo: " + tabooRepoRoot(t) + "\n" +
 		"defaults:\n" +
 		"  prompt-file: prompt.md\n"
 	writeTabooProject(t, root, body)
@@ -196,6 +196,138 @@ func TestValidate_EmptyModel(t *testing.T) {
 	}
 }
 
+// TestValidate_TracerDeriveOK is the tracer bullet for validate's derive group:
+// a valid project with a derivable source workshop.yaml emits an ok
+// source-definition + an ok derive pair. It inspects the checks directly because
+// the repo lives under /tmp, so validate's repo-path check fails for an unrelated
+// reason and the whole command errors — only the two new checks are asserted.
+func TestValidate_TracerDeriveOK(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := t.TempDir() // a REAL dir to hold a real source workshop.yaml
+	if err := os.WriteFile(filepath.Join(repo, "workshop.yaml"),
+		[]byte("name: x\nbase: ubuntu@24.04\nsdks: []\n"), 0o600); err != nil {
+		t.Fatalf("write source workshop.yaml: %v", err)
+	}
+	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\nrepo: " + repo + "\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: okHostStdout}
+	env := configEnv(t, fake, root, nil)
+
+	checks := validateChecks(context.Background(), env, realStat)
+	if got := statusOf(checks, "source-definition"); got != "ok" {
+		t.Errorf("source-definition status = %q, want ok\nchecks: %+v", got, checks)
+	}
+	if got := statusOf(checks, "derive"); got != "ok" {
+		t.Errorf("derive status = %q, want ok\nchecks: %+v", got, checks)
+	}
+}
+
+// TestValidate_DeriveMissingSourceFails asserts that when the configured repo has
+// no workshop.yaml, validate's derive group reports source-definition as a hard
+// error whose remedy names the missing file, and the command exits non-zero. The
+// repo lives under /tmp so validate's repo-path check ALSO fails — the non-zero
+// exit alone would not prove the source-definition branch fired, so the check is
+// inspected directly to pin THIS behavior.
+func TestValidate_DeriveMissingSourceFails(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := t.TempDir() // a REAL but EMPTY dir: no workshop.yaml in it
+	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\nrepo: " + repo + "\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: okHostStdout}
+	env := configEnv(t, fake, root, nil)
+
+	out, err := runValidate(t, env)
+	if !errors.Is(err, errValidateFailed) {
+		t.Fatalf("validate error = %v, want errValidateFailed\n%s", err, out)
+	}
+	checks := validateChecks(context.Background(), env, realStat)
+	c := findCheck(checks, "source-definition")
+	if c == nil || c.Status != statusError {
+		t.Fatalf("source-definition = %+v, want a hard error\nchecks: %+v", c, checks)
+	}
+	if !strings.Contains(c.Message, "workshop.yaml") {
+		t.Errorf("source-definition message = %q, want it to name the missing workshop.yaml", c.Message)
+	}
+}
+
+// TestDeriveChecks_EmptyRepoEmitsNoChecksAndProbesNothing asserts that with no
+// top-level repo: configured, deriveChecks returns no checks and never probes a
+// path. Without the empty-repo guard it would build filepath.Join("",
+// "workshop.yaml") == a bare relative "workshop.yaml" and stat it against the
+// validate CWD — a false positive if a stray workshop.yaml happens to sit there.
+// Since repoValidateChecks already flags the unset repo, deriveChecks must stay
+// silent (mirroring doctor's workshopProjectChecks).
+func TestDeriveChecks_EmptyRepoEmitsNoChecksAndProbesNothing(t *testing.T) {
+	t.Parallel()
+	var probed []string
+	statFile := func(p string) bool {
+		probed = append(probed, p)
+		return true // a stray relative workshop.yaml would "exist" — the trap the guard avoids.
+	}
+
+	checks := deriveChecks(taboo.ProjectConfig{Agent: "opencode", Model: "x"}, statFile)
+
+	if len(checks) != 0 {
+		t.Errorf("deriveChecks(empty repo) = %+v, want no checks", checks)
+	}
+	if len(probed) != 0 {
+		t.Errorf("deriveChecks(empty repo) probed %v, want it to stat nothing", probed)
+	}
+}
+
+// TestValidate_DeriveRejectsBadSource asserts that when the configured repo's
+// workshop.yaml is present but malformed, validate's derive group reports
+// source-definition as ok (the file resolves) and derive as a hard error whose
+// message is the underlying deriveDefinition error verbatim — proving the check
+// now actually dry-runs the derivation rather than trusting mere file presence.
+func TestValidate_DeriveRejectsBadSource(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		body    string // the malformed source workshop.yaml
+		wantMsg string // substring the derive error message must contain
+	}{
+		// wantMsg uses multi-word phrases: t.TempDir() embeds the subtest name in the
+		// resolved path, so findCheck (not a raw-output scan) plus a spaced phrase keep
+		// the assertion from matching the temp path instead of the message.
+		{name: "scalar root", body: "123\n", wantMsg: "empty or its root is not a mapping"},
+		{name: "multi document", body: "name: a\nbase: ubuntu@24.04\n---\nname: b\n", wantMsg: "single document"},
+		{name: "duplicate top-level key", body: "name: first\nname: second\nbase: ubuntu@24.04\n", wantMsg: "duplicate top-level key"},
+		{name: "root merge key", body: "defaults: &d\n  base: ubuntu@24.04\nname: x\n<<: *d\n", wantMsg: "merge keys"},
+		{name: "non-list sdks", body: "name: x\nsdks:\n  go: {}\n", wantMsg: "must be a list"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			repo := t.TempDir() // a REAL dir holding a real but malformed workshop.yaml
+			if err := os.WriteFile(filepath.Join(repo, "workshop.yaml"), []byte(tt.body), 0o600); err != nil {
+				t.Fatalf("write source workshop.yaml: %v", err)
+			}
+			writeTabooProject(t, root, "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: openrouter/qwen/q\nrepo: "+repo+"\n")
+			fake := &fakeCommander{stdoutFn: okHostStdout}
+			env := configEnv(t, fake, root, nil)
+
+			checks := validateChecks(context.Background(), env, realStat)
+			d := findCheck(checks, "derive")
+			if d == nil || d.Status != statusError {
+				t.Fatalf("derive = %+v, want a hard error\nchecks: %+v", d, checks)
+			}
+			if !strings.Contains(d.Message, tt.wantMsg) {
+				t.Errorf("derive message = %q, want it to contain %q", d.Message, tt.wantMsg)
+			}
+			// The file is present; only the derivation failed, so source-definition stays ok.
+			if s := findCheck(checks, "source-definition"); s == nil || s.Status != statusOK {
+				t.Errorf("source-definition = %+v, want ok (the file is present)\nchecks: %+v", s, checks)
+			}
+		})
+	}
+}
+
 // findCheck returns the check with the given name, or nil if absent. Unlike
 // statusOf it exposes the whole check so a test can assert the message too.
 func findCheck(checks []check, name string) *check {
@@ -217,7 +349,7 @@ func TestValidate_BadModelFormatWarns(t *testing.T) {
 	t.Run("foreign model for claude-code warns", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
-		writeTabooProject(t, root, "workshop: demo\nagent: claude-code\nmodel: gpt-5\nrepo: /home/me/repo\n")
+		writeTabooProject(t, root, "workshop: demo\nagent: claude-code\nmodel: gpt-5\nrepo: "+tabooRepoRoot(t)+"\n")
 		fake := &fakeCommander{stdoutFn: okHostStdout}
 		env := configEnv(t, fake, root, nil)
 
@@ -242,7 +374,7 @@ func TestValidate_BadModelFormatWarns(t *testing.T) {
 	t.Run("any model for copilot is fine", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
-		writeTabooProject(t, root, "workshop: demo\nagent: copilot\nmodel: some-exotic-model\nrepo: /home/me/repo\n")
+		writeTabooProject(t, root, "workshop: demo\nagent: copilot\nmodel: some-exotic-model\nrepo: "+tabooRepoRoot(t)+"\n")
 		fake := &fakeCommander{stdoutFn: okHostStdout}
 		env := configEnv(t, fake, root, nil)
 
@@ -273,7 +405,7 @@ func TestValidate_WorkflowModelOverrideWarns(t *testing.T) {
 		"workshop: demo\n" +
 		"agent: claude-code\n" +
 		"model: sonnet\n" + // valid for claude-code → must not warn
-		"repo: /home/me/repo\n" +
+		"repo: " + tabooRepoRoot(t) + "\n" +
 		"workflows:\n" +
 		"  a:\n    model: gpt-5\n" +
 		"  b:\n    model: gpt-4\n"
@@ -410,7 +542,7 @@ func TestValidate_PromptFile(t *testing.T) {
 	t.Run("present file ok", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
-		body := "workshop: demo\nagent: opencode\nmodel: openrouter/qwen/q\nrepo: /home/me/repo\n" +
+		body := "workshop: demo\nagent: opencode\nmodel: openrouter/qwen/q\nrepo: " + tabooRepoRoot(t) + "\n" +
 			"defaults:\n  prompt-file: run.md\n"
 		writeTabooProject(t, root, body)
 		writePromptFile(t, root, "run.md", "go\n")
@@ -516,7 +648,7 @@ func TestValidate_JSON(t *testing.T) {
 	t.Run("clean config ok true", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
-		writeTabooProject(t, root, "workshop: demo\nagent: opencode\nmodel: openrouter/qwen/q\nrepo: /home/me/repo\n")
+		writeTabooProject(t, root, "workshop: demo\nagent: opencode\nmodel: openrouter/qwen/q\nrepo: "+tabooRepoRoot(t)+"\n")
 		fake := &fakeCommander{stdoutFn: okHostStdout}
 		env := configEnv(t, fake, root, nil)
 
