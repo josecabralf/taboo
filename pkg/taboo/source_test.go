@@ -148,8 +148,37 @@ func TestResolveSourceDefinition_UnknownSelection(t *testing.T) {
 	if !strings.Contains(msg, "nope") {
 		t.Errorf("error %q does not name the unknown selection nope", msg)
 	}
+	if !strings.Contains(msg, "unknown workshop definition") {
+		t.Errorf("error %q does not use the \"workshop definition\" terminology", msg)
+	}
 	if !strings.Contains(msg, "api, web") {
 		t.Errorf("error %q does not list the sorted candidates \"api, web\"", msg)
+	}
+}
+
+// TestResolveSourceDefinition_SelectionWithNoNamedDefs pins the root-only case
+// under selection: a repo with a selection supplied but no named .workshop/*.yaml
+// definitions is a hard error telling the caller to drop the selection, rather
+// than an unknown-name error with an empty candidate list.
+func TestResolveSourceDefinition_SelectionWithNoNamedDefs(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "workshop.yaml"), []byte("name: x\n"), 0o600); err != nil {
+		t.Fatalf("write root def: %v", err)
+	}
+
+	got, err := resolveSourceDefinition(repo, "web")
+	if err == nil {
+		t.Fatalf("resolveSourceDefinition(repo, \"web\") = %q, want error", got)
+	}
+	if got != "" {
+		t.Errorf("resolveSourceDefinition path = %q, want \"\"", got)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "no named .workshop/*.yaml definitions") {
+		t.Errorf("error %q does not flag the project has no named definitions", msg)
+	}
+	if strings.Contains(msg, "available definitions are") {
+		t.Errorf("error %q should not render an empty candidate list", msg)
 	}
 }
 
@@ -196,6 +225,9 @@ func TestResolveSourceDefinition_RootAndNamedAmbiguous(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "workshop.yaml") || !strings.Contains(msg, ".workshop") {
 		t.Errorf("error %q does not signal both a root workshop.yaml and named .workshop defs are present", msg)
+	}
+	if !strings.Contains(msg, "remove one") {
+		t.Errorf("error %q does not offer a remedy (remove one)", msg)
 	}
 }
 

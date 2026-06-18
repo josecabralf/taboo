@@ -507,6 +507,31 @@ func TestInit_RecordsSourceDefinition(t *testing.T) {
 	}
 }
 
+// TestInit_RejectsUnknownSourceDefinition asserts a typo'd --source-definition
+// fails fast at init — naming the unknown selection and listing the available
+// candidates — rather than being written into taboo.yaml to only fail later at
+// run.
+func TestInit_RejectsUnknownSourceDefinition(t *testing.T) {
+	t.Parallel()
+	repo := multiDefRepo(t)
+	env := initEnv(t, &fakeCommander{}, repo)
+	_, err := runInit(t, env,
+		"--agent", "opencode", "--model", "m", "--repo", repo, "--source-definition", "nope")
+	if err == nil {
+		t.Fatalf("init --source-definition nope = nil, want error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "nope") {
+		t.Errorf("error %q does not name the unknown selection nope", msg)
+	}
+	if !strings.Contains(msg, "api, web") {
+		t.Errorf("error %q does not list the candidates \"api, web\"", msg)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".taboo", "taboo.yaml")); !os.IsNotExist(err) {
+		t.Errorf("taboo.yaml should not have been written for a bad selection (stat err = %v)", err)
+	}
+}
+
 // TestInit_MakesZeroCommanderCalls asserts init never launches a workshop: a
 // successful run records no Commander invocations.
 func TestInit_MakesZeroCommanderCalls(t *testing.T) {

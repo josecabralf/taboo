@@ -19,18 +19,16 @@ func resolveSourceDefinition(repoPath, selection string) (string, error) {
 	}
 
 	if selection != "" {
-		for _, name := range named {
-			if name == selection {
-				return filepath.Join(repoPath, ".workshop", name+".yaml"), nil
-			}
+		if err := ValidateSourceDefinition(named, selection); err != nil {
+			return "", err
 		}
-		return "", fmt.Errorf("unknown source definition %q: available definitions are %s", selection, strings.Join(named, ", "))
+		return filepath.Join(repoPath, ".workshop", selection+".yaml"), nil
 	}
 
 	root := filepath.Join(repoPath, "workshop.yaml")
 	if _, err := os.Stat(root); err == nil {
 		if len(named) > 0 {
-			return "", fmt.Errorf("ambiguous workshop definition: both a root workshop.yaml and named .workshop/*.yaml (%s) are present", strings.Join(named, ", "))
+			return "", fmt.Errorf("ambiguous workshop definition: both a root workshop.yaml and named .workshop/*.yaml (%s) are present; remove one so taboo can derive from a single source", strings.Join(named, ", "))
 		}
 		return root, nil
 	}
@@ -43,6 +41,26 @@ func resolveSourceDefinition(repoPath, selection string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no workshop definition found in %s", repoPath)
+}
+
+// ValidateSourceDefinition checks that selection names one of the project's
+// named workshop definitions, so init and run agree on what a valid selection is
+// and reject a typo'd or nonexistent name the same way. The named slice is the
+// project's definition list (as returned by SourceDefinitions); selection must
+// be non-empty. When the project has no named .workshop/*.yaml definitions at all
+// (e.g. a root-only project) it returns a distinct error telling the caller to
+// drop the selection rather than an unknown-name error with an empty candidate
+// list.
+func ValidateSourceDefinition(named []string, selection string) error {
+	if len(named) == 0 {
+		return fmt.Errorf("this project has no named .workshop/*.yaml definitions; remove --source-definition/--from")
+	}
+	for _, name := range named {
+		if name == selection {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown workshop definition %q: available definitions are %s", selection, strings.Join(named, ", "))
 }
 
 // SourceDefinitions returns the sorted names of the named workshop definitions

@@ -184,14 +184,20 @@ func collectValues(env Env, opts *initOptions) error {
 
 // pendingSourceDefinitions returns the candidate names when the repo has several
 // named definitions and none was selected, so a choice is still required; it
-// returns nil once the selection is settled (explicit, single, or none).
+// returns nil once the selection is settled (explicit, single, or none). An
+// explicit selection is validated against the project's definitions here so a
+// typo'd --source-definition fails fast at init — listing the candidates —
+// rather than being written into taboo.yaml and only failing later at run.
 func pendingSourceDefinitions(opts *initOptions) ([]string, error) {
-	if opts.sourceDefinition != "" {
-		return nil, nil
-	}
 	named, err := taboo.SourceDefinitions(opts.repo)
 	if err != nil {
 		return nil, err
+	}
+	if opts.sourceDefinition != "" {
+		if err := taboo.ValidateSourceDefinition(named, opts.sourceDefinition); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 	if len(named) < 2 {
 		return nil, nil

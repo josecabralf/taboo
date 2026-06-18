@@ -44,7 +44,7 @@ func runWizard(env Env, opts *initOptions) error {
 	// which named .workshop/*.yaml to derive from when there is more than one.
 	if named, err := taboo.SourceDefinitions(opts.repo); err == nil && len(named) >= 2 {
 		fields = append(fields, huh.NewSelect[string]().
-			Title("Source definition").
+			Title("Which workshop definition should the agent derive from?").
 			Options(huh.NewOptions(named...)...).
 			Value(&opts.sourceDefinition))
 	}
