@@ -245,6 +245,31 @@ func TestRenderTabooYAML_RoundTrips(t *testing.T) {
 	}
 }
 
+// TestRenderTabooYAML_RoundTripsSourceDefinition asserts that a SourceDefinition
+// name set on the inputs is written into taboo.yaml and round-trips back through
+// taboo.LoadConfig as ProjectConfig.SourceDefinition.
+func TestRenderTabooYAML_RoundTripsSourceDefinition(t *testing.T) {
+	t.Parallel()
+	in := newScaffoldInputs(t, "opencode", "some/model")
+	in.SourceDefinition = "api"
+	data, err := renderTabooYAML(in)
+	if err != nil {
+		t.Fatalf("renderTabooYAML: %v", err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "taboo.yaml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write taboo.yaml: %v", err)
+	}
+	cfg, err := taboo.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.SourceDefinition != "api" {
+		t.Errorf("cfg.SourceDefinition = %q, want api", cfg.SourceDefinition)
+	}
+}
+
 // TestRenderTabooYAML_SeedsWorkflows asserts that with SeedWorkflows set, the
 // marshaled taboo.yaml carries a real workflows: block (fix and refactor, each
 // pointing at a prompt file) and default-workflow: fix, all round-tripping

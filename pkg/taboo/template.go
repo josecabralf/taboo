@@ -20,6 +20,9 @@ type Config struct {
 	// ProjectDir is the host directory taboo owns: it holds the rendered
 	// workshop definition and is passed to every `workshop --project` call.
 	ProjectDir string
+	// SourceDefinition is the selected source-definition name; empty means
+	// auto-resolve the project's single workshop definition.
+	SourceDefinition string
 }
 
 type sdkDef struct {

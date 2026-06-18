@@ -186,7 +186,10 @@ func TestSourceDefinitionPath_AnchorsOnRepoPath(t *testing.T) {
 	r := New(cfg, &fakeCommander{})
 
 	want := filepath.Join(cfg.RepoPath, "workshop.yaml")
-	got := r.sourceDefinitionPath()
+	got, err := r.sourceDefinitionPath()
+	if err != nil {
+		t.Fatalf("sourceDefinitionPath() error: %v", err)
+	}
 	if got != want {
 		t.Errorf("sourceDefinitionPath() = %q, want %q", got, want)
 	}
@@ -252,7 +255,11 @@ func TestWriteDefinition_DerivesFromProjectDef(t *testing.T) {
 	writeProjectDef(t, cfg.RepoPath, source)
 	r := New(cfg, &fakeCommander{})
 
-	sourceBytes, err := os.ReadFile(r.sourceDefinitionPath())
+	srcPath, err := r.sourceDefinitionPath()
+	if err != nil {
+		t.Fatalf("sourceDefinitionPath: %v", err)
+	}
+	sourceBytes, err := os.ReadFile(srcPath)
 	if err != nil {
 		t.Fatalf("read source def: %v", err)
 	}
@@ -330,8 +337,11 @@ func TestMaterialize_ErrorsWhenSourceAbsent(t *testing.T) {
 	if err == nil {
 		t.Fatal("materialize succeeded with no source workshop.yaml; want an error")
 	}
-	if !strings.Contains(err.Error(), "workshop.yaml") {
-		t.Errorf("error %q does not name the missing workshop.yaml path", err)
+	if !strings.Contains(err.Error(), "no workshop definition found") {
+		t.Errorf("error %q does not report the missing workshop definition", err)
+	}
+	if !strings.Contains(err.Error(), cfg.RepoPath) {
+		t.Errorf("error %q does not name the repo path %q the operator must add a definition to", err, cfg.RepoPath)
 	}
 }
 

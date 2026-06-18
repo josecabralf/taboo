@@ -27,6 +27,9 @@ type initOptions struct {
 	repo string
 	// workshop is the workshop name (derived from repo when unset).
 	workshop string
+	// sourceDefinition names which .workshop/*.yaml the project derives from;
+	// required (non-interactively) only when the repo has multiple definitions.
+	sourceDefinition string
 	// workflows selects which example workflows to seed; "none" opts out (default: seed fix and refactor).
 	workflows string
 	// template selects the optional Go scaffold: "none" (default), "single", or "fanout".
@@ -68,6 +71,7 @@ func newInitCmd(env Env) *cobra.Command {
 	cmd.Flags().StringVar(&opts.base, "base", "", "workshop base image (default: "+defaultBase+")")
 	cmd.Flags().StringVar(&opts.repo, "repo", "", "host repository path to scaffold into (default: current directory)")
 	cmd.Flags().StringVar(&opts.workshop, "workshop", "", "workshop name (default: derived from the repo directory name)")
+	cmd.Flags().StringVar(&opts.sourceDefinition, "source-definition", "", "named .workshop/*.yaml definition to derive from (required when the project has multiple)")
 	cmd.Flags().StringVar(&opts.workflows, "workflows", "", "seed the example fix and refactor workflows (default); pass \"none\" to skip")
 	cmd.Flags().StringVar(&opts.template, "template", "none", "scaffold a Go main.go: none (default), single, or fanout")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "regenerate the scaffold files in an existing .taboo directory")
@@ -89,17 +93,22 @@ func runInitCmd(env Env, opts *initOptions) error {
 	}
 	// Resolve the repo path (absolute, workshop name derived) and gate on it
 	// BEFORE any interactive prompting or scaffold writes: taboo derives the
-	// agent's workshop from the project's own workshop.yaml, so a non-workshop
-	// repo is out of scope and must fail fast — not after the user has answered
-	// the whole wizard. finalize is side-effect-free path resolution, so running
-	// it here (rather than after collection) is safe and lets the gate see the
-	// absolute repo for both the interactive and non-interactive paths.
+	// agent's workshop from the project's own workshop definition, so a
+	// non-workshop repo is out of scope and must fail fast — not after the user
+	// has answered the whole wizard. finalize is side-effect-free path
+	// resolution, so running it here (rather than after collection) is safe and
+	// lets the gate see the absolute repo for both the interactive and
+	// non-interactive paths.
 	if err := finalize(env, opts); err != nil {
 		return err
 	}
 	if err := requireWorkshopProject(opts.repo); err != nil {
 		return err
 	}
+	// Collect agent, model, and the source-definition choice: at a TTY any unset
+	// required value (or an unresolved multi-definition choice) is prompted via
+	// the wizard; non-interactively a missing one is a fast error naming its flag.
+	// A fully flagged invocation prompts for nothing and stays scriptable.
 	if err := collectValues(env, opts); err != nil {
 		return err
 	}
@@ -129,8 +138,9 @@ func runInitCmd(env Env, opts *initOptions) error {
 		Model:    opts.model,
 		Profile:  profile,
 		// Seed the example workflows unless the user opted out with --workflows none.
-		SeedWorkflows: opts.workflows != "none",
-		Template:      opts.template,
+		SeedWorkflows:    opts.workflows != "none",
+		Template:         opts.template,
+		SourceDefinition: opts.sourceDefinition,
 	}
 	files, err := in.plan()
 	if err != nil {
@@ -147,18 +157,46 @@ func runInitCmd(env Env, opts *initOptions) error {
 	return nil
 }
 
-// collectValues fills the required values (agent, model) only when a flag left
-// one unset: prompt at a TTY, else fail fast naming the flag. A fully flagged
-// invocation skips the wizard entirely, so it scaffolds without prompting even
-// from a terminal (and stays scriptable).
+// collectValues fills agent, model, and the source-definition selection. At a
+// TTY it prompts via the wizard when a required value is unset or a
+// multi-definition project still needs a choice; non-interactively it fails fast
+// naming the missing flag. A fully flagged invocation prompts for nothing.
 func collectValues(env Env, opts *initOptions) error {
-	if opts.agent != "" && opts.model != "" {
-		return nil
+	pending, err := pendingSourceDefinitions(opts)
+	if err != nil {
+		return err
 	}
 	if isInteractive(env) {
-		return runWizard(env, opts)
+		if opts.agent == "" || opts.model == "" || len(pending) > 0 {
+			return runWizard(env, opts)
+		}
+		return nil
 	}
-	return requireValues(opts)
+	if err := requireValues(opts); err != nil {
+		return err
+	}
+	if len(pending) > 0 {
+		return fmt.Errorf("multiple workshop definitions (%s): pass --source-definition to pick one",
+			strings.Join(pending, ", "))
+	}
+	return nil
+}
+
+// pendingSourceDefinitions returns the candidate names when the repo has several
+// named definitions and none was selected, so a choice is still required; it
+// returns nil once the selection is settled (explicit, single, or none).
+func pendingSourceDefinitions(opts *initOptions) ([]string, error) {
+	if opts.sourceDefinition != "" {
+		return nil, nil
+	}
+	named, err := taboo.SourceDefinitions(opts.repo)
+	if err != nil {
+		return nil, err
+	}
+	if len(named) < 2 {
+		return nil, nil
+	}
+	return named, nil
 }
 
 // validTemplates are the accepted --template values; "none" scaffolds no Go.
@@ -229,16 +267,22 @@ func finalize(env Env, opts *initOptions) error {
 }
 
 // requireWorkshopProject enforces ADR 0009's scope: taboo derives the agent's
-// workshop from the project's own workshop.yaml, so a project without one is
-// unsupported — a hard, early error before any scaffold write, not a fallback
-// (taboo does not synthesize a toolchain).
+// workshop from the project's own workshop definition — a root workshop.yaml or
+// a named .workshop/*.yaml — so a project with neither is unsupported: a hard,
+// early error before any scaffold write, not a fallback (taboo does not
+// synthesize a toolchain).
 func requireWorkshopProject(repo string) error {
-	if _, err := os.Stat(filepath.Join(repo, "workshop.yaml")); err != nil {
-		return fmt.Errorf("no workshop.yaml found in %s: taboo derives the agent's workshop from "+
-			"the project's own workshop definition and supports only workshop-using projects; "+
-			"add a workshop.yaml, then re-run", repo)
+	if _, err := os.Stat(filepath.Join(repo, "workshop.yaml")); err == nil {
+		return nil
 	}
-	return nil
+	// A multi-definition project records its source in .workshop/*.yaml rather
+	// than a root workshop.yaml, so a named definition also satisfies the gate.
+	if named, err := taboo.SourceDefinitions(repo); err == nil && len(named) > 0 {
+		return nil
+	}
+	return fmt.Errorf("no workshop definition found in %s: taboo derives the agent's workshop from "+
+		"the project's own definition and supports only workshop-using projects; "+
+		"add a workshop.yaml (or a named .workshop/*.yaml), then re-run", repo)
 }
 
 // resolveProfile maps the chosen agent/model to an AgentProfile, turning an

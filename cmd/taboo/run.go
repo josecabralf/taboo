@@ -51,6 +51,9 @@ type runOptions struct {
 	signal string
 	// branch overrides the auto-generated per-run branch verbatim.
 	branch string
+	// from selects the workshop definition to derive the agent workshop from,
+	// overriding taboo.yaml's source-definition.
+	from string
 	// dryRun resolves the plan and prints it without touching the host.
 	dryRun bool
 	// yes skips the interactive pre-run confirmation (for non-interactive callers).
@@ -99,6 +102,7 @@ func newRunCmd(env Env) *cobra.Command {
 	cmd.Flags().IntVar(&opts.iterations, "iterations", 0, "override the max iteration cap for this run")
 	cmd.Flags().StringVar(&opts.signal, "signal", "", "string that, when it appears in agent output, stops the iteration loop early (run treated as complete)")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", "branch name for this run (default: auto-generated from the workflow name — or \"adhoc\" for a --prompt run — and a timestamp)")
+	cmd.Flags().StringVar(&opts.from, "from", "", "the workshop definition to derive the agent workshop from; overrides taboo.yaml source-definition")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "resolve and print the plan without running anything")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "skip the interactive pre-run confirmation")
 	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit the run result as JSON")
@@ -347,14 +351,21 @@ func resolvePlan(cfg *taboo.ProjectConfig, configPath string, sel runSelection, 
 		return runPlan{}, fmt.Errorf("resolve repo path %q: %w", cfg.Repo, err)
 	}
 
+	// --from overrides the source-definition recorded in taboo.yaml.
+	sourceDefinition := cfg.SourceDefinition
+	if opts.from != "" {
+		sourceDefinition = opts.from
+	}
+
 	plan := runPlan{
 		workflow: sel.label,
 		runnerConfig: taboo.Config{
-			Workshop:   taboo.WorkshopName(cfg.Workshop, profile.Name()),
-			Base:       cfg.Base,
-			Agent:      profile,
-			RepoPath:   repoPath,
-			ProjectDir: base,
+			Workshop:         taboo.WorkshopName(cfg.Workshop, profile.Name()),
+			Base:             cfg.Base,
+			Agent:            profile,
+			RepoPath:         repoPath,
+			ProjectDir:       base,
+			SourceDefinition: sourceDefinition,
 		},
 		model:            resolveModel(cfg, sel, opts),
 		prompt:           prompt,
@@ -690,6 +701,9 @@ func printPlan(env Env, plan runPlan) {
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "model:", plan.model)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "workshop:", plan.runnerConfig.Workshop)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "repo:", plan.runnerConfig.RepoPath)
+	if plan.runnerConfig.SourceDefinition != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "source-definition:", plan.runnerConfig.SourceDefinition)
+	}
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "timeout:", plan.timeout)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %d\n", "max-iterations:", plan.maxIterations)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "completion-signal:", plan.completionSignal)
