@@ -62,9 +62,10 @@ func configChecks(
 }
 
 // workshopProjectChecks reports whether the configured repo is a workshop
-// project and resolves its source definition path. It flags a repo with no
-// workshop.yaml as a hard error. The check is presence-only: it does NOT derive
-// the workshop.yaml (that is validate's job).
+// project and reports the single hardcoded <repo>/workshop.yaml source path it
+// builds (filepath.Join — there is no selection or disambiguation here). It flags
+// a repo with no workshop.yaml as a hard error. The check is presence-only: it
+// does NOT derive the workshop.yaml (that is validate's job).
 func workshopProjectChecks(statFile func(string) bool, cfg *taboo.ProjectConfig) []check {
 	if cfg.Repo == "" {
 		return nil // mirror repoChecks: nothing to check without a configured repo.
@@ -72,7 +73,7 @@ func workshopProjectChecks(statFile func(string) bool, cfg *taboo.ProjectConfig)
 	src := filepath.Join(cfg.Repo, "workshop.yaml")
 	if !statFile(src) {
 		return []check{
-			fail("workshop-project", "not a workshop project: no workshop.yaml at "+cfg.Repo+" — add a workshop.yaml, then re-run"),
+			fail("workshop-project", "not a workshop project: no workshop.yaml in "+cfg.Repo+" — add a workshop.yaml, then re-run"),
 			fail("source-definition", "skipped: not a workshop project (see workshop-project above)"),
 		}
 	}

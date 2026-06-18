@@ -254,6 +254,31 @@ func TestValidate_DeriveMissingSourceFails(t *testing.T) {
 	}
 }
 
+// TestDeriveChecks_EmptyRepoEmitsNoChecksAndProbesNothing asserts that with no
+// top-level repo: configured, deriveChecks returns no checks and never probes a
+// path. Without the empty-repo guard it would build filepath.Join("",
+// "workshop.yaml") == a bare relative "workshop.yaml" and stat it against the
+// validate CWD — a false positive if a stray workshop.yaml happens to sit there.
+// Since repoValidateChecks already flags the unset repo, deriveChecks must stay
+// silent (mirroring doctor's workshopProjectChecks).
+func TestDeriveChecks_EmptyRepoEmitsNoChecksAndProbesNothing(t *testing.T) {
+	t.Parallel()
+	var probed []string
+	statFile := func(p string) bool {
+		probed = append(probed, p)
+		return true // a stray relative workshop.yaml would "exist" — the trap the guard avoids.
+	}
+
+	checks := deriveChecks(taboo.ProjectConfig{Agent: "opencode", Model: "x"}, statFile)
+
+	if len(checks) != 0 {
+		t.Errorf("deriveChecks(empty repo) = %+v, want no checks", checks)
+	}
+	if len(probed) != 0 {
+		t.Errorf("deriveChecks(empty repo) probed %v, want it to stat nothing", probed)
+	}
+}
+
 // TestValidate_DeriveRejectsBadSource asserts that when the configured repo's
 // workshop.yaml is present but malformed, validate's derive group reports
 // source-definition as ok (the file resolves) and derive as a hard error whose

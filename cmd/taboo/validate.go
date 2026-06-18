@@ -117,6 +117,14 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 // error carrying the underlying message when the source is malformed, ok
 // otherwise.
 func deriveChecks(cfg taboo.ProjectConfig, statFile func(string) bool) []check {
+	if cfg.Repo == "" {
+		// Mirror doctor's workshopProjectChecks: without a configured repo there is
+		// no <repo>/workshop.yaml to derive from. Guarding here also avoids statting
+		// a bare relative "workshop.yaml" against the validate CWD (a false positive
+		// if a stray one happens to sit there). repoValidateChecks already flags the
+		// unset repo as a hard error, so don't double-report.
+		return nil
+	}
 	src := filepath.Join(cfg.Repo, "workshop.yaml")
 	if !statFile(src) {
 		return []check{
