@@ -58,7 +58,8 @@ exit-code and signal forwarding, and `--cwd` / `--env` / `--uid` / `--gid` /
 
 The primary deliverable is a Go module (`pkg/taboo`). The audience is engineers
 building agent pipelines in Go, who want to express fan-out, review loops, and
-custom orchestration in code. A CLI may follow but is not the primary contract.
+custom orchestration in code. The CLI (`cmd/taboo`) is a thin consumer of the
+library, not the primary contract.
 
 ### Working directory & results: bind-mount, commit in place
 
@@ -101,10 +102,9 @@ the worktree for host-side git — rejected.) Implication: the git-common mount'
 `workshop-target` is **per-repo** (it equals the host `.git` path), so it is
 templated into `workshop.yaml` per repo, not fixed. This couples a persistent
 workshop to one repo unless all managed repos live under a single host parent
-that is mounted at its identical path. ~~Revisit this when
-persistent-reuse-across-repos is built.~~ Resolved in ADR 0006: multi-repo reuse
-is **not** built — one workshop per repo; the common-parent mount is the recorded
-design of record only if that stance reverses.
+that is mounted at its identical path. Multi-repo reuse is **not** built
+(ADR 0006): one workshop per repo; the common-parent mount is the design of
+record only if that stance reverses.
 
 **Mount-plug mechanics.** A `mount` plug is declared **inline in `workshop.yaml`**
 under any SDK entry (`plugs: { <name>: { interface: mount, workshop-target:
@@ -137,10 +137,9 @@ unlike a cheap ephemeral sandbox. So:
   many sequential runs.
 - **Parallelism:** for N concurrent agents, stand up N workshops, each with its
   own worktree. Isolation is at the workshop level. Reuse across waves keeps the
-  cost down; ~~workshop's ZFS snapshot/clone may make warm clones cheap (to be
-  measured)~~ — resolved in ADR 0006: warm-clone fan-out is deferred, blocked
-  upstream (no `workshop` clone / `launch --from` verb; the Go client shares the
-  same API surface; direct LXD coupling is rejected).
+  cost down. Warm-clone fan-out is deferred (ADR 0006), blocked upstream: no
+  `workshop` clone / `launch --from` verb; the Go client shares the same API
+  surface; direct LXD coupling is rejected.
 
 ### Agent provisioning: agent-as-SDK
 
@@ -208,51 +207,11 @@ from `opencode run --format json` stdout (`sessionID`), since the SQLite store i
 opaque from the host. `AgentProfile.Sessions()` returns the env var + on-disk
 subpath per agent (`{XDG_DATA_HOME, "opencode"}` for OpenCode).
 
-## Build order
+## Known risks
 
-The **full sandcastle feature set is the target spec**, built iteratively,
-tracer-bullet first. The walking skeleton proves the entire risk surface before
-any feature work.
-
-1. ✅ **Walking skeleton.** Built as the Go library `pkg/taboo` (deep
-   `Runner.Run`, `Commander` seam, embedded agent SDK), test-first: unit tests on
-   a fake `Commander`, plus a build-tagged integration test (`go test -tags
-   integration`) that runs the whole path against real workshop — a deterministic
-   shell agent's commit lands on the host branch, and a second integration test
-   exercises the real OpenCode agent when `OPENROUTER_API_KEY` is set.
-2. **Iteration loop + completion-signal** early stop.
-3. **Structured output extraction** (ADR 0002: generics over `encoding/json`,
-   the caller's struct is the schema). A `ResultExtractor` parses the last
-   `<result>{...}</result>` block from the agent's final output and
-   `JSONResult[T]` decodes it into `T`; `Validator` + `WithStrictFields()` add
-   opt-in validation; no new dependency.
-4. **Parallel fan-out.** N workshops, worktree-per-agent, caller-driven
-   concurrency. **Sessions constraint:** the host sessions dir is
-   `<ProjectDir>/sessions`, shared by every run in a ProjectDir, so concurrent
-   runs must not share one — give each its own ProjectDir (or a per-slot
-   sessions subdir), else they share OpenCode's single SQLite session DB and can
-   corrupt it with interleaved WAL writes.
-5. ✅ **Session capture + resume/fork** (OpenCode) via the mounted sessions dir.
-   Resume-by-id and fork are exercised end-to-end by
-   `TestIntegration_OpenCodeResumeFork` (gated on `OPENROUTER_API_KEY`): it
-   captures a run's session id from the host store, resumes it on a fresh
-   worktree and asserts the conversation continued, then forks it and asserts the
-   source session is untouched and the fork lands on its own branch.
-6. **Hooks + prompt templating** ergonomics.
-
-## Open questions & risks (to verify)
-
-1. **Configurable session/home path — other agents.** Session redirect depends on
-   each agent honoring a configurable session/home location (e.g.
-   `CLAUDE_CONFIG_DIR`). Verified for OpenCode (`XDG_DATA_HOME`, see
-   [Session capture](#session-capture-redirect-storage-to-a-mounted-dir));
-   verify per remaining agent (Claude Code, Codex).
-2. **Table-parsing fragility.** `list` / `changes` / `tasks` emit human tables
-   (no JSON). Prefer `info` / `actions` (real YAML) and minimize reliance on
-   table output; watch for breakage across workshop versions.
-3. **Persistent reuse across repos.** The git-common mount target is per-repo, so
-   a persistent workshop couples to one repo unless all managed repos share a
-   host parent mounted at its identical path. Revisit when this is built.
+- **Table-parsing fragility.** `workshop`'s `list` / `changes` / `tasks` emit
+  human tables, not JSON. Prefer `info` / `actions` (real YAML) and minimize
+  reliance on table output; watch for breakage across workshop versions.
 
 ## Deferred design decisions
 
@@ -274,21 +233,6 @@ Not workshop-specific; follow sandcastle's proven design when reached:
   workshop as the agent's working directory.
 - **sandcastle** — the TypeScript reference product taboo is modeled on.
 - **AgentProfile** — taboo's per-agent abstraction (mirrors sandcastle's
-  *AgentProvider*). One value fully describes an agent: build its exec argv
-  (`BuildCommand`), its credential env vars (`CredentialEnvKeys`), its session
-  redirect (`Sessions` → env var + on-disk subpath), and the workshop **SDK**
-  that bakes its CLI in (`Name`, which doubles as the SDK qualifier). The model
-  is baked in at construction (`OpenCode(model)`). OpenCode is the first concrete
-  profile.
-- **agent registry** — the `pkg/taboo` lookup that resolves a canonical agent
-  name to its **AgentProfile** and enumerates the supported names. The name is
-  one identity with `AgentProfile.Name()` and the SDK qualifier — no separate
-  alias. Fuzzy "did you mean" matching lives in the CLI, not the registry.
-- **result block** — a delimited span in the agent's output (default
-  `<result>…</result>`) whose JSON payload is the run's structured result. The
-  **last** one in the final iteration's output is authoritative.
-- **ResultExtractor** — taboo's structured-output abstraction (ADR 0002; see
-  Build order step 3). A pure function over the agent's output that finds the
-  result block and decodes/validates it into a typed value; constructed by
-  `JSONResult[T]`. Distinguishes *no block* (`ErrNoResult`) from *invalid block*
-  (`ErrInvalidResult`).
+  *AgentProvider*): one value describes how to build an agent's exec argv, its
+  credential env vars, its session redirect, and the workshop SDK that bakes its
+  CLI in.

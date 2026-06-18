@@ -50,9 +50,6 @@ make test    # go test ./... -count=1 -cover   (also compiles + runs the godoc e
 
 - Only `opencode`, `claude-code`, and `copilot` are real agents. `sdk/codex` and
   `sdk/pi` are unregistered stubs — not in `registry.go`, not supported.
-- `CONTEXT.md` is partially stale: its "Build order" leaves the iteration loop,
-  structured output, fan-out, and hooks unchecked, but all are shipped and
-  tested. Treat `README.md` and `docs/` as authoritative.
 
 ## Pointers
 
