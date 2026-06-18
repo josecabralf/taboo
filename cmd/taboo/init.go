@@ -103,6 +103,9 @@ func runInitCmd(env Env, opts *initOptions) error {
 	if err := finalize(env, opts); err != nil {
 		return err
 	}
+	if err := requireWorkshopProject(opts.repo); err != nil {
+		return err
+	}
 
 	profile, err := resolveProfile(opts.agent, opts.model)
 	if err != nil {
@@ -203,6 +206,19 @@ func finalize(env Env, opts *initOptions) error {
 	}
 	if opts.base == "" {
 		opts.base = defaultBase
+	}
+	return nil
+}
+
+// requireWorkshopProject enforces ADR 0009's scope: taboo derives the agent's
+// workshop from the project's own workshop.yaml, so a project without one is
+// unsupported — a hard, early error before any scaffold write, not a fallback
+// (taboo does not synthesize a toolchain).
+func requireWorkshopProject(repo string) error {
+	if _, err := os.Stat(filepath.Join(repo, "workshop.yaml")); err != nil {
+		return fmt.Errorf("no workshop.yaml in %s: taboo derives the agent's workshop from the "+
+			"project's own workshop definition, so it supports only workshop-using projects; "+
+			"add a workshop.yaml to the repo first", repo)
 	}
 	return nil
 }

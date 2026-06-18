@@ -75,24 +75,123 @@ func New(cfg Config, cmd Commander) *Runner {
 	return &Runner{cfg: cfg, cmd: cmd}
 }
 
-// definitionPath is where taboo writes the rendered workshop definition. This
-// matches `workshop init`'s convention: <project>/.workshop/<name>.yaml.
+// definitionPath is where taboo writes the derived workshop definition. Workshop
+// resolves a launch from the project dir's root workshop.yaml, and taboo launches
+// with --project <ProjectDir>, so the derived definition lives at
+// <ProjectDir>/workshop.yaml.
 func (r *Runner) definitionPath() string {
-	return filepath.Join(r.cfg.ProjectDir, ".workshop", r.cfg.Workshop+".yaml")
+	return filepath.Join(r.cfg.ProjectDir, "workshop.yaml")
 }
 
-// writeDefinition renders the workshop definition and writes it into the
-// project's .workshop directory.
-func (r *Runner) writeDefinition() error {
-	out, err := renderDefinition(r.cfg)
+// sourceDefinitionPath is the project's own workshop definition that taboo
+// derives the agent's workshop from. It lives at the repo root (RepoPath), the
+// file the project's human developers already use — never under ProjectDir.
+func (r *Runner) sourceDefinitionPath() string {
+	return filepath.Join(r.cfg.RepoPath, "workshop.yaml")
+}
+
+// writeDefinition derives the agent's workshop definition from source (the
+// project's own workshop.yaml bytes) and writes it to definitionPath.
+func (r *Runner) writeDefinition(source []byte) error {
+	out, err := deriveDefinition(r.cfg, source)
 	if err != nil {
 		return err
 	}
-	path := r.definitionPath()
+	path := filepath.Clean(r.definitionPath())
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(out), 0o600)
+
+	// path is from config, cleaned by filepath.Join and filepath.Clean
+	return os.WriteFile(path, []byte(out), 0o600) //nolint:gosec
+}
+
+// reconcileProjectSDKs makes <projectDir>/.workshop/<name> a symlink to
+// <repoPath>/.workshop/<name> for each wanted name, and prunes stale symlinks
+// (links whose name is no longer wanted). It keys pruning on the SYMLINK BIT, never
+// membership, so it never deletes the seeded agent SDK (a real dir) or any other
+// real file; it uses os.Remove (never os.RemoveAll) and os.Lstat (never follows
+// the link), so it can never recurse into the project's real .workshop/<name>.
+func reconcileProjectSDKs(projectDir, repoPath string, names []string) error {
+	dir := filepath.Join(projectDir, ".workshop")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		wanted[name] = true
+		if err := ensureSymlink(dir, repoPath, name); err != nil {
+			return err
+		}
+	}
+	return pruneStaleSymlinks(dir, wanted)
+}
+
+// ensureSymlink creates or updates a symlink for the given SDK name.
+func ensureSymlink(dir, repoPath, name string) error {
+	link := filepath.Join(dir, name)
+	target := filepath.Join(repoPath, ".workshop", name)
+	if fi, err := os.Lstat(link); err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return nil // a real entry already occupies this name; never clobber it
+		}
+		cur, err := os.Readlink(link)
+		if err != nil {
+			return err
+		}
+		if cur == target {
+			return nil // already correct
+		}
+		if err := os.Remove(link); err != nil { // link-safe: removes the link only
+			return err
+		}
+	}
+	return os.Symlink(target, link)
+}
+
+// pruneStaleSymlinks removes symlinks that are no longer wanted.
+func pruneStaleSymlinks(dir string, wanted map[string]bool) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if wanted[e.Name()] {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			continue // not a symlink (e.g. the seeded agent SDK dir) — leave it
+		}
+		if err := os.Remove(p); err != nil { // removes the stale link, never its target
+			return err
+		}
+	}
+	return nil
+}
+
+// materialize regenerates the .taboo artifacts a workshop launch depends on:
+// the seeded agent SDK, the derived definition, and the project-SDK symlinks. It
+// runs at the start of every Setup, before ensureWorkshop, so the artifacts exist
+// before any launch and self-heal each run (single source of truth; see ADR 0009).
+// The source is read ONCE here. The definition is written BEFORE reconcile so a
+// malformed source fails without touching symlinks.
+func (r *Runner) materialize() error {
+	source, err := os.ReadFile(r.sourceDefinitionPath())
+	if err != nil {
+		return fmt.Errorf("read project definition %s: %w", r.sourceDefinitionPath(), err)
+	}
+	if err := r.seedSDK(); err != nil {
+		return fmt.Errorf("seed agent SDK: %w", err)
+	}
+	if err := r.writeDefinition(source); err != nil {
+		return fmt.Errorf("write definition: %w", err)
+	}
+	if err := reconcileProjectSDKs(r.cfg.ProjectDir, r.cfg.RepoPath, projectSDKNames(source)); err != nil {
+		return fmt.Errorf("reconcile project SDKs: %w", err)
+	}
+	return nil
 }
 
 // seedSDK writes the configured agent's embedded SDK into the project's
@@ -190,6 +289,9 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	res := RunResult{Branch: req.Branch}
 
+	if err := r.materialize(); err != nil {
+		return res, fmt.Errorf("materialize: %w", err)
+	}
 	if err := r.ensureWorkshop(ctx); err != nil {
 		return res, fmt.Errorf("ensure workshop: %w", err)
 	}
@@ -307,12 +409,6 @@ func (r *Runner) gitCapture(ctx context.Context, args []string) (string, error) 
 func (r *Runner) ensureWorkshop(ctx context.Context) error {
 	if err := r.workshop(ctx, verbArgs(r.cfg.ProjectDir, "info", r.cfg.Workshop)); err == nil {
 		return nil // present — reuse
-	}
-	if err := r.seedSDK(); err != nil {
-		return fmt.Errorf("seed agent SDK: %w", err)
-	}
-	if err := r.writeDefinition(); err != nil {
-		return fmt.Errorf("write definition: %w", err)
 	}
 	return r.workshop(ctx, verbArgs(r.cfg.ProjectDir, "launch", r.cfg.Workshop))
 }

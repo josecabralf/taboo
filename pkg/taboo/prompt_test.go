@@ -49,11 +49,11 @@ func TestExpand_RoutesThroughWorkshopExec(t *testing.T) {
 		t.Errorf("Expand = %q, want %q", got, want)
 	}
 
-	// The expansion runs as `workshop exec` inside the workshop, in /workspace,
+	// The expansion runs as `workshop exec` inside the workshop, in /taboo/workspace,
 	// invoking a shell so $(...) / $VAR resolve in the real environment.
 	exec := fc.findCallN(t, "exec", 0)
-	if !slices.Contains(exec.Args, "/workspace") {
-		t.Errorf("expand exec missing /workspace cwd: %v", exec.Args)
+	if !slices.Contains(exec.Args, "/taboo/workspace") {
+		t.Errorf("expand exec missing /taboo/workspace cwd: %v", exec.Args)
 	}
 	if !slices.Contains(exec.Args, "taboo-run") {
 		t.Errorf("expand exec missing workshop name: %v", exec.Args)

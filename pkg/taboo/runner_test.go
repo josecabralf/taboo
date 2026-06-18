@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // fakeCommander records every invocation and can be programmed to fail
@@ -154,17 +156,52 @@ func failOnVerb(verb string) func(Cmd) error {
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
+	repo := t.TempDir()
+	writeProjectDef(t, repo, "name: myproject\nbase: ubuntu@24.04\nsdks:\n  - name: go\n")
 	return Config{
 		Workshop:   "taboo-run",
 		Base:       "ubuntu@24.04",
 		Agent:      OpenCode(openCodeModel),
-		RepoPath:   "/home/dev/repos/myproject",
+		RepoPath:   repo,
 		ProjectDir: t.TempDir(),
 	}
 }
 
+// writeProjectDef drops a workshop.yaml at the repo root (the file taboo derives from).
+func writeProjectDef(t *testing.T, repo, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, "workshop.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write project def: %v", err)
+	}
+}
+
+// sourceDefinitionPath points at the project's OWN workshop.yaml — the file the
+// project's human developers already use — which lives at the repo root
+// (RepoPath), never under taboo's ProjectDir (<repo>/.taboo). The anchor is
+// load-bearing: a future accidental swap to ProjectDir would silently derive the
+// agent's workshop from the wrong (or a non-existent) file, so the test pins both
+// the exact path and the RepoPath/NOT-ProjectDir prefixes.
+func TestSourceDefinitionPath_AnchorsOnRepoPath(t *testing.T) {
+	cfg := testConfig(t)
+	r := New(cfg, &fakeCommander{})
+
+	want := filepath.Join(cfg.RepoPath, "workshop.yaml")
+	got := r.sourceDefinitionPath()
+	if got != want {
+		t.Errorf("sourceDefinitionPath() = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(got, cfg.RepoPath) {
+		t.Errorf("sourceDefinitionPath() = %q, want it anchored on RepoPath %q", got, cfg.RepoPath)
+	}
+	if strings.HasPrefix(got, cfg.ProjectDir) {
+		t.Errorf("sourceDefinitionPath() = %q must NOT be under ProjectDir %q", got, cfg.ProjectDir)
+	}
+}
+
 func TestEnsureWorkshop_AbsentLaunches(t *testing.T) {
-	// `info` fails -> workshop is absent -> taboo writes the definition and launches.
+	// `info` fails -> workshop is absent -> taboo launches. ensureWorkshop is now
+	// info-or-launch ONLY; seeding the SDK and writing the derived definition moved
+	// to materialize, so this test asserts only the verb sequence.
 	fc := &fakeCommander{errFn: failOnVerb("info")}
 	cfg := testConfig(t)
 	r := New(cfg, fc)
@@ -175,29 +212,6 @@ func TestEnsureWorkshop_AbsentLaunches(t *testing.T) {
 
 	if got := fc.verbs(); !slices.Equal(got, []string{"info", "launch"}) {
 		t.Errorf("calls = %v, want [info launch]", got)
-	}
-
-	// The rendered definition must have been written into the project's
-	// .workshop dir, matching `workshop init`'s convention.
-	defPath := filepath.Join(cfg.ProjectDir, ".workshop", cfg.Workshop+".yaml")
-	data, err := os.ReadFile(defPath)
-	if err != nil {
-		t.Fatalf("definition not written: %v", err)
-	}
-	if len(data) == 0 {
-		t.Error("definition file is empty")
-	}
-
-	// The agent SDK must be seeded so the "project-opencode" reference resolves.
-	sdkYAML := filepath.Join(cfg.ProjectDir, ".workshop", cfg.Agent.Name(), "sdk.yaml")
-	if _, err := os.Stat(sdkYAML); err != nil {
-		t.Errorf("agent SDK not seeded: %v", err)
-	}
-	hook := filepath.Join(cfg.ProjectDir, ".workshop", cfg.Agent.Name(), "hooks", "setup-base")
-	if info, err := os.Stat(hook); err != nil {
-		t.Errorf("setup-base hook not seeded: %v", err)
-	} else if info.Mode().Perm()&0o111 == 0 {
-		t.Errorf("setup-base hook is not executable: %v", info.Mode())
 	}
 }
 
@@ -212,6 +226,328 @@ func TestEnsureWorkshop_PresentReuses(t *testing.T) {
 
 	if got := fc.verbs(); !slices.Equal(got, []string{"info"}) {
 		t.Errorf("calls = %v, want [info] (reuse, no launch)", got)
+	}
+}
+
+// TestWriteDefinition_DerivesFromProjectDef pins the cut-over: writeDefinition no
+// longer renders a definition from scratch — it READS the project's own
+// workshop.yaml (at RepoPath) and DERIVES the agent's definition from it. The
+// derived def lands at <ProjectDir>/workshop.yaml and must carry through the
+// source verbatim (base, the source `go` sdk + its channel, the actions block)
+// while overwriting name with cfg.Workshop and appending the agent SDK. Asserted
+// on decoded values, not bytes, so formatting is not load-bearing.
+func TestWriteDefinition_DerivesFromProjectDef(t *testing.T) {
+	cfg := testConfig(t)
+	// A recognizable source: a `go` sdk carrying a channel, plus an actions block,
+	// both of which taboo does not model and must carry through untouched.
+	source := "" +
+		"name: myproject\n" +
+		"base: ubuntu@24.04\n" +
+		"sdks:\n" +
+		"  - name: go\n" +
+		"    channel: 1.26/stable\n" +
+		"actions:\n" +
+		"  test:\n" +
+		"    command: go test ./...\n"
+	writeProjectDef(t, cfg.RepoPath, source)
+	r := New(cfg, &fakeCommander{})
+
+	sourceBytes, err := os.ReadFile(r.sourceDefinitionPath())
+	if err != nil {
+		t.Fatalf("read source def: %v", err)
+	}
+	if err := r.writeDefinition(sourceBytes); err != nil {
+		t.Fatalf("writeDefinition: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(cfg.ProjectDir, "workshop.yaml"))
+	if err != nil {
+		t.Fatalf("derived def not written to <ProjectDir>/workshop.yaml: %v", err)
+	}
+
+	var got struct {
+		Name string `yaml:"name"`
+		Base string `yaml:"base"`
+		SDKs []struct {
+			Name    string `yaml:"name"`
+			Channel string `yaml:"channel"`
+		} `yaml:"sdks"`
+		Actions map[string]struct {
+			Command string `yaml:"command"`
+		} `yaml:"actions"`
+	}
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("derived def is not valid YAML: %v\n%s", err, data)
+	}
+
+	// name overwritten with the agent workshop name; base inherited from source.
+	if got.Name != cfg.Workshop {
+		t.Errorf("name = %q, want %q (overwritten with cfg.Workshop)", got.Name, cfg.Workshop)
+	}
+	if got.Base != "ubuntu@24.04" {
+		t.Errorf("base = %q, want ubuntu@24.04 (inherited from source)", got.Base)
+	}
+
+	// The source `go` sdk and its unmodeled channel survive; the agent SDK is appended.
+	var goSDK, agentSDK bool
+	for _, s := range got.SDKs {
+		switch s.Name {
+		case "go":
+			goSDK = true
+			if s.Channel != "1.26/stable" {
+				t.Errorf("go sdk channel = %q, want 1.26/stable (carried through)", s.Channel)
+			}
+		case projectSDKRef(cfg.Agent.Name()): // "project-opencode"
+			agentSDK = true
+		}
+	}
+	if !goSDK {
+		t.Errorf("source `go` sdk not preserved; sdks = %+v", got.SDKs)
+	}
+	if !agentSDK {
+		t.Errorf("agent SDK %q not appended; sdks = %+v", projectSDKRef(cfg.Agent.Name()), got.SDKs)
+	}
+
+	// The unmodeled actions block is carried through verbatim.
+	if a, ok := got.Actions["test"]; !ok {
+		t.Errorf("actions block dropped; got %+v", got.Actions)
+	} else if a.Command != "go test ./..." {
+		t.Errorf("actions.test.command = %q, want %q", a.Command, "go test ./...")
+	}
+}
+
+// TestMaterialize_ErrorsWhenSourceAbsent pins the defensive precondition: taboo
+// DERIVES from the project's own workshop.yaml, so its absence is a hard error
+// (not a silent fallback). The source read moved up into materialize, so the
+// error surfaces there; it must name the missing path so the operator can see
+// which file to create.
+func TestMaterialize_ErrorsWhenSourceAbsent(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.RepoPath = t.TempDir() // a bare repo dir with NO workshop.yaml
+	r := New(cfg, &fakeCommander{})
+
+	err := r.materialize()
+	if err == nil {
+		t.Fatal("materialize succeeded with no source workshop.yaml; want an error")
+	}
+	if !strings.Contains(err.Error(), "workshop.yaml") {
+		t.Errorf("error %q does not name the missing workshop.yaml path", err)
+	}
+}
+
+// TestReconcileProjectSDKs_AddsMissing pins the happy path: for a wanted
+// in-project SDK, reconcile creates <projectDir>/.workshop/<name> as a SYMLINK
+// pointing at the project's real SDK dir <repoPath>/.workshop/<name> — no copy,
+// so reads through the link see the real (live) contents.
+func TestReconcileProjectSDKs_AddsMissing(t *testing.T) {
+	projectDir, repoPath := t.TempDir(), t.TempDir()
+
+	// The project's real SDK dir, with a file we will read back through the link.
+	realDir := filepath.Join(repoPath, ".workshop", "mylib")
+	if err := os.MkdirAll(realDir, 0o750); err != nil {
+		t.Fatalf("mkdir real sdk dir: %v", err)
+	}
+	const payload = "real sdk contents\n"
+	if err := os.WriteFile(filepath.Join(realDir, "marker"), []byte(payload), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	if err := reconcileProjectSDKs(projectDir, repoPath, []string{"mylib"}); err != nil {
+		t.Fatalf("reconcileProjectSDKs: %v", err)
+	}
+
+	link := filepath.Join(projectDir, ".workshop", "mylib")
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat link: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is not a symlink (mode %v); want a symlink", link, fi.Mode())
+	}
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("readlink: %v", err)
+	}
+	if target != realDir {
+		t.Errorf("link target = %q, want %q", target, realDir)
+	}
+
+	// Reading THROUGH the link must yield the real SDK's contents (proves it
+	// points at the live dir, not a copy).
+	got, err := os.ReadFile(filepath.Join(link, "marker"))
+	if err != nil {
+		t.Fatalf("read marker through link: %v", err)
+	}
+	if string(got) != payload {
+		t.Errorf("read through link = %q, want %q", got, payload)
+	}
+}
+
+// TestReconcileProjectSDKs_PrunesStale is the data-loss guard. The project's
+// .workshop/ holds a mix: a STALE symlink no longer wanted, AND the seeded agent
+// SDK as a REAL directory. Reconcile must prune the stale link but key pruning on
+// the SYMLINK BIT — never membership — so the real agent-SDK dir (and its file)
+// survives, and the symlink's target dir is never followed or removed.
+func TestReconcileProjectSDKs_PrunesStale(t *testing.T) {
+	projectDir, repoPath := t.TempDir(), t.TempDir()
+	pws := filepath.Join(projectDir, ".workshop")
+	if err := os.MkdirAll(pws, 0o750); err != nil {
+		t.Fatalf("mkdir project .workshop: %v", err)
+	}
+
+	// A STALE symlink in the project .workshop, pointing at some real dir whose
+	// contents must remain untouched (reconcile must never follow/remove it).
+	staleTargetDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(staleTargetDir, "keep"), []byte("untouched\n"), 0o600); err != nil {
+		t.Fatalf("write stale target file: %v", err)
+	}
+	oldlink := filepath.Join(pws, "oldlib")
+	if err := os.Symlink(staleTargetDir, oldlink); err != nil {
+		t.Fatalf("symlink oldlib: %v", err)
+	}
+
+	// The seeded agent SDK as a REAL directory with a sentinel file. Pruning by
+	// membership (oldlib + opencode are both "not wanted") would delete this —
+	// the data-loss bug this test guards against.
+	realAgentDir := filepath.Join(pws, "opencode")
+	if err := os.MkdirAll(realAgentDir, 0o750); err != nil {
+		t.Fatalf("mkdir real agent dir: %v", err)
+	}
+	sentinel := filepath.Join(realAgentDir, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("agent sdk\n"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	// The wanted SDK's real source dir.
+	if err := os.MkdirAll(filepath.Join(repoPath, ".workshop", "mylib"), 0o750); err != nil {
+		t.Fatalf("mkdir wanted source dir: %v", err)
+	}
+
+	if err := reconcileProjectSDKs(projectDir, repoPath, []string{"mylib"}); err != nil {
+		t.Fatalf("reconcileProjectSDKs: %v", err)
+	}
+
+	// The stale symlink is gone.
+	if _, err := os.Lstat(oldlink); !os.IsNotExist(err) {
+		t.Errorf("stale symlink oldlib still present (err=%v); want it pruned", err)
+	}
+	// The wanted symlink now exists and is a symlink.
+	newlink := filepath.Join(pws, "mylib")
+	fi, err := os.Lstat(newlink)
+	if err != nil {
+		t.Fatalf("wanted symlink mylib not created: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("mylib is not a symlink (mode %v)", fi.Mode())
+	}
+	// The REAL agent-SDK dir and its sentinel survive — pruning keyed on the
+	// symlink bit, not membership, and never recursed into a real dir.
+	if fi, err := os.Lstat(realAgentDir); err != nil || !fi.IsDir() {
+		t.Errorf("real agent SDK dir deleted or clobbered (err=%v); data-loss bug", err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Errorf("sentinel file in real agent SDK dir gone (err=%v); data-loss bug", err)
+	}
+	// The stale link's TARGET dir contents were never followed/removed.
+	if _, err := os.Stat(filepath.Join(staleTargetDir, "keep")); err != nil {
+		t.Errorf("stale link's target dir contents removed (err=%v); reconcile followed the link", err)
+	}
+}
+
+// reconcileProjectSDKs is idempotent (a second run is a no-op) and never clobbers
+// a REAL directory that already occupies a wanted name — it only manages symlinks.
+// A real wanted-name dir is a data-loss hazard a membership-based "ensure" would
+// overwrite; this pins the add-path's clobber guard.
+func TestReconcileProjectSDKs_IdempotentAndSparesRealWantedName(t *testing.T) {
+	projectDir, repoPath := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoPath, ".workshop", "mylib"), 0o750); err != nil {
+		t.Fatalf("mkdir wanted source dir: %v", err)
+	}
+	// A REAL dir already occupying a WANTED name, with a precious file.
+	realWanted := filepath.Join(projectDir, ".workshop", "realsdk")
+	if err := os.MkdirAll(realWanted, 0o750); err != nil {
+		t.Fatalf("mkdir real wanted dir: %v", err)
+	}
+	sentinel := filepath.Join(realWanted, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("precious"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	// Run twice: the second pass must be a no-op, not a re-link or a clobber.
+	for i := range 2 {
+		if err := reconcileProjectSDKs(projectDir, repoPath, []string{"mylib", "realsdk"}); err != nil {
+			t.Fatalf("reconcileProjectSDKs pass %d: %v", i, err)
+		}
+	}
+
+	// mylib became a symlink to the project's real source SDK.
+	link := filepath.Join(projectDir, ".workshop", "mylib")
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("mylib is not a symlink (err=%v)", err)
+	}
+	// realsdk stayed a REAL dir (never clobbered into a symlink) and kept its file.
+	fi, err := os.Lstat(realWanted)
+	if err != nil {
+		t.Fatalf("real wanted-name dir gone: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Error("real wanted-name dir was clobbered into a symlink; data-loss bug")
+	}
+	if b, err := os.ReadFile(sentinel); err != nil || string(b) != "precious" {
+		t.Errorf("real wanted-name dir contents lost (got %q, err=%v)", b, err)
+	}
+}
+
+// TestSetup_ReconcilesOnReuse proves materialize (hence reconcile) runs on EVERY
+// Setup, including the workshop-REUSE path (info succeeds, no launch). A source
+// with a project-mylib SDK must get its <ProjectDir>/.workshop/mylib symlink even
+// when no launch occurs.
+func TestSetup_ReconcilesOnReuse(t *testing.T) {
+	repoPath, projectDir := t.TempDir(), t.TempDir()
+	// A source declaring an in-project SDK as project-mylib.
+	writeProjectDef(t, repoPath, "name: x\nbase: ubuntu@24.04\nsdks:\n  - name: project-mylib\n")
+	// The project's real SDK dir the symlink must point at.
+	realDir := filepath.Join(repoPath, ".workshop", "mylib")
+	if err := os.MkdirAll(realDir, 0o750); err != nil {
+		t.Fatalf("mkdir real sdk dir: %v", err)
+	}
+
+	cfg := Config{
+		Workshop:   "taboo-run",
+		Base:       "ubuntu@24.04",
+		Agent:      OpenCode(openCodeModel),
+		RepoPath:   repoPath,
+		ProjectDir: projectDir,
+	}
+	// info SUCCEEDS -> ensureWorkshop reuses, no launch.
+	fc := &fakeCommander{}
+	r := New(cfg, fc)
+
+	if _, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	// Reconcile ran even on the reuse path: the symlink exists and points at the
+	// project's real SDK dir.
+	link := filepath.Join(projectDir, ".workshop", "mylib")
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("reconcile did not run on reuse path; symlink absent: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("%s is not a symlink (mode %v)", link, fi.Mode())
+	}
+	if target, _ := os.Readlink(link); target != realDir {
+		t.Errorf("link target = %q, want %q", target, realDir)
+	}
+
+	// Confirm reuse, not launch.
+	verbs := fc.verbs()
+	if !slices.Contains(verbs, "info") {
+		t.Errorf("verbs %v missing info (expected the reuse probe)", verbs)
+	}
+	if slices.Contains(verbs, "launch") {
+		t.Errorf("verbs %v contains launch; workshop should have been reused", verbs)
 	}
 }
 
@@ -321,9 +657,10 @@ func TestRun_PerRunSequence(t *testing.T) {
 	if got := fc.findCallN(t, "remount", 0).Args; !slices.Equal(got, wantWs) {
 		t.Errorf("workspace remount args =\n  %v\nwant\n  %v", got, wantWs)
 	}
-	// The gitcommon source is the host .git absolute path, hard-coded here as
-	// the load-bearing half of the two-mount rule.
-	wantGc := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.Agent.Name(), "gitcommon", "/home/dev/repos/myproject/.git")
+	// The gitcommon source is the host .git absolute path; derived from RepoPath
+	// via the production helper (the load-bearing half of the two-mount rule),
+	// which tracks the temp RepoPath testConfig allocates.
+	wantGc := remountArgs(cfg.ProjectDir, cfg.Workshop, cfg.Agent.Name(), "gitcommon", gitCommonTarget(cfg.RepoPath))
 	if got := fc.findCallN(t, "remount", 1).Args; !slices.Equal(got, wantGc) {
 		t.Errorf("gitcommon remount args =\n  %v\nwant\n  %v", got, wantGc)
 	}
@@ -347,7 +684,7 @@ func TestRun_PerRunSequence(t *testing.T) {
 		t.Errorf("worktree add missing worktree path %q: %v", res.WorktreePath, wtAdd.Args)
 	}
 
-	// exec carries the agent command + prompt, env keys, and /workspace cwd.
+	// exec carries the agent command + prompt, env keys, and /taboo/workspace cwd.
 	exec := fc.findCallN(t, "exec", 0)
 	if !slices.Contains(exec.Args, "scaffold a go module") {
 		t.Errorf("exec missing prompt: %v", exec.Args)
@@ -355,8 +692,8 @@ func TestRun_PerRunSequence(t *testing.T) {
 	if !slices.Contains(exec.Args, "OPENROUTER_API_KEY") {
 		t.Errorf("exec missing env key: %v", exec.Args)
 	}
-	if !slices.Contains(exec.Args, "/workspace") {
-		t.Errorf("exec missing /workspace cwd: %v", exec.Args)
+	if !slices.Contains(exec.Args, "/taboo/workspace") {
+		t.Errorf("exec missing /taboo/workspace cwd: %v", exec.Args)
 	}
 }
 
@@ -379,7 +716,7 @@ func TestRun_RedirectsSessionDirEnv(t *testing.T) {
 	}
 	// The redirect value must be the sessions mount target itself (the host dir
 	// Setup bound there), so the agent writes session files into the bind-mount.
-	want := spec.DirEnv + "=" + sessionsTarget // e.g. XDG_DATA_HOME=/sessions
+	want := spec.DirEnv + "=" + sessionsTarget // e.g. XDG_DATA_HOME=/taboo/sessions
 	exec := fc.findCallN(t, "exec", 0)
 	if !slices.Contains(exec.Args, want) {
 		t.Errorf("exec missing session-dir redirect %q in argv: %v", want, exec.Args)
@@ -607,6 +944,92 @@ func TestRun_CapturesCommit(t *testing.T) {
 	verbs := fc.verbs()
 	if verbs[len(verbs)-1] != "rev-parse" {
 		t.Errorf("rev-parse should be last; sequence = %v", verbs)
+	}
+}
+
+// TestSetup_DogfoodSymlinksProjectTaboo is the dogfood at the Setup seam: a
+// real Setup driven from a taboo-style source (a project-taboo in-project SDK)
+// must symlink <ProjectDir>/.workshop/taboo at the project's real SDK dir, while
+// leaving the seeded agent SDK as an untouched real dir — slices 4 + 5 composed.
+// Hermetic: the source def and the real SDK dir are built in temp dirs, so it
+// never depends on the live repo's .workshop/ tree. `info` SUCCEEDS so the
+// workshop is REUSED, proving the symlink lands on the reuse path too
+// (materialize runs before ensureWorkshop).
+func TestSetup_DogfoodSymlinksProjectTaboo(t *testing.T) {
+	repo := t.TempDir()
+	writeProjectDef(t, repo, "name: taboo\nbase: ubuntu@24.04\nsdks:\n  - name: go\n    channel: 1.26/stable\n  - name: project-taboo\nactions:\n  make: |\n    make \"$@\"\n")
+
+	// The project's real in-project SDK dir, with a sentinel the symlink must
+	// resolve to once reconcile points <ProjectDir>/.workshop/taboo at it.
+	realSDKDir := filepath.Join(repo, ".workshop", "taboo")
+	if err := os.MkdirAll(realSDKDir, 0o750); err != nil {
+		t.Fatalf("mkdir real sdk dir: %v", err)
+	}
+	const sentinel = "real project-taboo sdk\n"
+	if err := os.WriteFile(filepath.Join(realSDKDir, "sdk.yaml"), []byte(sentinel), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	cfg := Config{
+		Workshop:   "taboo-run",
+		Base:       "ubuntu@24.04",
+		Agent:      OpenCode(openCodeModel),
+		RepoPath:   repo,
+		ProjectDir: t.TempDir(),
+	}
+	// info SUCCEEDS -> workshop reused -> no launch. materialize (hence reconcile)
+	// still runs before ensureWorkshop, so the symlink must appear here too.
+	fc := &fakeCommander{}
+	r := New(cfg, fc)
+
+	if _, err := r.Setup(context.Background(), RunRequest{Branch: "agent/dogfood", Prompt: "go"}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	// <ProjectDir>/.workshop/taboo is a SYMLINK at the project's real SDK dir.
+	link := filepath.Join(cfg.ProjectDir, ".workshop", "taboo")
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("project-taboo symlink absent: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is not a symlink (mode %v)", link, fi.Mode())
+	}
+	if target, _ := os.Readlink(link); target != realSDKDir {
+		t.Errorf("link target = %q, want %q", target, realSDKDir)
+	}
+
+	// Reading THROUGH the link returns the real bytes (the link resolves to the
+	// project's live SDK, not a copy).
+	got, err := os.ReadFile(filepath.Join(link, "sdk.yaml"))
+	if err != nil {
+		t.Fatalf("read sentinel through link: %v", err)
+	}
+	if string(got) != sentinel {
+		t.Errorf("read through link = %q, want %q", got, sentinel)
+	}
+
+	// The seeded agent SDK is a REAL dir, untouched by reconcile (sanity that the
+	// seed survives the symlink reconciliation).
+	seeded := filepath.Join(cfg.ProjectDir, ".workshop", "opencode")
+	sfi, err := os.Lstat(seeded)
+	if err != nil {
+		t.Fatalf("seeded agent SDK dir absent: %v", err)
+	}
+	if sfi.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("%s is a symlink; the seeded agent SDK must stay a real dir", seeded)
+	}
+	if !sfi.IsDir() {
+		t.Errorf("%s is not a directory (mode %v); the seed must remain a real dir", seeded, sfi.Mode())
+	}
+
+	// Confirm the reuse path: info probed, launch never issued.
+	verbs := fc.verbs()
+	if !slices.Contains(verbs, "info") {
+		t.Errorf("verbs %v missing info (expected the reuse probe)", verbs)
+	}
+	if slices.Contains(verbs, "launch") {
+		t.Errorf("verbs %v contains launch; workshop should have been reused", verbs)
 	}
 }
 

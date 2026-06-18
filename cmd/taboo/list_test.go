@@ -14,10 +14,16 @@ import (
 // listProjectBody is a minimal valid taboo.yaml the list tests build on. It
 // names one agent (opencode) so a per-agent workshop is derivable — list
 // enumerates "<workshop>-<agent>", here "demo-opencode". The body carries the
-// workshop, base, an absolute (non-/tmp) repo path used verbatim, and a
-// branch-prefix in the defaults block. Variant bodies are built by
-// string-concatenation off this constant.
-const listProjectBody = "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: /home/dev/repos/myproject\ndefaults:\n  branch-prefix: taboo/\n"
+// workshop, base, the shared testRepoPath fixture (an absolute, non-/tmp repo
+// path used verbatim), and a branch-prefix in the defaults block. Variant
+// bodies are built by string-concatenation off this var, which TestMain assigns
+// before any test runs — it must NOT be initialized at package scope because
+// testRepoPath is empty until TestMain sets it.
+var listProjectBody string
+
+func buildListProjectBody(repo string) string {
+	return "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: " + repo + "\ndefaults:\n  branch-prefix: taboo/\n"
+}
 
 // listFakeStdout returns a stdout program for the fake commander, built against
 // a per-test project root so the worktree-porcelain stdout places the managed
@@ -40,7 +46,7 @@ func listFakeStdout(root string) func(taboo.Cmd) string {
 			// and the repo's own main checkout (which must be excluded).
 			managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
 			return "worktree " + managed + "\nHEAD abc123\nbranch refs/heads/taboo/fix-123\n\n" +
-				"worktree /home/dev/repos/myproject\nHEAD def456\nbranch refs/heads/main\n\n"
+				"worktree " + testRepoPath + "\nHEAD def456\nbranch refs/heads/main\n\n"
 		}
 		if c.Name == "git" && elemsContain(c.Args, "for-each-ref") {
 			// Short refnames: two taboo-prefixed run branches plus the user's own
@@ -171,7 +177,7 @@ func TestList_Worktrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list error = %v, want nil", err)
 	}
-	if findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "list", "--porcelain") == nil {
+	if findInvocation(fake, "git", "-C", testRepoPath, "worktree", "list", "--porcelain") == nil {
 		t.Errorf("no worktree-list porcelain probe against the repo; calls: %v", invocations(fake))
 	}
 	managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
@@ -204,7 +210,7 @@ func TestList_Branches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list error = %v, want nil", err)
 	}
-	if findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "for-each-ref", "--format=%(refname:short)", "refs/heads/") == nil {
+	if findInvocation(fake, "git", "-C", testRepoPath, "for-each-ref", "--format=%(refname:short)", "refs/heads/") == nil {
 		t.Errorf("no for-each-ref probe against the repo; calls: %v", invocations(fake))
 	}
 	if !strings.Contains(stdout, "taboo/fix-123") {
@@ -433,7 +439,7 @@ func TestList_EmptyBranchPrefixReturnsAll(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	// No defaults block, so cfg.Defaults is nil and the prefix is empty.
-	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: /home/dev/repos/myproject\n"
+	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: " + testRepoPath + "\n"
 	writeTabooProject(t, root, body)
 	fake := &fakeCommander{stdoutFn: listFakeStdout(root)}
 	env := configEnv(t, fake, root, nil)
@@ -486,9 +492,15 @@ func emptyListingFake() *fakeCommander {
 }
 
 // emptyListingBody is a minimal config with workshop "" — projectWorkshops
-// returns nil for it, so the workshops section is empty. The repo path keeps the
-// git probes well-formed.
-const emptyListingBody = "workshop: \"\"\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: /home/dev/repos/myproject\n"
+// returns nil for it, so the workshops section is empty. The repo path (the
+// shared testRepoPath fixture) keeps the git probes well-formed. TestMain
+// assigns it before any test runs; it must NOT be initialized at package scope
+// because testRepoPath is empty until TestMain sets it.
+var emptyListingBody string
+
+func buildEmptyListingBody(repo string) string {
+	return "workshop: \"\"\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: " + repo + "\n"
+}
 
 // TestList_EmptyListingHuman locks the human view's empty-section fallback: when
 // all three sections are empty (no workshop, empty porcelain, empty

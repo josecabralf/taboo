@@ -33,7 +33,7 @@ func (copilot) Name() string { return "copilot" }
 // workshop is the security boundary — the same allow-broadly posture under which
 // OpenCode and Claude Code run their tools. --allow-all-paths matters here
 // specifically because the worktree's commits land in the repo's main `.git`,
-// mounted at its host absolute path *outside* /workspace.
+// mounted at its host absolute path, outside the agent's workspace mount.
 //
 // --deny-tool=shell(git push) is the one hard deny. Denial rules always take
 // precedence over allow rules, even --allow-all (verified, copilot 1.0.22), and

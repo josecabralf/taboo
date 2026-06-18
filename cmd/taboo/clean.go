@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -33,6 +34,7 @@ type cleanPlan struct {
 	workshops  []string
 	branches   []string
 	unmerged   []string
+	sdkLinks   []string
 	repo       string
 	projectDir string
 }
@@ -131,7 +133,30 @@ func branchPrefix(cfg *taboo.ProjectConfig) string {
 // planEmpty reports whether a plan would tear nothing down — the signal to print
 // "Nothing to clean." rather than confirm and execute an empty teardown.
 func planEmpty(plan cleanPlan) bool {
-	return len(plan.worktrees) == 0 && len(plan.workshops) == 0 && len(plan.branches) == 0
+	return len(plan.worktrees) == 0 && len(plan.workshops) == 0 && len(plan.branches) == 0 && len(plan.sdkLinks) == 0
+}
+
+// discoverSDKLinks returns the in-project-SDK quarantine symlinks taboo created
+// under <projectDir>/.workshop/. It keys on the symlink bit via os.Lstat, so it
+// lists only links — never the seeded agent SDK (a real dir). Callers remove them
+// with os.Remove, which deletes the link and never recurses into the project's
+// real .workshop/<x> that the link points at.
+func discoverSDKLinks(projectDir string) []string {
+	dir := filepath.Join(projectDir, ".workshop")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // no quarantine dir → nothing to remove
+	}
+	var links []string
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		links = append(links, p)
+	}
+	return links
 }
 
 // buildCleanPlan discovers the taboo-managed artifacts in scope by probing the
@@ -151,6 +176,7 @@ func buildCleanPlan(ctx context.Context, env Env, cfg *taboo.ProjectConfig, proj
 	}
 	if doWorkshops {
 		plan.workshops = provisionedWorkshops(ctx, env, projectDir, cfg)
+		plan.sdkLinks = discoverSDKLinks(projectDir)
 	}
 	if opts.pruneBranches {
 		branches, unmerged, err := planBranches(ctx, env, repo, prefix, opts.force)
@@ -209,6 +235,7 @@ func printCleanPlan(w io.Writer, plan cleanPlan) {
 	}
 	renderSection(w, "remove worktrees:", worktrees)
 	renderSection(w, "tear down workshops:", plan.workshops)
+	renderSection(w, "remove SDK links:", plan.sdkLinks)
 	renderSection(w, "delete branches:", plan.branches)
 	if len(plan.unmerged) > 0 {
 		renderSection(w, "skip unmerged branches (pass --force):", plan.unmerged)
@@ -225,6 +252,9 @@ func confirmClean(env Env, plan cleanPlan) bool {
 	}
 	if n := len(plan.workshops); n > 0 {
 		parts = append(parts, fmt.Sprintf("tear down %d workshop(s)", n))
+	}
+	if n := len(plan.sdkLinks); n > 0 {
+		parts = append(parts, fmt.Sprintf("remove %d SDK link(s)", n))
 	}
 	if n := len(plan.branches); n > 0 {
 		parts = append(parts, fmt.Sprintf("delete %d branch(es)", n))
@@ -273,6 +303,14 @@ func executeClean(ctx context.Context, env Env, plan cleanPlan) error {
 			continue
 		}
 		_, _ = fmt.Fprintf(env.Stderr, "tore down workshop %s\n", name)
+	}
+	for _, link := range plan.sdkLinks {
+		if err := os.Remove(link); err != nil { // removes the link only, never its target
+			_, _ = fmt.Fprintf(env.Stderr, "warning: remove SDK link %s: %v\n", link, err)
+			errs = append(errs, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(env.Stderr, "removed SDK link %s\n", link)
 	}
 	for _, b := range plan.branches {
 		if err := hostRun(ctx, env, "git", "-C", plan.repo, "branch", "-D", b); err != nil {

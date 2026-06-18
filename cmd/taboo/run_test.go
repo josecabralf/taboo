@@ -14,22 +14,32 @@ import (
 	taboo "github.com/josecabralf/taboo/pkg/taboo"
 )
 
-// runProjectBody is a complete, valid taboo.yaml the run tests build on. The
-// repo deliberately points at a non-/tmp absolute path so validate's
-// repo-location check passes (t.TempDir() lives under /tmp), and the agent +
-// model resolve cleanly (opencode + a provider/model slug). A defaults block
-// supplies the branch-prefix the auto-branch tests assert.
-const runProjectBody = "" +
-	"workshop: demo\n" +
-	"base: ubuntu@24.04\n" +
-	"agent: opencode\n" +
-	"model: anthropic/claude\n" +
-	"repo: /home/dev/repos/myproject\n" +
-	"defaults:\n" +
-	"  branch-prefix: taboo/\n" +
-	"workflows:\n" +
-	"  fix:\n" +
-	"    prompt: please fix the failing tests\n"
+// runProjectBody is a complete, valid taboo.yaml the run tests build on. Its
+// repo points at the shared testRepoPath fixture (a real, non-/tmp directory
+// holding a workshop.yaml) so validate's repo-location check passes
+// (t.TempDir() lives under /tmp, which repoLocationCheck rejects) AND the
+// runner's materialize step can read <repo>/workshop.yaml to derive the agent
+// workshop. The agent + model resolve cleanly (opencode + a provider/model
+// slug), and a defaults block supplies the branch-prefix the auto-branch tests
+// assert. TestMain builds this from the fixture path before any test runs.
+var runProjectBody string
+
+// buildRunProjectBody renders runProjectBody for a given repo path. TestMain
+// calls it with the testRepoPath fixture; keeping it a builder lets the repo
+// path be injected at runtime while every other line stays fixed.
+func buildRunProjectBody(repo string) string {
+	return "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"agent: opencode\n" +
+		"model: anthropic/claude\n" +
+		"repo: " + repo + "\n" +
+		"defaults:\n" +
+		"  branch-prefix: taboo/\n" +
+		"workflows:\n" +
+		"  fix:\n" +
+		"    prompt: please fix the failing tests\n"
+}
 
 // runFakeStdout programs the fake commander so a real run can proceed: workshop
 // --version reports a healthy version (preflight), workshop info FAILS (so the
@@ -177,7 +187,7 @@ func TestRun_TracerBullet(t *testing.T) {
 		t.Errorf("info (idx %d) must precede launch (idx %d): %v", infoIdx, launchIdx, invocations(fake))
 	}
 
-	wt := findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "add", "-b")
+	wt := findInvocation(fake, "git", "-C", testRepoPath, "worktree", "add", "-b")
 	if wt == nil {
 		t.Fatalf("no worktree-add invocation; calls: %v", invocations(fake))
 	}
@@ -287,7 +297,7 @@ func TestRun_BranchOverride(t *testing.T) {
 		t.Fatalf("run error = %v, want nil", err)
 	}
 
-	wt := findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "add", "-b")
+	wt := findInvocation(fake, "git", "-C", testRepoPath, "worktree", "add", "-b")
 	if wt == nil {
 		t.Fatalf("no worktree-add invocation; calls: %v", invocations(fake))
 	}
@@ -482,7 +492,7 @@ func TestRun_PromptFile(t *testing.T) {
 		"base: ubuntu@24.04\n" +
 		"agent: opencode\n" +
 		"model: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"defaults:\n" +
 		"  branch-prefix: taboo/\n" +
 		"workflows:\n" +
@@ -511,7 +521,7 @@ func TestRun_PromptFileMissing(t *testing.T) {
 		"base: ubuntu@24.04\n" +
 		"agent: opencode\n" +
 		"model: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n" +
 		"  fix:\n" +
 		"    prompt-file: missing.md\n"
@@ -554,7 +564,7 @@ func TestRun_IterationLoop(t *testing.T) {
 			"base: ubuntu@24.04\n" +
 			"agent: opencode\n" +
 			"model: anthropic/claude\n" +
-			"repo: /home/dev/repos/myproject\n" +
+			"repo: " + testRepoPath + "\n" +
 			"defaults:\n" +
 			"  branch-prefix: taboo/\n" +
 			"  max-iterations: 2\n" +
@@ -580,7 +590,7 @@ func TestRun_IterationLoop(t *testing.T) {
 			"base: ubuntu@24.04\n" +
 			"agent: opencode\n" +
 			"model: anthropic/claude\n" +
-			"repo: /home/dev/repos/myproject\n" +
+			"repo: " + testRepoPath + "\n" +
 			"defaults:\n" +
 			"  branch-prefix: taboo/\n" +
 			"  max-iterations: 5\n" +
@@ -723,7 +733,7 @@ func TestRun_NoPromptConfigured(t *testing.T) {
 		"base: ubuntu@24.04\n" +
 		"agent: opencode\n" +
 		"model: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n" +
 		"  fix:\n" +
 		"    max-iterations: 1\n"
@@ -753,7 +763,7 @@ func TestRun_AutoBranchNoPrefix(t *testing.T) {
 		"base: ubuntu@24.04\n" +
 		"agent: opencode\n" +
 		"model: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n" +
 		"  fix:\n" +
 		"    prompt: fix it\n"
@@ -764,7 +774,7 @@ func TestRun_AutoBranchNoPrefix(t *testing.T) {
 	if _, _, err := runCmd(t, env, "fix"); err != nil {
 		t.Fatalf("run error = %v, want nil", err)
 	}
-	wt := findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "add", "-b")
+	wt := findInvocation(fake, "git", "-C", testRepoPath, "worktree", "add", "-b")
 	if wt == nil {
 		t.Fatalf("no worktree-add invocation; calls: %v", invocations(fake))
 	}
@@ -878,7 +888,7 @@ func TestRun_VarsFileSubstitutesPlaceholder(t *testing.T) {
 	writePromptFile(t, root, "vars.json", `{"ISSUE_TITLE":"fix the parser"}`)
 	body := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n  fix:\n    prompt: 'Title: {{ISSUE_TITLE}}'\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()
@@ -904,7 +914,7 @@ func TestRun_VarFlagOverridesVarsFile(t *testing.T) {
 	writePromptFile(t, root, "vars.json", `{"NAME":"from-file"}`)
 	body := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n  fix:\n    prompt: 'Hi {{NAME}}'\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()
@@ -928,7 +938,7 @@ func TestRun_VarFlagAlone(t *testing.T) {
 	writeTabooProject(t, root, "")
 	body := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n  fix:\n    prompt: 'Fix {{TARGET}} now'\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()
@@ -949,7 +959,7 @@ func TestRun_VarFlagAlone(t *testing.T) {
 func TestRun_VarsErrors(t *testing.T) {
 	base := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n  fix:\n    prompt: 'do {{X}}'\n"
 	cases := []struct {
 		name    string
@@ -1001,7 +1011,7 @@ func TestRun_VarsLiteralNoShellExpansion(t *testing.T) {
 	writePromptFile(t, root, "vars.json", `{"BODY":`+strconv.Quote(payload)+`}`)
 	body := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n  fix:\n    prompt: 'Body: {{BODY}}'\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()
@@ -1028,7 +1038,7 @@ func TestRun_VarsMultilineRoundTrip(t *testing.T) {
 	writePromptFile(t, root, "vars.json", `{"DIFF":`+strconv.Quote(multiline)+`}`)
 	body := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n  fix:\n    prompt: '{{DIFF}}'\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()
@@ -1162,7 +1172,7 @@ func TestRun_AdHocPrompt(t *testing.T) {
 	if findInvocation(fake, "exec", want) == nil {
 		t.Errorf("no exec carried the ad-hoc prompt; calls: %v", invocations(fake))
 	}
-	wt := findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "add", "-b")
+	wt := findInvocation(fake, "git", "-C", testRepoPath, "worktree", "add", "-b")
 	if wt == nil {
 		t.Fatalf("no worktree-add invocation; calls: %v", invocations(fake))
 	}
@@ -1181,7 +1191,7 @@ func TestRun_AdHocWithoutTopLevelDefaults(t *testing.T) {
 	body := "" +
 		"workshop: demo\n" +
 		"base: ubuntu@24.04\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n" +
 		"  fix:\n" +
 		"    agent: opencode\n" +
@@ -1216,7 +1226,7 @@ func TestRun_AdHocSkipsUnusedPromptFileCheck(t *testing.T) {
 		"base: ubuntu@24.04\n" +
 		"agent: opencode\n" +
 		"model: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"defaults:\n" +
 		"  branch-prefix: taboo/\n" +
 		"  prompt-file: gone.md\n" + // referenced but never created — and never consumed by an ad-hoc run
@@ -1253,7 +1263,7 @@ func TestRun_BareRunDefaultWorkflow(t *testing.T) {
 	if findInvocation(fake, "exec", "refactor it") == nil {
 		t.Errorf("bare run did not execute the default-workflow; calls: %v", invocations(fake))
 	}
-	wt := findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "add", "-b")
+	wt := findInvocation(fake, "git", "-C", testRepoPath, "worktree", "add", "-b")
 	if wt == nil {
 		t.Fatalf("no worktree-add invocation; calls: %v", invocations(fake))
 	}
@@ -1297,7 +1307,7 @@ func TestRun_BareRunNoWorkflowsErrors(t *testing.T) {
 		"base: ubuntu@24.04\n" +
 		"agent: opencode\n" +
 		"model: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n"
+		"repo: " + testRepoPath + "\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()
 	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
@@ -1463,7 +1473,7 @@ func TestRun_ModelPrecedenceLadder(t *testing.T) {
 			root := t.TempDir()
 			body := "" +
 				"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: " + topLevel + "\n" +
-				"repo: /home/dev/repos/myproject\n" +
+				"repo: " + testRepoPath + "\n" +
 				"workflows:\n  fix:\n    prompt: fix it\n"
 			if tc.wfModel != "" {
 				body += "    model: " + tc.wfModel + "\n"
@@ -1501,7 +1511,7 @@ func TestRun_AdHocAgentFromFlag(t *testing.T) {
 		"workshop: demo\n" +
 		"base: ubuntu@24.04\n" +
 		"model: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n"
+		"repo: " + testRepoPath + "\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()
 	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
@@ -1527,7 +1537,7 @@ func TestRun_WorkflowBeatsDefaults(t *testing.T) {
 	root := t.TempDir()
 	body := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"defaults:\n  timeout: 30m\n  max-iterations: 2\n" +
 		"workflows:\n  fix:\n    prompt: fix it\n    timeout: 5m\n    max-iterations: 4\n"
 	writeTabooProject(t, root, body)
@@ -1558,7 +1568,7 @@ func TestRun_PromptFlagBeatsWorkflowPromptFile(t *testing.T) {
 	writePromptFile(t, root, "wf.md", "FILE: from the workflow prompt-file")
 	body := "" +
 		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
-		"repo: /home/dev/repos/myproject\n" +
+		"repo: " + testRepoPath + "\n" +
 		"workflows:\n  fix:\n    prompt-file: wf.md\n"
 	writeTabooProject(t, root, body)
 	fake := newRunFake()

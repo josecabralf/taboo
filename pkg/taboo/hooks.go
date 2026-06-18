@@ -9,7 +9,7 @@ import (
 
 // Hook is a single setup command run at a lifecycle point. By default it runs
 // on the host through the Commander seam; set InWorkshop to run it inside the
-// workshop via `workshop exec` (cwd /workspace), where it sees the same mounts
+// workshop via `workshop exec` (cwd /taboo/workspace), where it sees the same mounts
 // and credential env keys as the agent.
 type Hook struct {
 	// Command is the executable and its arguments, e.g. {"go","mod","download"}.
@@ -29,7 +29,7 @@ type Hooks struct {
 }
 
 // hookCmd builds the Cmd that runs h, either on the host or inside the
-// workshop. In-workshop hooks inherit cwd /workspace, the run's timeout, the
+// workshop. In-workshop hooks inherit cwd /taboo/workspace, the run's timeout, the
 // agent's credential env keys, and its session-dir redirect (sessionEnv) so
 // setup commands run with the same context as the agent. Host hooks run in the
 // run's worktree and get neither env set (the redirect is a workshop path).
