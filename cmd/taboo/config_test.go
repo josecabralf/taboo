@@ -295,7 +295,8 @@ func TestRepoGitCheck_ThreadsRepoPath(t *testing.T) {
 
 // TestConfigChecks_WorkshopProjectOK asserts that in a taboo project whose
 // configured repo holds a workshop.yaml, doctor reports workshop-project ok and
-// source-definition ok resolving to that file (presence only, no derive).
+// names the resolved source path (presence only, no derive). The source-definition
+// check is validate-only, so doctor must not emit it.
 func TestConfigChecks_WorkshopProjectOK(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -309,17 +310,18 @@ func TestConfigChecks_WorkshopProjectOK(t *testing.T) {
 	fake := &fakeCommander{stdoutFn: okHostStdout}
 	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-xxx"})
 	checks := configChecks(context.Background(), env, realStat, taboo.LoadConfig)
-	if got := statusOf(checks, "workshop-project"); got != "ok" {
-		t.Errorf("workshop-project = %q, want ok\nchecks: %+v", got, checks)
+	wp := findCheck(checks, "workshop-project")
+	if wp == nil || wp.Status != statusOK || !strings.Contains(wp.Message, "workshop.yaml") {
+		t.Errorf("workshop-project = %+v, want ok naming workshop.yaml\nchecks: %+v", wp, checks)
 	}
-	if got := statusOf(checks, "source-definition"); got != "ok" {
-		t.Errorf("source-definition = %q, want ok\nchecks: %+v", got, checks)
+	if sd := findCheck(checks, "source-definition"); sd != nil {
+		t.Errorf("doctor emitted source-definition = %+v, want it to be validate-only\nchecks: %+v", sd, checks)
 	}
 }
 
 // TestConfigChecks_NotAWorkshopProject asserts that when the configured repo has
-// no workshop.yaml, doctor reports workshop-project as a hard error and
-// source-definition as a dependent skip, and the doctor command exits non-zero.
+// no workshop.yaml, doctor reports workshop-project as a hard error and the doctor
+// command exits non-zero.
 func TestConfigChecks_NotAWorkshopProject(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -336,9 +338,8 @@ func TestConfigChecks_NotAWorkshopProject(t *testing.T) {
 	if wp == nil || wp.Status != statusError || !strings.Contains(wp.Message, "workshop.yaml") {
 		t.Errorf("workshop-project = %+v, want error mentioning workshop.yaml\nchecks: %+v", wp, checks)
 	}
-	sd := findCheck(checks, "source-definition")
-	if sd == nil || sd.Status != statusError || !strings.Contains(sd.Message, "skipped") {
-		t.Errorf("source-definition = %+v, want error mentioning skipped\nchecks: %+v", sd, checks)
+	if sd := findCheck(checks, "source-definition"); sd != nil {
+		t.Errorf("doctor emitted source-definition = %+v, want it to be validate-only\nchecks: %+v", sd, checks)
 	}
 
 	// Exit wiring: the doctor command exits non-zero.
