@@ -2,7 +2,7 @@
 
 Investigation for issue #29 (two deferred items from PRD #1 "Out of Scope").
 This is the **report** the issue asks for; the **decision** it drives is recorded
-in [ADR 0006](../adr/0006-warm-workshops-fanout-deferred-cli-only-contract.md).
+in [ADR 0006](../adr/0006-defer-warm-fanout-single-repo-workshops.md).
 
 > **Measure before building.** #29 is `needs-decision`: an optimization, not a
 > correctness gap. The conclusion below is *don't build it in taboo yet* — the
