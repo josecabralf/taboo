@@ -2,7 +2,10 @@ package taboo
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -90,24 +93,63 @@ func (r *Runner) sourceDefinitionPath() string {
 	return filepath.Join(r.cfg.RepoPath, "workshop.yaml")
 }
 
+// fingerprintOf returns a stable hex digest of a derived workshop definition. It
+// is the cheap drift key: equal digests mean the live workshop was last
+// provisioned with this exact def, so it can be reused without a refresh.
+func fingerprintOf(def string) string {
+	sum := sha256.Sum256([]byte(def))
+	return hex.EncodeToString(sum[:])
+}
+
+// fingerprintPath is where taboo records the digest of the derived def the live
+// workshop was last provisioned (launched/refreshed) with. It sits beside the
+// derived definition under ProjectDir.
+func (r *Runner) fingerprintPath() string {
+	return filepath.Join(r.cfg.ProjectDir, "workshop.fingerprint")
+}
+
+// readFingerprint returns the persisted provisioning fingerprint, or "" if none
+// is recorded — "" never matches a real digest, so an absent record forces a
+// reconcile, which is the safe default. A missing sidecar is the expected absent
+// case (fs.ErrNotExist -> "", nil); any OTHER read error is surfaced rather than
+// silently masquerading as absent and forcing a spurious refresh.
+func (r *Runner) readFingerprint() (string, error) {
+	b, err := os.ReadFile(r.fingerprintPath())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+// writeFingerprint records fingerprint as what the live workshop was just
+// provisioned with, so the next run can take the reuse fast path.
+func (r *Runner) writeFingerprint(fingerprint string) error {
+	// path is derived from config, not user input
+	return os.WriteFile(r.fingerprintPath(), []byte(fingerprint), 0o600) //nolint:gosec
+}
+
 // writeDefinition derives the agent's workshop definition from source (the
 // project's own workshop.yaml bytes), writes it to definitionPath, and returns
-// the source's in-project SDK names (for the caller to reconcile into symlinks).
-func (r *Runner) writeDefinition(source []byte) (projectNames []string, err error) {
+// its fingerprint (the digest the live workshop is provisioned against) plus the
+// source's in-project SDK names (for the caller to reconcile into symlinks).
+func (r *Runner) writeDefinition(source []byte) (fingerprint string, projectNames []string, err error) {
 	out, projectNames, err := deriveDefinition(r.cfg, source)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	path := filepath.Clean(r.definitionPath())
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
 	// path is from config, cleaned by filepath.Join and filepath.Clean
 	if err := os.WriteFile(path, []byte(out), 0o600); err != nil { //nolint:gosec
-		return nil, err
+		return "", nil, err
 	}
-	return projectNames, nil
+	return fingerprintOf(out), projectNames, nil
 }
 
 // reconcileProjectSDKs makes <projectDir>/.workshop/<name> a symlink to
@@ -180,22 +222,22 @@ func pruneStaleSymlinks(dir string, wanted map[string]bool) error {
 // before any launch and self-heal each run (single source of truth; see ADR 0009).
 // The source is read ONCE here. The definition is written BEFORE reconcile so a
 // malformed source fails without touching symlinks.
-func (r *Runner) materialize() error {
+func (r *Runner) materialize() (fingerprint string, err error) {
 	source, err := os.ReadFile(r.sourceDefinitionPath())
 	if err != nil {
-		return fmt.Errorf("read project definition %s: %w", r.sourceDefinitionPath(), err)
+		return "", fmt.Errorf("read project definition %s: %w", r.sourceDefinitionPath(), err)
 	}
 	if err := r.seedSDK(); err != nil {
-		return fmt.Errorf("seed agent SDK: %w", err)
+		return "", fmt.Errorf("seed agent SDK: %w", err)
 	}
-	projectNames, err := r.writeDefinition(source)
+	fingerprint, projectNames, err := r.writeDefinition(source)
 	if err != nil {
-		return fmt.Errorf("write definition: %w", err)
+		return "", fmt.Errorf("write definition: %w", err)
 	}
 	if err := reconcileProjectSDKs(r.cfg.ProjectDir, r.cfg.RepoPath, projectNames); err != nil {
-		return fmt.Errorf("reconcile project SDKs: %w", err)
+		return "", fmt.Errorf("reconcile project SDKs: %w", err)
 	}
-	return nil
+	return fingerprint, nil
 }
 
 // seedSDK writes the configured agent's embedded SDK into the project's
@@ -293,10 +335,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	res := RunResult{Branch: req.Branch}
 
-	if err := r.materialize(); err != nil {
+	fingerprint, err := r.materialize()
+	if err != nil {
 		return res, fmt.Errorf("materialize: %w", err)
 	}
-	if err := r.ensureWorkshop(ctx); err != nil {
+	if err := r.ensureWorkshop(ctx, fingerprint); err != nil {
 		return res, fmt.Errorf("ensure workshop: %w", err)
 	}
 
@@ -406,13 +449,34 @@ func (r *Runner) gitCapture(ctx context.Context, args []string) (string, error) 
 	return strings.TrimSpace(buf.String()), err
 }
 
-// ensureWorkshop launches the workshop if it does not already exist, otherwise
-// reuses it. Existence is probed with `workshop info`: a non-error means the
-// workshop is present and is reused (the launch is expensive (minutes), so it
-// is amortized across runs).
-func (r *Runner) ensureWorkshop(ctx context.Context) error {
-	if err := r.workshop(ctx, verbArgs(r.cfg.ProjectDir, "info", r.cfg.Workshop)); err == nil {
-		return nil // present — reuse
+// ensureWorkshop reconciles the long-lived workshop with the just-derived
+// definition, identified by fingerprint (the digest of the def materialize
+// wrote this run). Absent: launch fresh and record the fingerprint. Present and
+// unchanged: reuse as-is — the amortization fast path (the expensive launch is
+// minutes; this is the common case). Present but changed (the project's
+// workshop.yaml drifted, e.g. an added SDK): refresh the workshop to the new
+// def, then record the new fingerprint.
+func (r *Runner) ensureWorkshop(ctx context.Context, fingerprint string) error {
+	proj, ws := r.cfg.ProjectDir, r.cfg.Workshop
+	if err := r.workshop(ctx, verbArgs(proj, "info", ws)); err != nil {
+		if err := r.workshop(ctx, verbArgs(proj, "launch", ws)); err != nil {
+			return err
+		}
+		return r.writeFingerprint(fingerprint)
 	}
-	return r.workshop(ctx, verbArgs(r.cfg.ProjectDir, "launch", r.cfg.Workshop))
+	recorded, err := r.readFingerprint()
+	if err != nil {
+		return err
+	}
+	if recorded == fingerprint {
+		return nil // unchanged — reuse the existing workshop as-is
+	}
+	// `workshop refresh` reconciles the live workshop to the new
+	// definition (base image, SDKs, and plugs), which covers the #70 drift case
+	// (e.g. an added SDK). A remove+launch fallback is only worth adding if a real
+	// refresh-failure case appears.
+	if err := r.workshop(ctx, verbArgs(proj, "refresh", ws)); err != nil {
+		return err
+	}
+	return r.writeFingerprint(fingerprint)
 }
