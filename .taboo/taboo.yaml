@@ -11,8 +11,8 @@
 workshop: taboo
 base: ubuntu@24.04
 repo: .
-agent: claude-code
-model: sonnet
+agent: opencode
+model: openrouter/qwen/qwen3.7-max
 strategy: branch
 defaults:
   branch-prefix: agent/
@@ -21,7 +21,7 @@ defaults:
 workflows:
   implement:
     prompt-file: prompts/implement.md
-    model: opus
+    model: openrouter/qwen/qwen3.7-max
   review:
     prompt-file: prompts/review.md
-    model: sonnet
+    model: openrouter/qwen/qwen3-coder-plus
