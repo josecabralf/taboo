@@ -1,0 +1,27 @@
+# taboo.yaml — taboo dogfooding itself (issue #62).
+#
+# Single source of truth for the AFK agent loop. The GitHub Actions in
+# .github/workflows/agent-implement.yml and agent-review.yml drive these
+# workflows with `taboo run <name> --vars-file …`. taboo owns the worktree,
+# the workshop, and the git-push-denied agent; the workflow layer owns all
+# GitHub integration (issue/diff fetch, branch push, PR, labels). taboo core
+# stays frozen — this is all config, prompts, and skills around `taboo run`.
+#
+# Validate with `taboo validate`.
+workshop: taboo
+base: ubuntu@24.04
+repo: .
+agent: claude-code
+model: sonnet
+strategy: branch
+defaults:
+  branch-prefix: agent/
+  timeout: 30m
+  max-iterations: 1
+workflows:
+  implement:
+    prompt-file: prompts/implement.md
+    model: opus
+  review:
+    prompt-file: prompts/review.md
+    model: sonnet

@@ -188,7 +188,8 @@ The `docs/` tree is organized by Diátaxis type. Start at
   [agents](docs/reference/agents.md), [CLI](docs/reference/cli.md),
   [taboo.yaml](docs/reference/taboo-yaml.md).
 - Explanation: [isolation model](docs/explanation/isolation-model.md),
-  [design](docs/explanation/design.md).
+  [design](docs/explanation/design.md),
+  [dogfooding](docs/explanation/dogfooding.md).
 
 ## Design and decisions
 
@@ -218,6 +219,32 @@ make test-integration  # integration tests; requires workshop + LXD, build tag `
 
 `make test` runs everywhere. `make test-integration` exercises the real
 `workshop` CLI and LXD and only runs on a host that has both installed.
+
+## taboo dogfoods itself
+
+taboo runs its own issue-to-review loop with nothing but `taboo run`, a pair of
+GitHub Actions, and some prompts and skills. There is no new GitHub or push
+machinery in taboo core; the loop is scaffolding layered around the existing
+single-run primitive.
+
+Label an issue `agent:implement` and GitHub Actions runs `taboo run implement`
+(claude-code / opus) inside a workshop on the runner. The agent explores the
+repo, writes a plan, does test-driven development, and commits in place — it is
+push-denied, so it never touches GitHub. The workflow then pushes the branch,
+opens a draft PR whose body is the agent's plan, and labels that PR
+`agent:review`. The label fires the second workflow, `taboo run review`
+(claude-code / sonnet), which reads the PR diff and posts inline plus top-level
+comments. Throughout, the labels form a small state machine
+(`agent:implement` → `agent:in-progress` → `agent:review`, with `agent:blocked`
+on failure).
+
+The split is deliberate: the agent, inside its workshop, writes code and
+commits; the host workflow layer (`.github/`) owns every GitHub side effect —
+fetching the issue, pushing, opening and labelling PRs, posting the review.
+taboo core stays frozen.
+
+- [Dogfooding the agent loop](docs/explanation/dogfooding.md) — the two
+  workflows, the label state machine, the trust model, and the one-time setup.
 
 ## Status
 

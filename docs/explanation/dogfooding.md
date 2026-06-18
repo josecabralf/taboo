@@ -1,0 +1,145 @@
+# Dogfooding the agent loop
+
+taboo drives its own development. Label an issue and an agent implements it;
+label the resulting pull request and an agent reviews it. The whole loop is built
+out of two GitHub Actions, two prompt files, two skills, and the existing
+`taboo run` command — taboo core gains nothing. This page explains why the loop
+is shaped the way it is, and where its trust boundary sits. For how a single run
+works underneath, see the [isolation model](isolation-model.md).
+
+## Two workflows and a label state machine
+
+The loop is two label-triggered workflows in `.github/workflows/`:
+
+- `agent-implement.yml` fires on an issue gaining the `agent:implement` label.
+- `agent-review.yml` fires on a pull request gaining the `agent:review` label.
+
+Four labels carry the state. Applying `agent:implement` to an issue claims it:
+the implement workflow swaps the issue to `agent:in-progress`, runs
+`taboo run implement` (claude-code / opus) inside a workshop on the runner,
+pushes the agent's branch, opens a draft PR whose body is the agent's plan, and
+labels that PR `agent:review`. The review workflow swaps the PR to
+`agent:in-progress`, runs `taboo run review` (claude-code / sonnet), posts a
+single PR review, and clears the label. On either side a failure adds
+`agent:blocked` and comments a run link plus a retry hint; re-adding the trigger
+label retries.
+
+The chain from implement to review is automatic, but only because the
+`agent:review` label is applied with a personal access token rather than the
+default `GITHUB_TOKEN`. A label applied with `GITHUB_TOKEN` does not trigger
+another workflow — GitHub suppresses that to prevent recursive runs. So the
+cascade depends on `secrets.AGENT_PAT`; without it the PR is created and labelled
+but the review workflow never wakes up. This is the single non-obvious wiring
+fact in the whole loop, and the one-time setup below calls it out.
+
+## Why the boundary is "scaffolding only"
+
+taboo's contract is to run an agent inside a workshop and land its commits on a
+host branch. It denies `git push` from inside the workshop, by design, because a
+linked worktree shares the host repository's object store and a push could mutate
+host branches directly (see [the isolation model](isolation-model.md)). That deny
+is the load-bearing reason the loop is split the way it is.
+
+Everything GitHub-shaped lives on the host, in the workflow YAML, not in taboo
+and not in the agent:
+
+- The **agent** explores, plans, does TDD, and commits in place. It never
+  fetches an issue, pushes a branch, opens a PR, or posts a comment.
+- The **workflow** does all of that: it fetches the issue body, computes the
+  branch name, builds the variables file, invokes `taboo run`, pushes the branch,
+  opens the draft PR, labels it, and (on the review side) posts the review.
+
+This keeps taboo core frozen. The loop is config (`taboo.yaml`), prompts
+(`.taboo/prompts/`), skills (`.claude/skills/`), and two Actions — no new
+push-or-GitHub code anywhere in `pkg/taboo`. If you wanted a different host (say
+GitLab), you would rewrite the workflow layer and leave taboo untouched.
+
+Inputs reach the agent through taboo's variable substitution, never through the
+shell. The workflows build a JSON variables file and pass it with
+`taboo run --vars-file`. taboo fills the prompt's `{{VAR}}` placeholders from
+that file literally, so an issue body full of backticks, `$()`, or quotes is
+injected as data and cannot be interpreted as a command (issue #61). An undefined
+placeholder when variables are supplied is a hard error, which is why each prompt
+declares exactly the variable set its workflow provides.
+
+## Validation is the PR's CI, not the agent
+
+The agent's workshop holds only the agent CLI on a base Ubuntu rootfs — no Go
+toolchain, no `golangci-lint`. The agent therefore cannot run the test suite or
+the linter itself; it writes correct, test-covered code under TDD discipline and
+trusts the gate downstream.
+
+That gate is the repository's existing CI, which runs on every pull request to
+`main` and runs `make lint`, `make test`, and `make build` (via `workshop run`)
+against the branch the agent produced. The implement workflow's job ends at
+"open the draft PR"; CI on
+that PR is what actually proves the change. This is why the implement skill
+instructs the agent to write code that will pass CI rather than to try to run the
+gate locally — locally, it can't.
+
+## Inline comments are dropped, not errored
+
+The review agent emits a JSON file shaped as a top-level comment plus an array of
+inline comments, each carrying a `path` and a `line`. GitHub's review API rejects
+the entire review if any inline comment points at a line that is not part of the
+diff — and an LLM, reading a unified diff, occasionally anchors a comment to a
+line just outside a hunk or on the deleted side.
+
+So the review workflow filters before it posts. It computes the set of valid
+`path:line` keys — every line present on the **right** (new) side of the diff,
+which is both added and context lines — and drops any inline comment that misses
+that set, logging a warning to the run log for each drop. Only the survivors, plus
+the top-level comment, go into the one review the workflow posts. A
+mis-anchored comment costs a warning, not a failed run. The choice is to degrade
+the review gracefully rather than lose it entirely to one bad line number.
+
+## Trust and security model
+
+The whole loop rests on one control: **a label is authorization.** Applying a
+label requires write access to the repository, so only a trusted collaborator can
+start an agent run. There is no other gate — no allow-list, no comment-command
+parser, no per-run approval. If you can label, you can run the agent.
+
+Given that, the review agent's inputs are inside the trust boundary on purpose.
+The issue was vetted by the maintainer who labelled it; the diff was produced by
+our own implement agent on a branch we control. The review workflow consumes them
+with write-scoped tokens because it has to post a review, and it does so trusting
+that a maintainer's label vouched for them.
+
+This is **not hardened for untrusted public forks.** The review workflow uses
+`pull_request_target`, which runs with the base repository's secrets even for a
+fork's PR. On a repository that accepts drive-by fork PRs, a labeller could be
+tricked into running agent code with access to `CLAUDE_CODE_OAUTH_TOKEN` and
+`AGENT_PAT` — the classic `pull_request_target` secret-exfiltration footgun. The
+loop assumes a trusted-contributor repository where everyone who can label is
+already trusted with secrets. Hardening it for open public contribution (forks,
+sandboxed review of untrusted diffs, scoped-down tokens) is a separate project,
+not part of this loop.
+
+## Human one-time setup
+
+Before the loop can run, a repository admin sets up four things by hand:
+
+- **Create the four `agent:*` labels:** `agent:implement`, `agent:review`,
+  `agent:in-progress`, and `agent:blocked`. The workflows assume they already
+  exist.
+- **Add the agent credential secret:** `CLAUDE_CODE_OAUTH_TOKEN`, the token the
+  claude-code agent authenticates with inside the workshop.
+- **Add `AGENT_PAT`:** a personal access token with `repo` scope. The implement
+  workflow applies the `agent:review` label with this PAT so the review workflow
+  cascades; a label applied with the default `GITHUB_TOKEN` does not trigger
+  another workflow, so without the PAT the chain stops at the open PR.
+- **Confirm Actions permissions:** GitHub Actions must be allowed to push
+  branches, open and label pull requests, and post reviews (workflow `contents`,
+  `issues`, and `pull-requests` write permissions, plus repository settings that
+  permit Actions to create and approve pull requests where required).
+
+With those in place, labelling an issue `agent:implement` runs the whole loop end
+to end.
+
+## See also
+
+- [The isolation model](isolation-model.md) — push-denied workshops and why the
+  host owns integration.
+- [Why the API is shaped this way](design.md)
+- [CLI reference](../reference/cli.md) — `taboo run` and its flags.

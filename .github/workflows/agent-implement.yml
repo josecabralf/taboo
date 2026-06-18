@@ -1,0 +1,187 @@
+# agent-implement.yml — label-driven "implement an issue" workflow.
+#
+# AUTHORIZATION: this workflow is gated by the `agent:implement` label. Applying
+# a label requires write access to the repo, so the label IS the authorization —
+# only someone trusted can kick off an agent run.
+#
+# ENGINE: the actual work runs inside a taboo-provisioned LXD "workshop". taboo
+# creates a fresh git worktree+branch off main, launches the claude-code agent
+# (opus) inside the workshop with cwd=/workspace, and the agent COMMITS IN PLACE.
+# The agent is git-PUSH DENIED — it cannot touch GitHub. This workflow layer does
+# ALL GitHub I/O: fetch the issue, push the branch, open the draft PR, label it.
+#
+# VALIDATION: the agent's workshop has only the claude CLI + base ubuntu (no go,
+# no golangci-lint), so it cannot run the test suite itself. Authoritative
+# validation is the PR's CI (ci.yml runs `workshop run -- make lint/test/build`
+# on every pull_request to main). The agent writes correct, test-covered code;
+# CI-on-PR is the gate.
+#
+# AGENT_PAT: labels applied with the default GITHUB_TOKEN do NOT trigger other
+# workflows. To make the `agent:review` label we add to the new PR CASCADE into
+# agent-review.yml, that label must be applied with a PAT (secrets.AGENT_PAT).
+
+name: agent-implement
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: agent-implement-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: github.event.label.name == 'agent:implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Transition labels (claim the issue)
+        run: |
+          set -euo pipefail
+          gh issue edit "$ISSUE_NUMBER" --remove-label agent:implement || true
+          gh issue edit "$ISSUE_NUMBER" --remove-label agent:blocked || true
+          gh issue edit "$ISSUE_NUMBER" --add-label agent:in-progress
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Setup environment (lxd + workshop)
+        uses: ./.github/actions/setup-env
+
+      - name: Build taboo
+        run: go build -o "$RUNNER_TEMP/taboo" ./cmd/taboo
+
+      - name: Compute branch name
+        id: branch
+        run: |
+          set -euo pipefail
+          slug=$(printf '%s' "$ISSUE_TITLE" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr -c '[:alnum:]' '-' \
+            | tr -s '-' \
+            | sed 's/^-//; s/-$//' \
+            | cut -c1-50 \
+            | sed 's/-$//')
+          branch="agent/issue-${ISSUE_NUMBER}-${slug}"
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Build vars file
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE_NUMBER" --json body \
+            --jq '.body' > "$RUNNER_TEMP/issue-body.txt"
+          jq -n \
+            --arg num "$ISSUE_NUMBER" \
+            --arg title "$ISSUE_TITLE" \
+            --rawfile body "$RUNNER_TEMP/issue-body.txt" \
+            '{
+              ISSUE_NUMBER: $num,
+              ISSUE_TITLE: $title,
+              ISSUE_BODY: $body,
+              PLAN_OUTPUT_PATH: ".taboo-plan.md"
+            }' > "$RUNNER_TEMP/vars.json"
+
+      - name: Run implement agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/taboo" run implement \
+            --vars-file "$RUNNER_TEMP/vars.json" \
+            --branch "${{ steps.branch.outputs.name }}" \
+            --yes --json | tee "$RUNNER_TEMP/run.json"
+
+      - name: Push branch
+        if: success()
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.branch.outputs.name }}"
+          # Force so re-adding the label after a partial failure overwrites the
+          # stale agent branch (its name is deterministic per issue). The branch
+          # is agent-owned; a maintainer re-triggering wants a fresh attempt.
+          git push --force origin "$BRANCH"
+
+      - name: Open draft PR
+        id: open_pr
+        if: success()
+        # Open the PR with the PAT (when available) so the repo's CI (ci.yml, on
+        # pull_request) actually runs on it — a PR opened with the default
+        # GITHUB_TOKEN does not trigger further workflow runs, which would skip
+        # the `make lint/test/build` gate that is this loop's validation.
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.branch.outputs.name }}"
+          worktree=$(jq -r '.worktree' "$RUNNER_TEMP/run.json")
+          plan_file="$worktree/.taboo-plan.md"
+          body_file="$RUNNER_TEMP/pr-body.md"
+
+          {
+            printf 'Closes #%s\n\n' "$ISSUE_NUMBER"
+            if [ -f "$plan_file" ]; then
+              cat "$plan_file"
+            else
+              printf 'Implemented by the taboo agent for issue #%s.\n\n' "$ISSUE_NUMBER"
+              printf '_(No plan file was produced; see the commit for details.)_\n'
+            fi
+          } > "$body_file"
+
+          title="$ISSUE_TITLE"
+          title=$(printf '%s' "$title" | cut -c1-256)
+
+          pr_url=$(gh pr create \
+            --draft \
+            --base main \
+            --head "$BRANCH" \
+            --title "$title" \
+            --body-file "$body_file")
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+          pr_number=$(gh pr view "$pr_url" --json number --jq '.number')
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Label PR for review (cascade)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ steps.open_pr.outputs.number }}"
+          gh pr edit "$PR_NUMBER" --add-label agent:review
+
+      - name: Mark blocked on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          reason="The implement agent failed."
+          if [ -f "$RUNNER_TEMP/run.json" ]; then
+            reason="The implement agent failed. See the run output for details."
+          fi
+          run_url="${GITHUB_SERVER_URL}/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}"
+          gh issue edit "$ISSUE_NUMBER" --add-label agent:blocked || true
+          gh issue comment "$ISSUE_NUMBER" --body "$(printf '%s\n\nRun: %s\n\nRe-add the `agent:implement` label to retry.' "$reason" "$run_url")" || true
+
+      - name: Always remove in-progress label
+        if: always()
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label agent:in-progress || true

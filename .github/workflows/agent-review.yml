@@ -1,0 +1,199 @@
+# Label-driven review workflow (issue #62 dogfooding loop).
+#
+# The `agent:review` label IS the authorization: only a maintainer with write
+# access can apply it, so applying it is the act of trusting these inputs. The
+# review agent's inputs (a maintainer-vetted issue + a diff produced by our own
+# trusted implement agent) are inside the trust boundary. This workflow uses
+# pull_request_target (it needs write tokens to post the review) and is
+# therefore NOT hardened against untrusted public-fork PRs — running it on a
+# fork PR would expose secrets. That trade-off is deliberate and documented in
+# docs/explanation/dogfooding.md.
+#
+# Flow: read the review agent's .taboo-review.json, drop any inline comment
+# whose path:line isn't on the RIGHT side of the PR diff (drop, never error),
+# then post exactly ONE PR review via `gh api`.
+name: agent-review
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  review:
+    if: github.event.label.name == 'agent:review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: agent-review-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Transition labels (review -> in-progress)
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_NUMBER" --remove-label agent:review || true
+          gh pr edit "$PR_NUMBER" --remove-label agent:blocked || true
+          gh pr edit "$PR_NUMBER" --add-label agent:in-progress
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-env
+
+      - name: Build taboo
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/taboo" ./cmd/taboo
+
+      - name: Build vars file
+        run: |
+          set -euo pipefail
+
+          PR_TITLE=$(gh pr view "$PR_NUMBER" --json title --jq .title)
+          gh pr diff "$PR_NUMBER" > "$RUNNER_TEMP/diff.txt"
+
+          # Best-effort: find the linked issue from a closing keyword in the PR body.
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
+          ISSUE_REF=$(printf '%s' "$PR_BODY" | grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' | head -n1 || true)
+          ISSUE_NUMBER=$(printf '%s' "$ISSUE_REF" | grep -oE '[0-9]+' || true)
+
+          ISSUE_TITLE=""
+          ISSUE_BODY=""
+          if [ -n "$ISSUE_NUMBER" ]; then
+            ISSUE_TITLE=$(gh issue view "$ISSUE_NUMBER" --json title --jq .title || true)
+            ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json body --jq .body || true)
+          fi
+
+          jq -n \
+            --arg PR_NUMBER "$PR_NUMBER" \
+            --arg PR_TITLE "$PR_TITLE" \
+            --arg ISSUE_NUMBER "$ISSUE_NUMBER" \
+            --arg ISSUE_TITLE "$ISSUE_TITLE" \
+            --arg ISSUE_BODY "$ISSUE_BODY" \
+            --rawfile PR_DIFF "$RUNNER_TEMP/diff.txt" \
+            --arg REVIEW_OUTPUT_PATH ".taboo-review.json" \
+            '{
+              PR_NUMBER: $PR_NUMBER,
+              PR_TITLE: $PR_TITLE,
+              ISSUE_NUMBER: $ISSUE_NUMBER,
+              ISSUE_TITLE: $ISSUE_TITLE,
+              ISSUE_BODY: $ISSUE_BODY,
+              PR_DIFF: $PR_DIFF,
+              REVIEW_OUTPUT_PATH: $REVIEW_OUTPUT_PATH
+            }' > "$RUNNER_TEMP/vars.json"
+
+      - name: Run review agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The review agent writes .taboo-review.json into its throwaway worktree
+          # and makes no code change; we never push its branch.
+          "$RUNNER_TEMP/taboo" run review \
+            --vars-file "$RUNNER_TEMP/vars.json" \
+            --yes --json | tee "$RUNNER_TEMP/run.json"
+
+      - name: Filter inline comments and post review
+        if: success()
+        run: |
+          set -euo pipefail
+
+          worktree=$(jq -r .worktree "$RUNNER_TEMP/run.json")
+          review="$worktree/.taboo-review.json"
+          if [ ! -f "$review" ]; then
+            echo "review agent did not produce $review" >&2
+            exit 1
+          fi
+
+          # Build the set of valid "path:line" keys = lines present on the RIGHT
+          # (new) side of the diff: added ('+') and context (' ') lines. We track
+          # the current file from '+++ b/<path>' and the new-side line counter
+          # from each hunk header '@@ -a,b +c,d @@'.
+          awk '
+            /^diff --git / { file = ""; next }
+            /^\+\+\+ b\// { file = substr($0, 7); next }
+            /^\+\+\+ / { file = ""; next }
+            /^--- / { next }
+            /^@@ / {
+              # field $3 is "+c,d" (or "+c"); strip leading + and any ,d.
+              plus = $3
+              sub(/^\+/, "", plus)
+              sub(/,.*/, "", plus)
+              newline = plus + 0
+              next
+            }
+            file == "" { next }
+            /^\+/ { print file ":" newline; newline++; next }
+            /^-/ { next }
+            /^\\/ { next }
+            { print file ":" newline; newline++ }
+          ' "$RUNNER_TEMP/diff.txt" | sort -u > "$RUNNER_TEMP/valid.txt"
+
+          # Read valid keys into a jq-consumable JSON array.
+          jq -R -s 'split("\n") | map(select(length > 0))' "$RUNNER_TEMP/valid.txt" > "$RUNNER_TEMP/valid.json"
+
+          # Emit warnings for dropped comments.
+          jq -r --slurpfile valid "$RUNNER_TEMP/valid.json" '
+            ($valid[0]) as $v
+            | (.inlineComments // [])
+            | map(select((.path + ":" + (.line | tostring)) as $k | ($v | index($k)) == null))
+            | .[]
+            | "dropping out-of-diff inline comment: \(.path):\(.line)"
+          ' "$review" >&2 || true
+
+          head_sha=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
+
+          jq --slurpfile valid "$RUNNER_TEMP/valid.json" --arg commit "$head_sha" '
+            ($valid[0]) as $v
+            | {
+                commit_id: $commit,
+                event: "COMMENT",
+                body: (.topLevelComment // ""),
+                comments: (
+                  (.inlineComments // [])
+                  | map(select((.path + ":" + (.line | tostring)) as $k | ($v | index($k)) != null))
+                  | map({ path: .path, line: .line, side: "RIGHT", body: .body })
+                )
+              }
+          ' "$review" > "$RUNNER_TEMP/payload.json"
+
+          # A COMMENT review with an empty body and no comments is rejected by
+          # GitHub (422). If the agent had nothing to say and every inline
+          # comment was dropped, skip the post rather than fail the run and
+          # falsely mark the PR blocked — degrade gracefully, never error.
+          if [ "$(jq -r '((.body // "") == "") and ((.comments | length) == 0)' "$RUNNER_TEMP/payload.json")" = "true" ]; then
+            echo "review is clean (empty body, no in-diff comments); nothing to post"
+          else
+            gh api --method POST \
+              "repos/{owner}/{repo}/pulls/$PR_NUMBER/reviews" \
+              --input "$RUNNER_TEMP/payload.json"
+          fi
+
+      - name: Mark blocked on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_NUMBER" --add-label agent:blocked || true
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh pr comment "$PR_NUMBER" --body "$(printf 'agent:review failed. See the run log: %s\n\nRe-add the `agent:review` label to retry.' "$run_url")"
+
+      - name: Remove in-progress label
+        if: always()
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_NUMBER" --remove-label agent:in-progress || true
