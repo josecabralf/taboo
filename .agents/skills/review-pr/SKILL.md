@@ -13,7 +13,7 @@ description: Review a pull-request diff and emit inline + top-level comments as 
 - [ ] Read the injected linked-issue context (its body, title, and number) and confirm the diff actually satisfies it.
 - [ ] Check **correctness**: does the change do what the issue asks, with no logic bugs or unhandled edge cases?
 - [ ] Check **clarity**: are names, structure, and comments understandable to the next reader?
-- [ ] Check **consistency**: does it match the repo's conventions, layout, and existing patterns (see `CLAUDE.md`)?
+- [ ] Check **consistency**: does it match the repo's conventions, layout, and existing patterns (see `AGENTS.md`)?
 - [ ] Check **tests**: is the new behavior covered, and do the tests verify behavior through public interfaces (delegate to the [tdd](../tdd/SKILL.md) skill for what good tests look like)?
 
 ## Comment

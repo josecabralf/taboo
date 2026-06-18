@@ -31,10 +31,14 @@ description: Orchestrate an issue from explore through a committed, test-covered
 
 ## Validate
 
-**Run the gate you have access to.**
+**Get the project's checks green in your workshop before you commit.**
 
-- [ ] If your environment has the Go toolchain, format with `make fmt`, then run `make lint test build` — the same checks CI runs.
-- [ ] The AFK agent workshop ships only the agent CLI — no Go, no golangci-lint. There the authoritative gate is the project's CI (`workshop run -- make lint test build`) on the resulting pull request, so write code that will pass it.
+Your workshop is derived from the project's own `workshop.yaml`, so it carries the
+full toolchain — Go, `golangci-lint`, and `make` — the same checks CI runs.
+
+- [ ] Format with `make fmt`.
+- [ ] Run `make lint test build` and fix what they report; do not commit while any of them is red.
+- [ ] This is your inner loop. The PR's CI runs the same `make lint test build` again on the branch you produce, so it stays the authoritative gate. Green locally is the bar to clear, not a substitute for that gate.
 
 ## Commit
 

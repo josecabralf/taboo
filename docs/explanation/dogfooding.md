@@ -16,10 +16,10 @@ The loop is two label-triggered workflows in `.github/workflows/`:
 
 Four labels carry the state. Applying `agent:implement` to an issue claims it:
 the implement workflow swaps the issue to `agent:in-progress`, runs
-`taboo run implement` (claude-code / opus) inside a workshop on the runner,
+`taboo run implement` (opencode / qwen) inside a workshop on the runner,
 pushes the agent's branch, opens a draft PR whose body is the agent's plan, and
 labels that PR `agent:review`. The review workflow swaps the PR to
-`agent:in-progress`, runs `taboo run review` (claude-code / sonnet), posts a
+`agent:in-progress`, runs `taboo run review` (opencode / qwen-coder), posts a
 single PR review, and clears the label. On either side a failure adds
 `agent:blocked` and comments a run link plus a retry hint; re-adding the trigger
 label retries.
@@ -50,7 +50,7 @@ and not in the agent:
   opens the draft PR, labels it, and (on the review side) posts the review.
 
 This keeps taboo core frozen. The loop is config (`taboo.yaml`), prompts
-(`.taboo/prompts/`), skills (`.claude/skills/`), and two Actions — no new
+(`.taboo/prompts/`), skills (`.agents/skills/`), and two Actions — no new
 push-or-GitHub code anywhere in `pkg/taboo`. If you wanted a different host (say
 GitLab), you would rewrite the workflow layer and leave taboo untouched.
 
@@ -62,20 +62,33 @@ injected as data and cannot be interpreted as a command (issue #61). An undefine
 placeholder when variables are supplied is a hard error, which is why each prompt
 declares exactly the variable set its workflow provides.
 
-## Validation is the PR's CI, not the agent
+## The agent self-validates; the PR's CI is the gate
 
-The agent's workshop holds only the agent CLI on a base Ubuntu rootfs — no Go
-toolchain, no `golangci-lint`. The agent therefore cannot run the test suite or
-the linter itself; it writes correct, test-covered code under TDD discipline and
-trusts the gate downstream.
+The agent's workshop is not a bare rootfs carrying only the agent CLI. taboo
+derives it from the project's own `workshop.yaml`
+([ADR 0009](../adr/0009-derive-workshop-from-project-definition.md)), so the
+derived definition inherits the project's toolchain — Go, `golangci-lint`, and
+the `make` action — the same environment humans and CI use. "The agent's
+sandbox is the dev's sandbox," which means the agent can run the project's checks
+itself.
 
-That gate is the repository's existing CI, which runs on every pull request to
-`main` and runs `make lint`, `make test`, and `make build` (via `workshop run`)
-against the branch the agent produced. The implement workflow's job ends at
-"open the draft PR"; CI on
-that PR is what actually proves the change. This is why the implement skill
-instructs the agent to write code that will pass CI rather than to try to run the
-gate locally — locally, it can't.
+It does. As part of the TDD loop the implement skill drives, the agent formats
+with `make fmt`, then runs `make lint test build` in its workshop, fixing what
+they flag before it commits. This is the inner correction loop a headless agent
+otherwise lacks: a broken build or a lint failure surfaces in seconds, not a CI
+round-trip later.
+
+The PR's CI is still the authoritative gate. `ci.yml` runs the same
+`make lint`, `make test`, and `make build` (via `workshop run`) on every pull
+request to `main`, against the branch the agent produced — the implement workflow
+opens a *draft* PR precisely so CI runs and a human can look before anything
+lands. The two are
+complementary, not redundant (ADR 0009): the agent's inner loop raises diff
+quality before the PR exists; CI is what proves the change on the way to merge.
+
+Self-validation does not touch the trust boundary. Running `make` needs no GitHub
+access and no push — the agent is still push-denied and still works only inside
+its workshop, and the host workflow still owns every GitHub side effect.
 
 ## Inline comments are dropped, not errored
 
@@ -109,7 +122,7 @@ that a maintainer's label vouched for them.
 This is **not hardened for untrusted public forks.** The review workflow uses
 `pull_request_target`, which runs with the base repository's secrets even for a
 fork's PR. On a repository that accepts drive-by fork PRs, a labeller could be
-tricked into running agent code with access to `CLAUDE_CODE_OAUTH_TOKEN` and
+tricked into running agent code with access to `OPENROUTER_API_KEY` and
 `AGENT_PAT` — the classic `pull_request_target` secret-exfiltration footgun. The
 loop assumes a trusted-contributor repository where everyone who can label is
 already trusted with secrets. Hardening it for open public contribution (forks,
@@ -123,8 +136,8 @@ Before the loop can run, a repository admin sets up four things by hand:
 - **Create the four `agent:*` labels:** `agent:implement`, `agent:review`,
   `agent:in-progress`, and `agent:blocked`. The workflows assume they already
   exist.
-- **Add the agent credential secret:** `CLAUDE_CODE_OAUTH_TOKEN`, the token the
-  claude-code agent authenticates with inside the workshop.
+- **Add the agent credential secret:** `OPENROUTER_API_KEY`, the OpenRouter API
+  key the opencode agent authenticates with inside the workshop.
 - **Add `AGENT_PAT`:** a personal access token with `repo` scope. The implement
   workflow applies the `agent:review` label with this PAT so the review workflow
   cascades; a label applied with the default `GITHUB_TOKEN` does not trigger

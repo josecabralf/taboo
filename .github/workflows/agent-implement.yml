@@ -5,16 +5,18 @@
 # only someone trusted can kick off an agent run.
 #
 # ENGINE: the actual work runs inside a taboo-provisioned LXD "workshop". taboo
-# creates a fresh git worktree+branch off main, launches the claude-code agent
-# (opus) inside the workshop with cwd=/workspace, and the agent COMMITS IN PLACE.
-# The agent is git-PUSH DENIED — it cannot touch GitHub. This workflow layer does
-# ALL GitHub I/O: fetch the issue, push the branch, open the draft PR, label it.
+# creates a fresh git worktree+branch off main, launches the opencode agent
+# (qwen via OpenRouter) inside the workshop with cwd=/workspace, and the agent
+# COMMITS IN PLACE. The agent is git-PUSH DENIED — it cannot touch GitHub. This
+# workflow layer does ALL GitHub I/O: fetch the issue, push the branch, open the
+# draft PR, label it.
 #
-# VALIDATION: the agent's workshop has only the claude CLI + base ubuntu (no go,
-# no golangci-lint), so it cannot run the test suite itself. Authoritative
-# validation is the PR's CI (ci.yml runs `workshop run -- make lint/test/build`
-# on every pull_request to main). The agent writes correct, test-covered code;
-# CI-on-PR is the gate.
+# VALIDATION: the workshop is derived from the project's own workshop.yaml
+# (ADR 0009), so it carries the full toolchain — the agent runs `make lint test
+# build` itself and converges to green before committing. The PR's CI (ci.yml runs
+# the same `workshop run -- make lint/test/build` on every pull_request to main)
+# stays the authoritative gate; the agent's in-workshop run is the inner loop, not
+# a replacement.
 #
 # AGENT_PAT: labels applied with the default GITHUB_TOKEN do NOT trigger other
 # workflows. To make the `agent:review` label we add to the new PR CASCADE into
@@ -102,7 +104,7 @@ jobs:
 
       - name: Run implement agent
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/taboo" run implement \
@@ -126,7 +128,7 @@ jobs:
         # Open the PR with the PAT (when available) so the repo's CI (ci.yml, on
         # pull_request) actually runs on it — a PR opened with the default
         # GITHUB_TOKEN does not trigger further workflow runs, which would skip
-        # the `make lint/test/build` gate that is this loop's validation.
+        # the `make lint/test/build` gate that is the loop's authoritative check.
         env:
           GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
         run: |

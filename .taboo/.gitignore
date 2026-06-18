@@ -2,5 +2,7 @@
 # Runtime state taboo writes that should never be committed.
 worktrees/
 .workshop/
+/workshop.yaml
+/workshop.fingerprint
 .env
 logs/
