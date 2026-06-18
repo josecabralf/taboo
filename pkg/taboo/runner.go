@@ -7,14 +7,15 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// sdkFS holds the agent SDK(s) taboo ships. Each is seeded into a managed
-// project's .workshop/ directory so the rendered definition can reference it
-// as an in-project SDK (e.g. "project-opencode").
+// sdkFS holds every agent SDK taboo ships. A run seeds only the configured
+// agent's tree into the managed project's .workshop/ directory so the rendered
+// definition can reference it as an in-project SDK (e.g. "project-opencode").
 //
 //go:embed sdk
 var sdkFS embed.FS
@@ -94,19 +95,23 @@ func (r *Runner) writeDefinition() error {
 	return os.WriteFile(path, []byte(out), 0o600)
 }
 
-// seedSDK writes taboo's embedded agent SDK(s) into the project's .workshop
-// directory (e.g. .workshop/opencode/sdk.yaml + hooks/...), so the rendered
-// definition's "project-<sdk>" reference resolves.
+// seedSDK writes the configured agent's embedded SDK into the project's
+// .workshop directory (e.g. .workshop/opencode/sdk.yaml + hooks/...), so the
+// rendered definition's "project-<agent>" reference resolves.
 func (r *Runner) seedSDK() error {
-	const root = "sdk"
+	const sdkRoot = "sdk"
+	// Walk only the configured agent's subtree, stripping just the leading
+	// "sdk/" so the agent-name segment survives. The destination layout stays
+	// .workshop/<agent>/..., which is what "project-<agent>" resolves against.
+	root := path.Join(sdkRoot, r.cfg.Agent.Name())
 	return fs.WalkDir(sdkFS, root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel := strings.TrimPrefix(strings.TrimPrefix(p, root), "/")
-		if rel == "" {
-			return nil
-		}
+		// Every walked entry is rooted at sdk/<agent>, so trimming the literal
+		// "sdk/" keeps the <agent>/... layout; the root entry itself becomes
+		// "<agent>", a real dir that MkdirAll handles.
+		rel := strings.TrimPrefix(p, sdkRoot+"/")
 		dst := filepath.Join(r.cfg.ProjectDir, ".workshop", rel)
 		if d.IsDir() {
 			return os.MkdirAll(dst, 0o750)
