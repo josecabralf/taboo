@@ -206,7 +206,7 @@ func TestEnsureWorkshop_AbsentLaunches(t *testing.T) {
 	cfg := testConfig(t)
 	r := New(cfg, fc)
 
-	if err := r.ensureWorkshop(context.Background()); err != nil {
+	if err := r.ensureWorkshop(context.Background(), "fp"); err != nil {
 		t.Fatalf("ensureWorkshop: %v", err)
 	}
 
@@ -215,17 +215,171 @@ func TestEnsureWorkshop_AbsentLaunches(t *testing.T) {
 	}
 }
 
+// TestEnsureWorkshop_AbsentLaunchesPersistsFingerprint pins the tracer-bullet
+// path: an absent workshop is launched AND the derived def's fingerprint is
+// recorded beside it, so the next run can probe for drift. The persisted digest
+// must be exactly the fingerprint ensureWorkshop was handed (what the live
+// workshop was just provisioned with).
+func TestEnsureWorkshop_AbsentLaunchesPersistsFingerprint(t *testing.T) {
+	cfg := testConfig(t)
+	fc := &fakeCommander{errFn: failOnVerb("info")}
+	r := New(cfg, fc)
+
+	const fp = "f1deadbeef" // an arbitrary stand-in digest
+
+	if err := r.ensureWorkshop(context.Background(), fp); err != nil {
+		t.Fatalf("ensureWorkshop: %v", err)
+	}
+
+	// Absent -> launch.
+	if got := fc.verbs(); !slices.Equal(got, []string{"info", "launch"}) {
+		t.Errorf("calls = %v, want [info launch]", got)
+	}
+
+	// The fingerprint is persisted beside the derived def.
+	b, err := os.ReadFile(filepath.Join(cfg.ProjectDir, "workshop.fingerprint"))
+	if err != nil {
+		t.Fatalf("fingerprint sidecar not written: %v", err)
+	}
+	if got := strings.TrimSpace(string(b)); got != fp {
+		t.Errorf("persisted fingerprint = %q, want %q", got, fp)
+	}
+}
+
 func TestEnsureWorkshop_PresentReuses(t *testing.T) {
-	// `info` succeeds -> workshop exists -> no launch.
+	// `info` succeeds -> workshop exists -> no launch. Pure reuse now also requires
+	// the persisted fingerprint to MATCH the one ensureWorkshop is handed; a stale
+	// (or absent) record forces a refresh instead, so pre-record the match.
 	fc := &fakeCommander{} // all calls succeed
 	r := New(testConfig(t), fc)
 
-	if err := r.ensureWorkshop(context.Background()); err != nil {
+	if err := r.writeFingerprint("fp"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.ensureWorkshop(context.Background(), "fp"); err != nil {
 		t.Fatalf("ensureWorkshop: %v", err)
 	}
 
 	if got := fc.verbs(); !slices.Equal(got, []string{"info"}) {
 		t.Errorf("calls = %v, want [info] (reuse, no launch)", got)
+	}
+}
+
+// TestEnsureWorkshop_ChangedTriggersRefresh pins the #70 drift case: the workshop
+// is present (info succeeds) but the persisted fingerprint is STALE — the
+// project's workshop.yaml changed since the live workshop was provisioned, so
+// taboo must reconcile by refreshing (not relaunching) and re-record the new
+// digest so the next run takes the reuse fast path.
+func TestEnsureWorkshop_ChangedTriggersRefresh(t *testing.T) {
+	cfg := testConfig(t)
+	fc := &fakeCommander{} // all verbs succeed -> workshop present
+	r := New(cfg, fc)
+
+	// A stale record: the live workshop was last provisioned with a different def.
+	if err := r.writeFingerprint("stale"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.ensureWorkshop(context.Background(), "fresh"); err != nil {
+		t.Fatalf("ensureWorkshop: %v", err)
+	}
+
+	if got := fc.verbs(); !slices.Contains(got, "refresh") {
+		t.Errorf("calls = %v, want a refresh (drift reconcile)", got)
+	}
+	if got := fc.verbs(); slices.Contains(got, "launch") {
+		t.Errorf("calls = %v, want NO launch (refresh, not relaunch)", got)
+	}
+
+	// The sidecar is re-persisted to the new digest.
+	b, err := os.ReadFile(r.fingerprintPath())
+	if err != nil {
+		t.Fatalf("fingerprint sidecar not written: %v", err)
+	}
+	if got := strings.TrimSpace(string(b)); got != "fresh" {
+		t.Errorf("persisted fingerprint = %q, want %q", got, "fresh")
+	}
+}
+
+// TestEnsureWorkshop_PresentWithoutFingerprintRefreshes covers the upgrade path: a
+// workshop that predates fingerprinting (or was launched out of band) is present
+// but carries no provisioning record. With no proof it matches the current def,
+// taboo reconciles by refreshing — the safe default — and records the digest so
+// later unchanged runs reuse it.
+func TestEnsureWorkshop_PresentWithoutFingerprintRefreshes(t *testing.T) {
+	cfg := testConfig(t)
+	fc := &fakeCommander{} // info succeeds -> present; no sidecar on disk
+	r := New(cfg, fc)
+
+	if err := r.ensureWorkshop(context.Background(), "current"); err != nil {
+		t.Fatalf("ensureWorkshop: %v", err)
+	}
+
+	if got := fc.verbs(); !slices.Contains(got, "refresh") {
+		t.Errorf("calls = %v, want a refresh (no prior fingerprint -> safe reconcile)", got)
+	}
+	if got := fc.verbs(); slices.Contains(got, "launch") {
+		t.Errorf("calls = %v, want NO launch (workshop is present)", got)
+	}
+	b, err := os.ReadFile(r.fingerprintPath())
+	if err != nil {
+		t.Fatalf("fingerprint sidecar not written: %v", err)
+	}
+	if got := strings.TrimSpace(string(b)); got != "current" {
+		t.Errorf("persisted fingerprint = %q, want %q", got, "current")
+	}
+}
+
+// TestWriteDefinition_FingerprintIsStableForUnchangedSource pins the property the
+// reuse fast path (acceptance #1) rests on: an unchanged project workshop.yaml
+// derives to a byte-identical definition, hence the same fingerprint, so a run
+// reuses the live workshop instead of churning a spurious refresh every time. It
+// guards against a future derive change (e.g. an unsorted plug map) that would
+// silently vary the digest from one run to the next.
+func TestWriteDefinition_FingerprintIsStableForUnchangedSource(t *testing.T) {
+	cfg := testConfig(t)
+	r := New(cfg, &fakeCommander{})
+	source := []byte("name: myproject\nbase: ubuntu@24.04\nsdks:\n  - name: go\n")
+
+	fp1, _, err := r.writeDefinition(source)
+	if err != nil {
+		t.Fatalf("writeDefinition (1): %v", err)
+	}
+	fp2, _, err := r.writeDefinition(source)
+	if err != nil {
+		t.Fatalf("writeDefinition (2): %v", err)
+	}
+	if fp1 == "" {
+		t.Fatal("fingerprint is empty")
+	}
+	if fp1 != fp2 {
+		t.Errorf("fingerprint not stable for unchanged source: %q vs %q", fp1, fp2)
+	}
+}
+
+// TestEnsureWorkshop_UnchangedReusesNoRefresh locks acceptance #1: when the
+// workshop is present (info succeeds) AND the persisted fingerprint MATCHES the
+// just-derived def, taboo reuses it as-is — no refresh, no launch, no re-write
+// churn. This no-op is what the expensive-launch amortization depends on, so the
+// verb sequence must be exactly [info]; a future change that accidentally
+// refreshed an unchanged workshop would trip this guard.
+func TestEnsureWorkshop_UnchangedReusesNoRefresh(t *testing.T) {
+	cfg := testConfig(t)
+	fc := &fakeCommander{} // all verbs succeed -> workshop present
+	r := New(cfg, fc)
+
+	// The live workshop was last provisioned with this exact def.
+	if err := r.writeFingerprint("same"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.ensureWorkshop(context.Background(), "same"); err != nil {
+		t.Fatalf("ensureWorkshop: %v", err)
+	}
+
+	if got := fc.verbs(); !slices.Equal(got, []string{"info"}) {
+		t.Errorf("calls = %v, want [info] (reuse, no refresh/launch)", got)
 	}
 }
 
@@ -256,7 +410,7 @@ func TestWriteDefinition_DerivesFromProjectDef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read source def: %v", err)
 	}
-	if _, err := r.writeDefinition(sourceBytes); err != nil {
+	if _, _, err := r.writeDefinition(sourceBytes); err != nil {
 		t.Fatalf("writeDefinition: %v", err)
 	}
 
@@ -326,7 +480,7 @@ func TestMaterialize_ErrorsWhenSourceAbsent(t *testing.T) {
 	cfg.RepoPath = t.TempDir() // a bare repo dir with NO workshop.yaml
 	r := New(cfg, &fakeCommander{})
 
-	err := r.materialize()
+	_, err := r.materialize()
 	if err == nil {
 		t.Fatal("materialize succeeded with no source workshop.yaml; want an error")
 	}
@@ -548,6 +702,78 @@ func TestSetup_ReconcilesOnReuse(t *testing.T) {
 	}
 	if slices.Contains(verbs, "launch") {
 		t.Errorf("verbs %v contains launch; workshop should have been reused", verbs)
+	}
+}
+
+// TestSetup_ChangedProjectDefRefreshesWorkshop exercises the whole drift loop
+// through the public Setup API rather than a hand-passed digest: materialize
+// derives + hashes the REAL def, ensureWorkshop persists/compares the
+// fingerprint, and a changed project workshop.yaml between runs reconciles the
+// live workshop. Run 1 launches a fresh workshop (info fails) and records its
+// fingerprint; the source def is then mutated to add an SDK; Run 2 sees the
+// workshop present but the regenerated def's fingerprint no longer matches, so
+// it refreshes and re-records. This proves acceptance #2 (changed def triggers a
+// refresh), #3 (the new toolchain reaches the def the refresh reprovisions
+// from), and #4 (the fingerprint is compared and updated each run).
+func TestSetup_ChangedProjectDefRefreshesWorkshop(t *testing.T) {
+	cfg := testConfig(t)
+	// Model the real workshop lifecycle: `info` fails until a `launch` has run,
+	// then succeeds (present). A single workshop, so a plain bool suffices.
+	var launched bool
+	fc := &fakeCommander{
+		errFn: func(c Cmd) error {
+			switch verbOf(c) {
+			case "launch":
+				launched = true
+			case "info":
+				if !launched {
+					return fmt.Errorf("no such workshop")
+				}
+			}
+			return nil
+		},
+	}
+	r := New(cfg, fc)
+	ctx := context.Background()
+
+	// Run 1: info fails -> launch -> fingerprint persisted.
+	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/run-1", Prompt: "x"}); err != nil {
+		t.Fatalf("Setup run 1: %v", err)
+	}
+	fp1 := r.readFingerprint()
+	if fp1 == "" {
+		t.Fatal("run 1 did not persist a fingerprint")
+	}
+
+	// Mutate the project's source def to add a recognizable new SDK.
+	writeProjectDef(t, cfg.RepoPath, "name: myproject\nbase: ubuntu@24.04\nsdks:\n  - name: go\n  - name: ruff\n")
+
+	// Run 2: info now succeeds (present); the regenerated def differs -> refresh.
+	if _, err := r.Setup(ctx, RunRequest{Branch: "agent/run-2", Prompt: "x"}); err != nil {
+		t.Fatalf("Setup run 2: %v", err)
+	}
+
+	// The changed def reconciled via refresh; launch happened only on run 1.
+	verbs := fc.verbs()
+	if !slices.Contains(verbs, "refresh") {
+		t.Errorf("verbs %v missing refresh; the changed def should have reconciled the workshop", verbs)
+	}
+	if got := strings.Count(strings.Join(verbs, " "), "launch"); got != 1 {
+		t.Errorf("launch count = %d, want 1 (only run 1 launches)", got)
+	}
+
+	// The fingerprint was re-derived and re-persisted for the changed def.
+	if fp2 := r.readFingerprint(); fp2 == fp1 {
+		t.Errorf("fingerprint unchanged (%q) after a changed def; it must be recompared and updated each run", fp2)
+	}
+
+	// The regenerated derived def reprovisioned from carries the new toolchain.
+	def, err := os.ReadFile(filepath.Join(cfg.ProjectDir, "workshop.yaml"))
+	if err != nil {
+		t.Fatalf("read derived def: %v", err)
+	}
+	if !strings.Contains(string(def), "ruff") {
+		t.Errorf("derived def %q missing the added SDK %q", def, "ruff")
 	}
 }
 
