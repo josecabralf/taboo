@@ -17,7 +17,7 @@ standalone directory outside the repo.
 
 The risk is the two-mount rule (CONTEXT.md): a linked worktree's `.git` is only a
 pointer into `<repo>/.git/worktrees/<name>`; taboo mounts the worktree at
-`/workspace` and the repo's `.git` at its **identical host absolute path**, so the
+`/taboo/workspace` and the repo's `.git` at its **identical host absolute path**, so the
 pointer resolves with no rewriting. The question was whether nesting the worktree
 *under* the repo — whose `.git` is itself the second mount — still produces a
 worktree whose `.git` pointer resolves identically inside the workshop and on the
@@ -33,14 +33,14 @@ subset never appears inside an agent's worktree checkout).
 
 Worktree placement is a **host-side** concern; it does not change the mount
 topology. Regardless of where the worktree physically lives, exactly two things
-are mounted into the workshop: the worktree → `/workspace`, and `<repo>/.git` →
+are mounted into the workshop: the worktree → `/taboo/workspace`, and `<repo>/.git` →
 `<repo>/.git`. The worktree's `.git` pointer (`gitdir: <repo>/.git/worktrees/
 <name>`) references the **common dir**, which is present via the gitcommon mount —
 not the worktree's own location. Nesting therefore changes only the host path of
-the `/workspace` source, leaving the identical-path invariant for `.git`
+the `/taboo/workspace` source, leaving the identical-path invariant for `.git`
 untouched. (The git back-pointer from the common dir to the worktree's host path
 is already non-resolvable inside the workshop in *both* arrangements, since the
-worktree is mounted at `/workspace`, not at its host path; git commits from the
+worktree is mounted at `/taboo/workspace`, not at its host path; git commits from the
 worktree side regardless, as the out-of-repo tests have always shown.)
 
 The one host-side caveat the nested layout adds: `<repo>/.git` is bind-mounted at

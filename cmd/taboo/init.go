@@ -87,6 +87,19 @@ func runInitCmd(env Env, opts *initOptions) error {
 	if err := applyDefaults(env, opts); err != nil {
 		return err
 	}
+	// Resolve the repo path (absolute, workshop name derived) and gate on it
+	// BEFORE any interactive prompting or scaffold writes: taboo derives the
+	// agent's workshop from the project's own workshop.yaml, so a non-workshop
+	// repo is out of scope and must fail fast — not after the user has answered
+	// the whole wizard. finalize is side-effect-free path resolution, so running
+	// it here (rather than after collection) is safe and lets the gate see the
+	// absolute repo for both the interactive and non-interactive paths.
+	if err := finalize(env, opts); err != nil {
+		return err
+	}
+	if err := requireWorkshopProject(opts.repo); err != nil {
+		return err
+	}
 	// Collect the required values (agent, model) only when a flag left one unset:
 	// prompt at a TTY, else fail fast naming the flag. A fully flagged invocation
 	// skips the wizard entirely, so it scaffolds without prompting even from a
@@ -100,6 +113,10 @@ func runInitCmd(env Env, opts *initOptions) error {
 			return err
 		}
 	}
+	// Re-resolve in case the wizard changed repo (its prefill is editable): a
+	// relative path typed at the prompt must still be cleaned to an absolute one
+	// before the scaffold write. finalize is idempotent on an already-absolute
+	// path, so the common case is a no-op.
 	if err := finalize(env, opts); err != nil {
 		return err
 	}
@@ -203,6 +220,19 @@ func finalize(env Env, opts *initOptions) error {
 	}
 	if opts.base == "" {
 		opts.base = defaultBase
+	}
+	return nil
+}
+
+// requireWorkshopProject enforces ADR 0009's scope: taboo derives the agent's
+// workshop from the project's own workshop.yaml, so a project without one is
+// unsupported — a hard, early error before any scaffold write, not a fallback
+// (taboo does not synthesize a toolchain).
+func requireWorkshopProject(repo string) error {
+	if _, err := os.Stat(filepath.Join(repo, "workshop.yaml")); err != nil {
+		return fmt.Errorf("no workshop.yaml found in %s: taboo derives the agent's workshop from "+
+			"the project's own workshop definition and supports only workshop-using projects; "+
+			"add a workshop.yaml, then re-run", repo)
 	}
 	return nil
 }

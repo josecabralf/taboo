@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,7 +11,149 @@ import (
 	taboo "github.com/josecabralf/taboo/pkg/taboo"
 )
 
-const cleanProjectBody = "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: /home/dev/repos/myproject\ndefaults:\n  branch-prefix: taboo/\n"
+// seedSDKQuarantine lays out the in-project SDK quarantine the way slice 5
+// materializes it: a real project-repo SDK dir (with a sentinel) that the
+// quarantine SYMLINK points at, plus the seeded agent SDK as a REAL dir (also
+// with a sentinel). It returns the symlink path and its target's sentinel so
+// callers can assert the link is pruned while neither sentinel is touched.
+func seedSDKQuarantine(t *testing.T, projectDir string) (link, targetSentinel, realDir, realSentinel string) {
+	t.Helper()
+	// The project's own .workshop/<x> that the quarantine link points at. It
+	// lives outside projectDir so removing the link can never recurse into it.
+	repoSDK := filepath.Join(t.TempDir(), ".workshop", "mylib")
+	if err := os.MkdirAll(repoSDK, 0o750); err != nil {
+		t.Fatalf("mkdir repo SDK: %v", err)
+	}
+	targetSentinel = filepath.Join(repoSDK, "keep.txt")
+	if err := os.WriteFile(targetSentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write target sentinel: %v", err)
+	}
+
+	quarantine := filepath.Join(projectDir, ".workshop")
+	if err := os.MkdirAll(quarantine, 0o750); err != nil {
+		t.Fatalf("mkdir quarantine: %v", err)
+	}
+	link = filepath.Join(quarantine, "mylib")
+	if err := os.Symlink(repoSDK, link); err != nil {
+		t.Fatalf("symlink quarantine SDK: %v", err)
+	}
+
+	// The seeded agent SDK is a real directory, not a link; it must survive.
+	realDir = filepath.Join(quarantine, "opencode")
+	if err := os.MkdirAll(realDir, 0o750); err != nil {
+		t.Fatalf("mkdir seeded SDK: %v", err)
+	}
+	realSentinel = filepath.Join(realDir, "sentinel")
+	if err := os.WriteFile(realSentinel, []byte("seeded"), 0o600); err != nil {
+		t.Fatalf("write seeded sentinel: %v", err)
+	}
+	return link, targetSentinel, realDir, realSentinel
+}
+
+func exists(t *testing.T, p string) bool {
+	t.Helper()
+	_, err := os.Lstat(p)
+	return err == nil
+}
+
+// TestClean_RemovesSdkLinksNotTargets is the data-loss guard: under the
+// workshops scope, clean removes the quarantine SYMLINK only — it never recurses
+// into the project's real .workshop/<x> the link points at, and it leaves the
+// seeded agent SDK (a real dir) in place because it prunes by the symlink bit,
+// not by directory membership. A DEFAULT clean (worktrees scope) leaves the link
+// untouched, pinning the doWorkshops gate.
+func TestClean_RemovesSdkLinksNotTargets(t *testing.T) {
+	t.Parallel()
+
+	t.Run("workshops scope removes the link, spares both targets", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, cleanProjectBody)
+		projectDir := filepath.Join(root, ".taboo")
+		link, targetSentinel, realDir, realSentinel := seedSDKQuarantine(t, projectDir)
+
+		fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+		env := configEnv(t, fake, root, nil)
+		if _, _, err := cleanCmd(t, env, "--workshops", "--yes"); err != nil {
+			t.Fatalf("clean --workshops --yes error = %v", err)
+		}
+
+		if exists(t, link) {
+			t.Errorf("the quarantine SYMLINK %s must be removed", link)
+		}
+		// Link-safe: os.Remove never recursed into the link's target.
+		if !exists(t, targetSentinel) {
+			t.Errorf("the symlink TARGET %s must survive (removal must not recurse)", targetSentinel)
+		}
+		// Pruned by the symlink bit, not membership: the real seeded SDK stays.
+		if !exists(t, realDir) {
+			t.Errorf("the seeded agent SDK dir %s must survive (it is a real dir, not a link)", realDir)
+		}
+		if !exists(t, realSentinel) {
+			t.Errorf("the seeded SDK's sentinel %s must survive", realSentinel)
+		}
+	})
+
+	t.Run("default scope leaves the link in place", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, cleanProjectBody)
+		projectDir := filepath.Join(root, ".taboo")
+		link, _, _, _ := seedSDKQuarantine(t, projectDir)
+
+		fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+		env := configEnv(t, fake, root, nil)
+		if _, _, err := cleanCmd(t, env, "--yes"); err != nil {
+			t.Fatalf("default clean error = %v", err)
+		}
+
+		// The doWorkshops gate: a default (worktrees-only) clean never discovers
+		// or removes the quarantine link.
+		if !exists(t, link) {
+			t.Errorf("a default clean must leave the quarantine SYMLINK %s in place", link)
+		}
+	})
+}
+
+// TestClean_DryRunListsSdkLinks asserts the --dry-run preview lists the
+// quarantine link under an "SDK links" section and, being a dry run, removes
+// nothing: the link survives on disk afterward.
+func TestClean_DryRunListsSdkLinks(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTabooProject(t, root, cleanProjectBody)
+	projectDir := filepath.Join(root, ".taboo")
+	link, _, _, _ := seedSDKQuarantine(t, projectDir)
+
+	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+	stdout, _, err := cleanCmd(t, env, "--workshops", "--dry-run")
+	if err != nil {
+		t.Fatalf("clean --workshops --dry-run error = %v", err)
+	}
+
+	if !strings.Contains(stdout, "SDK links") {
+		t.Errorf("dry-run stdout missing the SDK links section:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, link) {
+		t.Errorf("dry-run plan missing the quarantine link %s:\n%s", link, stdout)
+	}
+	// A dry run mutates nothing: the link is still on disk.
+	if !exists(t, link) {
+		t.Errorf("--dry-run must remove nothing; link %s is gone", link)
+	}
+}
+
+// cleanProjectBody is the taboo.yaml the clean tests build on. Its repo points
+// at the shared testRepoPath fixture so the run preflight's repoLocationCheck
+// passes. TestMain assigns it (and the matching assertions use testRepoPath)
+// before any test runs; it must NOT be initialized at package scope because
+// testRepoPath is empty until TestMain sets it.
+var cleanProjectBody string
+
+func buildCleanProjectBody(repo string) string {
+	return "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: " + repo + "\ndefaults:\n  branch-prefix: taboo/\n"
+}
 
 // cleanFakeStdout mirrors listFakeStdout: canned host stdout for the probes clean issues.
 func cleanFakeStdout(root string) func(taboo.Cmd) string {
@@ -21,7 +164,7 @@ func cleanFakeStdout(root string) func(taboo.Cmd) string {
 		if c.Name == "git" && elemsContain(c.Args, "worktree", "list", "--porcelain") {
 			managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
 			return "worktree " + managed + "\nHEAD abc123\nbranch refs/heads/taboo/fix-123\n\n" +
-				"worktree /home/dev/repos/myproject\nHEAD def456\nbranch refs/heads/main\n\n"
+				"worktree " + testRepoPath + "\nHEAD def456\nbranch refs/heads/main\n\n"
 		}
 		if c.Name == "git" && elemsContain(c.Args, "for-each-ref") {
 			return "main\ntaboo/fix-123\ntaboo/refactor-456\ndevelop\n"
@@ -56,7 +199,7 @@ func TestClean_DefaultRemovesWorktreesOnly(t *testing.T) {
 		t.Fatalf("clean error = %v, want nil", err)
 	}
 	managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
-	if findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "remove", managed) == nil {
+	if findInvocation(fake, "git", "-C", testRepoPath, "worktree", "remove", managed) == nil {
 		t.Errorf("no git worktree remove for the managed worktree; calls: %v", invocations(fake))
 	}
 	if findInvocation(fake, "workshop", "remove") != nil {
@@ -69,7 +212,7 @@ func TestClean_DefaultRemovesWorktreesOnly(t *testing.T) {
 	// membership check would false-match; assert instead that no `worktree remove`
 	// targets the main checkout as its removal path (the last positional arg).
 	for _, inv := range invocations(fake) {
-		if elemsContain(inv, "worktree", "remove") && inv[len(inv)-1] == "/home/dev/repos/myproject" {
+		if elemsContain(inv, "worktree", "remove") && inv[len(inv)-1] == testRepoPath {
 			t.Errorf("must not remove the main checkout; calls: %v", invocations(fake))
 		}
 	}
@@ -103,7 +246,7 @@ func TestClean_AllRemovesBoth(t *testing.T) {
 		t.Fatalf("clean --all error = %v", err)
 	}
 	managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
-	if findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "remove", managed) == nil {
+	if findInvocation(fake, "git", "-C", testRepoPath, "worktree", "remove", managed) == nil {
 		t.Errorf("--all must remove worktrees; calls: %v", invocations(fake))
 	}
 	projectDir := filepath.Join(root, ".taboo")
@@ -163,7 +306,7 @@ func TestClean_PruneBranchesDeletesMerged(t *testing.T) {
 		t.Fatalf("clean --prune-branches error = %v", err)
 	}
 	for _, b := range []string{"taboo/fix-123", "taboo/refactor-456"} {
-		if findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "branch", "-D", b) == nil {
+		if findInvocation(fake, "git", "-C", testRepoPath, "branch", "-D", b) == nil {
 			t.Errorf("no branch -D for merged branch %s; calls: %v", b, invocations(fake))
 		}
 	}
@@ -199,7 +342,7 @@ func TestClean_ForceDeletesUnmerged(t *testing.T) {
 	if _, _, err := cleanCmd(t, env, "--prune-branches", "--force"); err != nil {
 		t.Fatalf("clean --prune-branches --force error = %v", err)
 	}
-	if findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "branch", "-D", "taboo/refactor-456") == nil {
+	if findInvocation(fake, "git", "-C", testRepoPath, "branch", "-D", "taboo/refactor-456") == nil {
 		t.Errorf("--force must delete the unmerged branch; calls: %v", invocations(fake))
 	}
 }
@@ -207,7 +350,7 @@ func TestClean_ForceDeletesUnmerged(t *testing.T) {
 func TestClean_EmptyPrefixRefusesPrune(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: /home/dev/repos/myproject\n"
+	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\nrepo: " + testRepoPath + "\n"
 	writeTabooProject(t, root, body)
 	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
 	env := configEnv(t, fake, root, nil)
@@ -383,7 +526,7 @@ func TestClean_NonInteractiveProceedsWithoutPrompt(t *testing.T) {
 		t.Fatalf("clean error = %v", err)
 	}
 	managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
-	if findInvocation(fake, "git", "-C", "/home/dev/repos/myproject", "worktree", "remove", managed) == nil {
+	if findInvocation(fake, "git", "-C", testRepoPath, "worktree", "remove", managed) == nil {
 		t.Errorf("a non-interactive clean must proceed without --yes; calls: %v", invocations(fake))
 	}
 	if strings.Contains(stderr, "Continue?") {

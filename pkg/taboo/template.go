@@ -2,8 +2,6 @@ package taboo
 
 import (
 	"path/filepath"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Config describes a taboo-managed workshop and the agent that runs inside it.
@@ -24,13 +22,6 @@ type Config struct {
 	ProjectDir string
 }
 
-// definition is the on-disk workshop definition taboo renders and owns.
-type definition struct {
-	Name string   `yaml:"name"`
-	Base string   `yaml:"base"`
-	SDKs []sdkDef `yaml:"sdks"`
-}
-
 type sdkDef struct {
 	Name  string          `yaml:"name"`
 	Plugs map[string]plug `yaml:"plugs,omitempty"`
@@ -42,13 +33,18 @@ type plug struct {
 	ReadOnly       bool   `yaml:"read-only,omitempty"`
 }
 
-const workspaceTarget = "/workspace"
+// workspaceTarget and sessionsTarget are taboo's two RELOCATABLE mount targets.
+// Per ADR 0009 they live under a reserved `/taboo/...` prefix so they cannot
+// collide with the project's own mounts in the shared in-workshop namespace.
+// (git-common, by contrast, must stay at the host .git absolute path — its path
+// IS the mechanism, see gitCommonTarget.)
+const workspaceTarget = "/taboo/workspace"
 
 // sessionsTarget is the in-workshop mount target for the host sessions directory.
 // A session-capable agent's session-dir env var (AgentProfile.Sessions().DirEnv)
 // is pointed here at exec time so session files write through to the host and
 // survive the per-run stop/remount/start swap, which wipes the rootfs.
-const sessionsTarget = "/sessions"
+const sessionsTarget = "/taboo/sessions"
 
 // projectSDKRef returns the name used to reference an in-project SDK (one
 // shipped under .workshop/<name>/) in a definition's `sdks:` list. Workshop
@@ -62,30 +58,4 @@ func projectSDKRef(name string) string { return "project-" + name }
 // rule; see CONTEXT.md).
 func gitCommonTarget(repoPath string) string {
 	return filepath.Join(repoPath, ".git")
-}
-
-// renderDefinition produces the workshop definition YAML for cfg.
-func renderDefinition(cfg Config) (string, error) {
-	plugs := map[string]plug{
-		"workspace": {Interface: "mount", WorkshopTarget: workspaceTarget},
-		"gitcommon": {Interface: "mount", WorkshopTarget: gitCommonTarget(cfg.RepoPath)},
-	}
-	// A session-capable agent gets a third mount so its session files reach the
-	// host and survive the per-run rootfs wipe (see sessionsTarget).
-	if _, ok := cfg.Agent.Sessions(); ok {
-		plugs["sessions"] = plug{Interface: "mount", WorkshopTarget: sessionsTarget}
-	}
-	def := definition{
-		Name: cfg.Workshop,
-		Base: cfg.Base,
-		SDKs: []sdkDef{{
-			Name:  projectSDKRef(cfg.Agent.Name()),
-			Plugs: plugs,
-		}},
-	}
-	out, err := yaml.Marshal(def)
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }

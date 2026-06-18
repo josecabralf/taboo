@@ -20,6 +20,11 @@ func gitRepo(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o750); err != nil {
 		t.Fatalf("mkdir .git: %v", err)
 	}
+	// taboo derives from the project's own workshop.yaml, so the standard repo
+	// fixture is a workshop-using project (init now requires one).
+	if err := os.WriteFile(filepath.Join(root, "workshop.yaml"), []byte("name: demo\nbase: ubuntu@24.04\n"), 0o600); err != nil {
+		t.Fatalf("write workshop.yaml: %v", err)
+	}
 	return root
 }
 
@@ -365,6 +370,53 @@ func TestInit_UnknownAgent(t *testing.T) {
 		if !strings.Contains(msg, name) {
 			t.Errorf("error %q does not list valid agent %q", msg, name)
 		}
+	}
+}
+
+// TestInit_FailsOnNonWorkshopProject asserts the ADR 0009 gate: a project
+// without a workshop.yaml is a hard, early error before any scaffold is written.
+// Taboo derives the agent's workshop from the project's own definition, so a
+// non-workshop project is out of scope, not a fallback.
+func TestInit_FailsOnNonWorkshopProject(t *testing.T) {
+	t.Parallel()
+	// A BARE repo: a .git dir but deliberately no workshop.yaml (so not gitRepo).
+	bare := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bare, ".git"), 0o750); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	fake := &fakeCommander{}
+	env := initEnv(t, fake, bare)
+	_, err := runInit(t, env, "--agent", "opencode", "--model", "some/model", "--repo", bare)
+	if err == nil {
+		t.Fatal("init error = nil, want a workshop.yaml gate error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "workshop.yaml") {
+		t.Errorf("error %q should mention workshop.yaml", msg)
+	}
+	if !strings.Contains(msg, "workshop-using") {
+		t.Errorf("error %q should explain the workshop-using scope", msg)
+	}
+	// The gate fires before writeScaffold, so nothing under .taboo is written.
+	if _, statErr := os.Stat(filepath.Join(bare, ".taboo", "taboo.yaml")); !os.IsNotExist(statErr) {
+		t.Errorf("no scaffold should be written when the gate fires, stat err = %v", statErr)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("init made %d Commander calls, want 0: %v", len(fake.calls), invocations(fake))
+	}
+}
+
+// TestInit_SucceedsWhenWorkshopYamlPresent is the positive pin for the ADR 0009
+// gate: a workshop-using project scaffolds normally.
+func TestInit_SucceedsWhenWorkshopYamlPresent(t *testing.T) {
+	t.Parallel()
+	repo := gitRepo(t) // gitRepo now provides a workshop.yaml
+	env := initEnv(t, &fakeCommander{}, repo)
+	if _, err := runInit(t, env, "--agent", "opencode", "--model", "some/model", "--repo", repo); err != nil {
+		t.Fatalf("init error = %v, want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".taboo", "taboo.yaml")); err != nil {
+		t.Errorf("scaffold should be written when workshop.yaml is present: %v", err)
 	}
 }
 
