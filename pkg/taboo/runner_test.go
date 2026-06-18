@@ -215,6 +215,64 @@ func TestEnsureWorkshop_PresentReuses(t *testing.T) {
 	}
 }
 
+// TestSeedSDK_OnlyConfiguredAgent checks that seedSDK seeds only the configured
+// agent's SDK tree into .workshop, not every embedded SDK. The configured
+// agent's tree must be present so its "project-<agent>" reference resolves; the
+// other trees are dead clutter and must not be copied in. The seeding is
+// parametric over the agent, so this is asserted for every registered agent,
+// not just opencode.
+func TestSeedSDK_OnlyConfiguredAgent(t *testing.T) {
+	// The negative assertion below must range over the *real* full set of
+	// embedded SDK trees, so read it from the source of truth (sdkFS) rather
+	// than a hand-maintained literal: a newly added sdk/<x>/ is then covered by
+	// the "not seeded" check automatically.
+	entries, err := sdkFS.ReadDir("sdk")
+	if err != nil {
+		t.Fatalf("read embedded sdk/: %v", err)
+	}
+	var embeddedSDKs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			embeddedSDKs = append(embeddedSDKs, e.Name())
+		}
+	}
+
+	// Drive the loop from the registered roster so the "any configured agent"
+	// claim is load-bearing and future agents are covered without edits.
+	for _, name := range AgentNames() {
+		t.Run(name, func(t *testing.T) {
+			agent, err := NewProfile(name, "")
+			if err != nil {
+				t.Fatalf("NewProfile(%q): %v", name, err)
+			}
+			cfg := testConfig(t) // fresh ProjectDir (t.TempDir)
+			cfg.Agent = agent
+			r := New(cfg, &fakeCommander{})
+
+			if err := r.seedSDK(); err != nil {
+				t.Fatalf("seedSDK: %v", err)
+			}
+
+			// The configured agent's SDK is seeded.
+			sdkYAML := filepath.Join(cfg.ProjectDir, ".workshop", name, "sdk.yaml")
+			if _, err := os.Stat(sdkYAML); err != nil {
+				t.Errorf("configured agent SDK not seeded: %v", err)
+			}
+
+			// No other embedded SDK tree is seeded.
+			for _, other := range embeddedSDKs {
+				if other == name {
+					continue
+				}
+				dir := filepath.Join(cfg.ProjectDir, ".workshop", other)
+				if _, err := os.Stat(dir); !os.IsNotExist(err) {
+					t.Errorf("unconfigured SDK %q seeded (err=%v); want it absent", other, err)
+				}
+			}
+		})
+	}
+}
+
 // findCallN returns the nth (0-based) recorded Cmd whose verb matches, or fails.
 func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) Cmd {
 	t.Helper()
