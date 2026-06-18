@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -89,6 +90,35 @@ func TestConfigChecks_NoConfigSkips(t *testing.T) {
 func realStat(p string) bool {
 	info, err := os.Stat(p)
 	return err == nil && !info.IsDir()
+}
+
+// tabooRepoRoot returns taboo's own repo root: the nearest ancestor of the
+// test's working directory that holds go.mod. That directory is itself a
+// workshop project, so it carries a real, derivable workshop.yaml on persistent
+// storage — the one fixture that lets validate's source-definition and derive
+// checks pass end-to-end (a t.TempDir() repo lives under /tmp, which repo-path
+// rejects, so it can never be a "fully clean" repo). A missing root or
+// workshop.yaml is a hard t.Fatal, never a silent skip. Mirrors
+// findRepoWorkshopYAML in pkg/taboo.
+func tabooRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			if _, err := os.Stat(filepath.Join(dir, "workshop.yaml")); err != nil {
+				t.Fatalf("repo root %q has no workshop.yaml: %v", dir, err)
+			}
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not locate taboo repo root (no go.mod above the test working dir)")
+		}
+		dir = parent
+	}
 }
 
 // TestConfigChecks_Credentials covers the per-agent credential WARN: with no
@@ -261,6 +291,61 @@ func TestRepoGitCheck_ThreadsRepoPath(t *testing.T) {
 		}
 	}
 	t.Errorf("no %v invocation recorded; calls: %v", want, invocations(fake))
+}
+
+// TestConfigChecks_WorkshopProjectOK asserts that in a taboo project whose
+// configured repo holds a workshop.yaml, doctor reports workshop-project ok and
+// source-definition ok resolving to that file (presence only, no derive).
+func TestConfigChecks_WorkshopProjectOK(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := t.TempDir()
+	// doctor is presence-only, so ANY present file satisfies it; content is irrelevant:
+	if err := os.WriteFile(filepath.Join(repo, "workshop.yaml"), []byte("name: x\n"), 0o600); err != nil {
+		t.Fatalf("write workshop.yaml: %v", err)
+	}
+	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: openrouter/qwen/q\nrepo: " + repo + "\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: okHostStdout}
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-xxx"})
+	checks := configChecks(context.Background(), env, realStat, taboo.LoadConfig)
+	if got := statusOf(checks, "workshop-project"); got != "ok" {
+		t.Errorf("workshop-project = %q, want ok\nchecks: %+v", got, checks)
+	}
+	if got := statusOf(checks, "source-definition"); got != "ok" {
+		t.Errorf("source-definition = %q, want ok\nchecks: %+v", got, checks)
+	}
+}
+
+// TestConfigChecks_NotAWorkshopProject asserts that when the configured repo has
+// no workshop.yaml, doctor reports workshop-project as a hard error and
+// source-definition as a dependent skip, and the doctor command exits non-zero.
+func TestConfigChecks_NotAWorkshopProject(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := t.TempDir() // a real but empty dir: no workshop.yaml in it.
+	body := "workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: openrouter/qwen/q\nrepo: " + repo + "\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: okHostStdout}
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-xxx"})
+
+	// Check-level: inspect configChecks directly so this branch is pinned even
+	// though the /tmp repo path also fails.
+	checks := configChecks(context.Background(), env, realStat, taboo.LoadConfig)
+	wp := findCheck(checks, "workshop-project")
+	if wp == nil || wp.Status != statusError || !strings.Contains(wp.Message, "workshop.yaml") {
+		t.Errorf("workshop-project = %+v, want error mentioning workshop.yaml\nchecks: %+v", wp, checks)
+	}
+	sd := findCheck(checks, "source-definition")
+	if sd == nil || sd.Status != statusError || !strings.Contains(sd.Message, "skipped") {
+		t.Errorf("source-definition = %+v, want error mentioning skipped\nchecks: %+v", sd, checks)
+	}
+
+	// Exit wiring: the doctor command exits non-zero.
+	out, err := runDoctor(t, env)
+	if !errors.Is(err, errChecksFailed) {
+		t.Fatalf("doctor error = %v, want errChecksFailed\n%s", err, out)
+	}
 }
 
 // statusOf returns the status token of the named check, or "" if absent.
