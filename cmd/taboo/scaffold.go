@@ -31,6 +31,9 @@ type scaffoldInputs struct {
 	SeedWorkflows bool
 	// Template selects the optional Go scaffold: "none" (default), "single", or "fanout".
 	Template string
+	// SourceDefinition is the named workshop definition written to taboo.yaml;
+	// empty when the repo has a single definition.
+	SourceDefinition string
 }
 
 // libraryVersion is the pkg/taboo version the scaffolded go.mod pins to. It is
@@ -270,12 +273,13 @@ changed and why.
 // round-trip through taboo.LoadConfig.
 func renderTabooYAML(in scaffoldInputs) ([]byte, error) {
 	cfg := taboo.ProjectConfig{
-		Workshop: in.Workshop,
-		Base:     in.Base,
-		Repo:     in.Repo,
-		Agent:    in.Agent,
-		Model:    in.Model,
-		Strategy: "branch",
+		Workshop:         in.Workshop,
+		Base:             in.Base,
+		Repo:             in.Repo,
+		Agent:            in.Agent,
+		Model:            in.Model,
+		Strategy:         "branch",
+		SourceDefinition: in.SourceDefinition,
 	}
 	if in.SeedWorkflows {
 		cfg.Workflows = map[string]taboo.Workflow{

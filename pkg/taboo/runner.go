@@ -87,10 +87,12 @@ func (r *Runner) definitionPath() string {
 }
 
 // sourceDefinitionPath is the project's own workshop definition that taboo
-// derives the agent's workshop from. It lives at the repo root (RepoPath), the
-// file the project's human developers already use — never under ProjectDir.
-func (r *Runner) sourceDefinitionPath() string {
-	return filepath.Join(r.cfg.RepoPath, "workshop.yaml")
+// derives the agent's workshop from. It lives under the repo root (RepoPath),
+// the file the project's human developers already use — never under ProjectDir.
+// Resolution (single-def auto / named selection) is delegated to
+// resolveSourceDefinition, keyed by the recorded SourceDefinition selection.
+func (r *Runner) sourceDefinitionPath() (string, error) {
+	return resolveSourceDefinition(r.cfg.RepoPath, r.cfg.SourceDefinition)
 }
 
 // fingerprintOf returns a stable hex digest of a derived workshop definition. It
@@ -223,9 +225,15 @@ func pruneStaleSymlinks(dir string, wanted map[string]bool) error {
 // The source is read ONCE here. The definition is written BEFORE reconcile so a
 // malformed source fails without touching symlinks.
 func (r *Runner) materialize() (fingerprint string, err error) {
-	source, err := os.ReadFile(r.sourceDefinitionPath())
+	srcPath, err := r.sourceDefinitionPath()
 	if err != nil {
-		return "", fmt.Errorf("read project definition %s: %w", r.sourceDefinitionPath(), err)
+		return "", fmt.Errorf("resolve project definition: %w", err)
+	}
+	// srcPath is the project's own workshop definition, resolved within the repo
+	// by resolveSourceDefinition — not arbitrary user-controlled file access.
+	source, err := os.ReadFile(srcPath) //nolint:gosec
+	if err != nil {
+		return "", fmt.Errorf("read project definition %s: %w", srcPath, err)
 	}
 	if err := r.seedSDK(); err != nil {
 		return "", fmt.Errorf("seed agent SDK: %w", err)

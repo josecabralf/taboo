@@ -454,6 +454,28 @@ func TestRun_DryRun(t *testing.T) {
 	}
 }
 
+// TestRun_DryRunFromOverridesSourceDefinition asserts --from threads the chosen
+// source definition into the resolved plan and overrides any configured
+// source-definition: the dry-run plan prints a "source-definition: somedef" row
+// carrying the flag value, not the config value.
+func TestRun_DryRunFromOverridesSourceDefinition(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody+"source-definition: configured\n")
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--from", "somedef")
+	if err != nil {
+		t.Fatalf("run --dry-run --from error = %v, want nil", err)
+	}
+	if !strings.Contains(stdout, "source-definition: somedef") {
+		t.Errorf("plan missing --from source-definition row:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "configured") {
+		t.Errorf("--from must override the configured source-definition:\n%s", stdout)
+	}
+}
+
 // TestPromptSummary covers the one-line preview promptSummary renders for the
 // dry-run plan: a short single-line prompt is shown verbatim, a multi-line or
 // over-long prompt is collapsed to its (truncated) first line plus a correctly
@@ -1351,7 +1373,7 @@ func TestRun_DefaultWorkflowUndefined(t *testing.T) {
 func TestRun_FlagSet(t *testing.T) {
 	want := []string{
 		"prompt", "prompt-file", "vars-file", "var", "branch", "model", "agent",
-		"timeout", "iterations", "signal", "dry-run", "yes", "json",
+		"timeout", "iterations", "signal", "dry-run", "yes", "json", "from",
 	}
 	var got []string
 	newRunCmd(Env{}).Flags().VisitAll(func(f *pflag.Flag) {

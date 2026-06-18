@@ -57,6 +57,10 @@ type ProjectConfig struct {
 	// Strategy is the branch-strategy seam; it defaults to "branch" and accepts
 	// any value for forward compatibility.
 	Strategy string `yaml:"strategy,omitempty"`
+	// SourceDefinition names the workshop definition to derive from when the repo
+	// carries several named .workshop/*.yaml definitions; empty selects the sole
+	// definition.
+	SourceDefinition string `yaml:"source-definition,omitempty"`
 	// Defaults holds the scalar run settings applied when a workflow or flag does
 	// not override them; nil when the block is omitted.
 	Defaults *RunDefaults `yaml:"defaults,omitempty"`

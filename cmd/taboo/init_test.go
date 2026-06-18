@@ -420,6 +420,118 @@ func TestInit_SucceedsWhenWorkshopYamlPresent(t *testing.T) {
 	}
 }
 
+// TestRequireWorkshopProject_AcceptsNamedDefinitions asserts the ADR 0009 gate
+// now accepts a multi-definition project: a repo with only .workshop/*.yaml (and
+// no root workshop.yaml) is a workshop-using project. A root-only repo still
+// passes; a repo with neither still errors.
+func TestRequireWorkshopProject_AcceptsNamedDefinitions(t *testing.T) {
+	t.Parallel()
+
+	// Named-only: a .workshop/foo.yaml with no root workshop.yaml passes.
+	named := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(named, ".workshop"), 0o750); err != nil {
+		t.Fatalf("mkdir .workshop: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(named, ".workshop", "foo.yaml"), []byte("name: foo\n"), 0o600); err != nil {
+		t.Fatalf("write .workshop/foo.yaml: %v", err)
+	}
+	if err := requireWorkshopProject(named); err != nil {
+		t.Errorf("requireWorkshopProject(named-only) = %v, want nil", err)
+	}
+
+	// Root-only: a root workshop.yaml still passes.
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "workshop.yaml"), []byte("name: demo\n"), 0o600); err != nil {
+		t.Fatalf("write workshop.yaml: %v", err)
+	}
+	if err := requireWorkshopProject(root); err != nil {
+		t.Errorf("requireWorkshopProject(root-only) = %v, want nil", err)
+	}
+
+	// Neither: still a hard error.
+	bare := t.TempDir()
+	if err := requireWorkshopProject(bare); err == nil {
+		t.Errorf("requireWorkshopProject(bare) = nil, want error")
+	}
+}
+
+// multiDefRepo makes a temp repo fixture with two named .workshop/*.yaml
+// definitions (and no root workshop.yaml), returning the repo path.
+func multiDefRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o750); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".workshop"), 0o750); err != nil {
+		t.Fatalf("mkdir .workshop: %v", err)
+	}
+	for _, name := range []string{"api", "web"} {
+		if err := os.WriteFile(filepath.Join(root, ".workshop", name+".yaml"), []byte("name: "+name+"\n"), 0o600); err != nil {
+			t.Fatalf("write .workshop/%s.yaml: %v", name, err)
+		}
+	}
+	return root
+}
+
+// TestInit_MultiDefRequiresSourceDefinition asserts the non-interactive contract
+// for multi-definition projects: a repo with >=2 named definitions and no
+// --source-definition fails fast and names the flag.
+func TestInit_MultiDefRequiresSourceDefinition(t *testing.T) {
+	t.Parallel()
+	repo := multiDefRepo(t)
+	env := initEnv(t, &fakeCommander{}, repo)
+	_, err := runInit(t, env, "--agent", "opencode", "--model", "m", "--repo", repo)
+	if err == nil || !strings.Contains(err.Error(), "--source-definition") {
+		t.Fatalf("init error = %v, want one mentioning --source-definition", err)
+	}
+}
+
+// TestInit_RecordsSourceDefinition asserts --source-definition in a
+// multi-definition project succeeds and the scaffolded taboo.yaml records the
+// chosen definition (asserted via a LoadConfig round-trip).
+func TestInit_RecordsSourceDefinition(t *testing.T) {
+	t.Parallel()
+	repo := multiDefRepo(t)
+	env := initEnv(t, &fakeCommander{}, repo)
+	if _, err := runInit(t, env,
+		"--agent", "opencode", "--model", "m", "--repo", repo, "--source-definition", "api"); err != nil {
+		t.Fatalf("init --source-definition error = %v, want nil", err)
+	}
+	cfg, err := taboo.LoadConfig(filepath.Join(repo, ".taboo", "taboo.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.SourceDefinition != "api" {
+		t.Errorf("cfg.SourceDefinition = %q, want %q", cfg.SourceDefinition, "api")
+	}
+}
+
+// TestInit_RejectsUnknownSourceDefinition asserts a typo'd --source-definition
+// fails fast at init — naming the unknown selection and listing the available
+// candidates — rather than being written into taboo.yaml to only fail later at
+// run.
+func TestInit_RejectsUnknownSourceDefinition(t *testing.T) {
+	t.Parallel()
+	repo := multiDefRepo(t)
+	env := initEnv(t, &fakeCommander{}, repo)
+	_, err := runInit(t, env,
+		"--agent", "opencode", "--model", "m", "--repo", repo, "--source-definition", "nope")
+	if err == nil {
+		t.Fatalf("init --source-definition nope = nil, want error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "nope") {
+		t.Errorf("error %q does not name the unknown selection nope", msg)
+	}
+	if !strings.Contains(msg, "api, web") {
+		t.Errorf("error %q does not list the candidates \"api, web\"", msg)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".taboo", "taboo.yaml")); !os.IsNotExist(err) {
+		t.Errorf("taboo.yaml should not have been written for a bad selection (stat err = %v)", err)
+	}
+}
+
 // TestInit_MakesZeroCommanderCalls asserts init never launches a workshop: a
 // successful run records no Commander invocations.
 func TestInit_MakesZeroCommanderCalls(t *testing.T) {
