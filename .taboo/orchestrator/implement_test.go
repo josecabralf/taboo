@@ -9,7 +9,8 @@ import (
 	"testing"
 
 	"afk/internal/ghio"
-	"afk/internal/taborun"
+
+	"github.com/josecabralf/taboo/pkg/taboo"
 )
 
 // fakeGH records the order and arguments of the gh/git calls implement makes and
@@ -56,13 +57,13 @@ func (f *fakeGH) AddLabel(_ context.Context, prRef, label string) error {
 	return f.labelErr
 }
 
-// fakeRunner records that the taboo run was invoked and returns a canned Result
-// (or an error). The worktree arg, when set, becomes the Result.WorktreePath so
-// the test can stage a plan file there.
-func fakeRunner(calls *[]string, worktree string, err error) taboRunner {
-	return func(_ context.Context, _ taborun.Options) (taborun.Result, error) {
+// fakeRunner records that the taboo run was invoked and returns a canned
+// OrchestratedResult (or an error). The worktree arg, when set, becomes the
+// result's WorktreePath so the test can stage a plan file there.
+func fakeRunner(calls *[]string, worktree string, err error) workflowRunner {
+	return func(_ context.Context, _, _ string, _ map[string]string, _ taboo.PlanOverrides, _ taboo.Commander) (taboo.OrchestratedResult, error) {
 		*calls = append(*calls, "runTabo")
-		return taborun.Result{WorktreePath: worktree}, err
+		return taboo.OrchestratedResult{RunResult: taboo.RunResult{WorktreePath: worktree}}, err
 	}
 }
 
@@ -82,7 +83,7 @@ func TestImplementHappyPathSequenceAndArgs(t *testing.T) {
 	var runCalls []string
 	run := fakeRunner(&runCalls, worktree, nil)
 
-	if err := implement(context.Background(), 42, gh, run); err != nil {
+	if err := implement(context.Background(), t.TempDir(), 42, gh, run); err != nil {
 		t.Fatalf("implement returned error: %v", err)
 	}
 
@@ -131,7 +132,7 @@ func TestImplementNoPlanFileUsesFallbackBody(t *testing.T) {
 	var runCalls []string
 	run := fakeRunner(&runCalls, t.TempDir(), nil)
 
-	if err := implement(context.Background(), 7, gh, run); err != nil {
+	if err := implement(context.Background(), t.TempDir(), 7, gh, run); err != nil {
 		t.Fatalf("implement returned error: %v", err)
 	}
 
@@ -150,7 +151,7 @@ func TestImplementPushErrorWrapsAndShortCircuits(t *testing.T) {
 	var runCalls []string
 	run := fakeRunner(&runCalls, t.TempDir(), nil)
 
-	err := implement(context.Background(), 1, gh, run)
+	err := implement(context.Background(), t.TempDir(), 1, gh, run)
 	if err == nil {
 		t.Fatal("implement returned nil, want a push-branch error")
 	}
@@ -175,7 +176,7 @@ func TestImplementCreatePRErrorWrapsAndSkipsLabel(t *testing.T) {
 	var runCalls []string
 	run := fakeRunner(&runCalls, t.TempDir(), nil)
 
-	err := implement(context.Background(), 1, gh, run)
+	err := implement(context.Background(), t.TempDir(), 1, gh, run)
 	if err == nil {
 		t.Fatal("implement returned nil, want an open-draft-PR error")
 	}
@@ -189,9 +190,9 @@ func TestImplementCreatePRErrorWrapsAndSkipsLabel(t *testing.T) {
 	}
 }
 
-// Ensure *ghio.Client still satisfies ghClient and taborun.Run satisfies
-// taboRunner, so the production wiring in runImplement stays type-correct.
+// Ensure *ghio.Client still satisfies ghClient and taboo.RunWorkflow satisfies
+// workflowRunner, so the production wiring in runImplement stays type-correct.
 var (
-	_ ghClient   = (*ghio.Client)(nil)
-	_ taboRunner = taborun.Run
+	_ ghClient       = (*ghio.Client)(nil)
+	_ workflowRunner = taboo.RunWorkflow
 )
