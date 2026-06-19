@@ -29,6 +29,22 @@ const planFile = ".taboo-plan.md"
 // reviewLabel is applied to the draft PR to cascade it into the review workflow.
 const reviewLabel = "agent:review"
 
+// ghClient is the subset of GitHub/git operations the implement sequence uses.
+// *ghio.Client satisfies it; tests substitute a fake to record call order and
+// args without shelling out.
+type ghClient interface {
+	IssueView(ctx context.Context, number int) (ghio.Issue, error)
+	PushBranch(ctx context.Context, branch string) error
+	CreateDraftPR(ctx context.Context, branch, title, body string) (string, error)
+	AddLabel(ctx context.Context, prRef, label string) error
+}
+
+// taboRunner runs the implement workflow through taboo and returns the run's
+// result. The taborun.Run function satisfies it; tests substitute a fake that
+// returns a canned Result (pointing WorktreePath at a temp dir) without
+// provisioning a workshop.
+type taboRunner func(ctx context.Context, opts taborun.Options) (taborun.Result, error)
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "afk:", err)
@@ -62,6 +78,15 @@ func runImplement(ctx context.Context, args []string) error {
 		return errors.New("--issue is required")
 	}
 
+	return implement(ctx, *issue, ghio.New(ghio.NewExec()), taborun.Run)
+}
+
+// implement is the testable core of the implement subcommand: it fetches the
+// issue, runs the implement workflow, pushes the branch, opens a draft PR
+// carrying the agent's plan, and applies the review label, in that order. The gh
+// and taboo seams are injected so tests drive the full sequence with fakes; each
+// step's failure is wrapped and short-circuits the rest.
+func implement(ctx context.Context, issue int, gh ghClient, runTabo taboRunner) error {
 	repo, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
@@ -69,9 +94,7 @@ func runImplement(ctx context.Context, args []string) error {
 	projectDir := filepath.Join(repo, ".taboo")
 	configPath := filepath.Join(projectDir, "taboo.yaml")
 
-	gh := ghio.New(ghio.NewExec())
-
-	iss, err := gh.IssueView(ctx, *issue)
+	iss, err := gh.IssueView(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("fetch issue: %w", err)
 	}
@@ -85,7 +108,7 @@ func runImplement(ctx context.Context, args []string) error {
 		"PLAN_OUTPUT_PATH": planFile,
 	}
 
-	res, err := taborun.Run(ctx, taborun.Options{
+	res, err := runTabo(ctx, taborun.Options{
 		ConfigPath: configPath,
 		Workflow:   "implement",
 		Branch:     branch,

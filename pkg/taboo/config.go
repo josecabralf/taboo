@@ -114,6 +114,46 @@ type Workflow struct {
 	Profile AgentProfile `yaml:"-"`
 }
 
+// ResolveTimeout applies the workflow-then-defaults precedence for the per-exec
+// timeout: the workflow's timeout when set, else the defaults' timeout, else
+// zero (no timeout). It is nil-safe on defaults so callers without a defaults
+// block need no guard. Both the CLI (under its --timeout flag) and the
+// orchestrator share it so the two precedence chains cannot drift.
+func ResolveTimeout(wf Workflow, defaults *RunDefaults) time.Duration {
+	if wf.Timeout != 0 {
+		return time.Duration(wf.Timeout)
+	}
+	if defaults != nil {
+		return time.Duration(defaults.Timeout)
+	}
+	return 0
+}
+
+// ResolveMaxIterations applies the workflow-then-defaults precedence for the
+// iteration cap: the workflow's value when positive, else the defaults' value,
+// else zero. It is nil-safe on defaults. Shared by the CLI (under its
+// --iterations flag) and the orchestrator so the precedence cannot drift.
+func ResolveMaxIterations(wf Workflow, defaults *RunDefaults) int {
+	if wf.MaxIterations > 0 {
+		return wf.MaxIterations
+	}
+	if defaults != nil {
+		return defaults.MaxIterations
+	}
+	return 0
+}
+
+// ResolveCompletionSignal returns the defaults' completion signal, or "" when no
+// defaults block is set. There is no workflow-level completion signal, so this
+// is a single-layer lookup; it exists alongside the other resolvers so the CLI
+// (under its --signal flag) and the orchestrator share one source.
+func ResolveCompletionSignal(defaults *RunDefaults) string {
+	if defaults != nil {
+		return defaults.CompletionSignal
+	}
+	return ""
+}
+
 // ErrConfigRead is the sentinel LoadConfig wraps when the config file cannot be
 // read (e.g. missing path).
 var ErrConfigRead = errors.New("taboo: cannot read config")

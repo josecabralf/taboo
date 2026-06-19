@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/josecabralf/taboo/pkg/taboo"
 )
@@ -80,18 +79,9 @@ func buildPlan(pc *taboo.ProjectConfig, opts Options) (plan, error) {
 		SourceDefinition: pc.SourceDefinition,
 	}
 
-	maxIterations := wf.MaxIterations
-	timeout := time.Duration(wf.Timeout)
-	completionSignal := ""
-	if pc.Defaults != nil {
-		if maxIterations == 0 {
-			maxIterations = pc.Defaults.MaxIterations
-		}
-		if timeout == 0 {
-			timeout = time.Duration(pc.Defaults.Timeout)
-		}
-		completionSignal = pc.Defaults.CompletionSignal
-	}
+	maxIterations := taboo.ResolveMaxIterations(wf, pc.Defaults)
+	timeout := taboo.ResolveTimeout(wf, pc.Defaults)
+	completionSignal := taboo.ResolveCompletionSignal(pc.Defaults)
 
 	req := taboo.OrchestratedRequest{
 		RunRequest: taboo.RunRequest{
