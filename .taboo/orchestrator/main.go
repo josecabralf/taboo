@@ -2,8 +2,9 @@
 // end-to-end on the host's pkg/taboo: it fetches the issue, runs the implement
 // workflow (the agent commits in place, push-denied), pushes the branch, opens a
 // draft PR carrying the agent's plan, and applies the agent:review label. All
-// GitHub/git I/O funnels through internal/ghio; the taboo run through
-// internal/taborun. In CI it is built inside its own module and run from the
+// GitHub/git I/O funnels through internal/ghio; the taboo run goes through the
+// taboo bridge one-liner taboo.RunWorkflow (config discovery + resolution +
+// run). In CI it is built inside its own module and run from the
 // repo root (it cannot be `go run` from the parent module, which excludes nested
 // modules); see .github/workflows/agent-implement.yml.
 package main
@@ -19,7 +20,8 @@ import (
 	"strings"
 
 	"afk/internal/ghio"
-	"afk/internal/taborun"
+
+	"github.com/josecabralf/taboo/pkg/taboo"
 )
 
 // planFile is the path, relative to the run's worktree, where the implement agent
@@ -39,11 +41,11 @@ type ghClient interface {
 	AddLabel(ctx context.Context, prRef, label string) error
 }
 
-// taboRunner runs the implement workflow through taboo and returns the run's
-// result. The taborun.Run function satisfies it; tests substitute a fake that
-// returns a canned Result (pointing WorktreePath at a temp dir) without
-// provisioning a workshop.
-type taboRunner func(ctx context.Context, opts taborun.Options) (taborun.Result, error)
+// workflowRunner runs a named taboo workflow discovered at or above startDir and
+// returns the run's result. The taboo.RunWorkflow bridge satisfies it; tests
+// substitute a fake that returns a canned OrchestratedResult (pointing
+// WorktreePath at a temp dir) without provisioning a workshop.
+type workflowRunner func(ctx context.Context, startDir, workflow string, vars map[string]string, ov taboo.PlanOverrides, cmd taboo.Commander) (taboo.OrchestratedResult, error)
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -78,7 +80,12 @@ func runImplement(ctx context.Context, args []string) error {
 		return errors.New("--issue is required")
 	}
 
-	return implement(ctx, *issue, ghio.New(ghio.NewExec()), taborun.Run)
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+
+	return implement(ctx, startDir, *issue, ghio.New(ghio.NewExec()), taboo.RunWorkflow)
 }
 
 // implement is the testable core of the implement subcommand: it fetches the
@@ -86,14 +93,7 @@ func runImplement(ctx context.Context, args []string) error {
 // carrying the agent's plan, and applies the review label, in that order. The gh
 // and taboo seams are injected so tests drive the full sequence with fakes; each
 // step's failure is wrapped and short-circuits the rest.
-func implement(ctx context.Context, issue int, gh ghClient, runTabo taboRunner) error {
-	repo, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("resolve working directory: %w", err)
-	}
-	projectDir := filepath.Join(repo, ".taboo")
-	configPath := filepath.Join(projectDir, "taboo.yaml")
-
+func implement(ctx context.Context, startDir string, issue int, gh ghClient, runWorkflow workflowRunner) error {
 	iss, err := gh.IssueView(ctx, issue)
 	if err != nil {
 		return fmt.Errorf("fetch issue: %w", err)
@@ -108,16 +108,11 @@ func implement(ctx context.Context, issue int, gh ghClient, runTabo taboRunner) 
 		"PLAN_OUTPUT_PATH": planFile,
 	}
 
-	res, err := runTabo(ctx, taborun.Options{
-		ConfigPath: configPath,
-		Workflow:   "implement",
-		Branch:     branch,
-		Vars:       vars,
-		RepoPath:   repo,
-		ProjectDir: projectDir,
-		Stdout:     os.Stderr,
-		Stderr:     os.Stderr,
-	})
+	res, err := runWorkflow(ctx, startDir, "implement", vars, taboo.PlanOverrides{
+		Branch: branch,
+		Stdout: os.Stderr,
+		Stderr: os.Stderr,
+	}, taboo.NewExecCommander())
 	if err != nil {
 		return fmt.Errorf("run implement agent: %w", err)
 	}

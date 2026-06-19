@@ -11,11 +11,11 @@ bash-around-`taboo run` workflow (PR #65). See
 ## Layout
 
 - `main.go` — the `afk` binary; stdlib-`flag` dispatch and the `implement`
-  subcommand that wires the end-to-end flow.
+  subcommand that wires the end-to-end flow. The run goes onto `pkg/taboo`
+  through the bridge one-liner `taboo.RunWorkflow`, which discovers `taboo.yaml`,
+  resolves the named workflow, and drives the run.
 - `internal/ghio` — GitHub/git I/O (`gh issue view`, `git push`, draft-PR
   create, label add) behind a fakeable single-method `Exec` seam.
-- `internal/taborun` — the single seam onto `pkg/taboo`: loads the config,
-  resolves a named workflow, and drives the run through `taboo.Orchestrator`.
 
 ## Usage
 
@@ -59,8 +59,11 @@ In CI the binary is built inside the module and run from the repo root instead:
 "$RUNNER_TEMP/afk" implement --issue N
 ```
 
-Either way, the binary must run with **cwd = the repository root**: it resolves
-the repo from `os.Getwd()` and reads `.taboo/taboo.yaml` relative to it.
+Either way, run from somewhere **inside the repository** (the root is simplest,
+and matches CI). afk hands the start directory (`os.Getwd()`) to the taboo
+bridge, which ascends from there to find `.taboo/taboo.yaml`, so any
+subdirectory of the repo works. Run it from outside the repo tree and the bridge
+fails with `taboo: no taboo.yaml found from <dir>`.
 
 Because `./...` skips it, build/vet/test it explicitly:
 
