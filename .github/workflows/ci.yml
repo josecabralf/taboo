@@ -31,8 +31,5 @@ jobs:
       - name: Build
         run: workshop run -- make build
 
-      # The root ./... skips dot-directories, so the nested afk module at
-      # .taboo/orchestrator is invisible to `make build/test`. Build, vet and
-      # test it explicitly here so its agent-loop code is gated on every PR.
       - name: Orchestrator module (build/vet/test)
-        run: workshop run -- bash -c 'cd .taboo/orchestrator && go build ./... && go vet ./... && go test ./...'
+        run: workshop run -- make orchestrator
