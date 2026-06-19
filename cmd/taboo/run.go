@@ -553,10 +553,7 @@ func resolveTimeout(opts *runOptions, wf taboo.Workflow, defaults *taboo.RunDefa
 	if opts.timeout > 0 {
 		return opts.timeout
 	}
-	if wf.Timeout != 0 {
-		return time.Duration(wf.Timeout)
-	}
-	return time.Duration(defaults.Timeout)
+	return taboo.ResolveTimeout(wf, defaults)
 }
 
 // resolveMaxIterations applies flag-then-workflow-then-defaults precedence for
@@ -566,10 +563,7 @@ func resolveMaxIterations(opts *runOptions, wf taboo.Workflow, defaults *taboo.R
 	if opts.iterations > 0 {
 		return opts.iterations
 	}
-	if wf.MaxIterations > 0 {
-		return wf.MaxIterations
-	}
-	return defaults.MaxIterations
+	return taboo.ResolveMaxIterations(wf, defaults)
 }
 
 // resolveSignal applies flag-then-defaults precedence for the completion signal.
@@ -579,7 +573,7 @@ func resolveSignal(opts *runOptions, defaults *taboo.RunDefaults) string {
 	if opts.signal != "" {
 		return opts.signal
 	}
-	return defaults.CompletionSignal
+	return taboo.ResolveCompletionSignal(defaults)
 }
 
 // resolveBranch returns the run's branch: the override verbatim when set, else a

@@ -30,3 +30,6 @@ jobs:
 
       - name: Build
         run: workshop run -- make build
+
+      - name: Orchestrator module (build/vet/test)
+        run: workshop run -- make orchestrator
