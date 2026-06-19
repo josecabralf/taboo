@@ -422,6 +422,22 @@ func TestPlan_ErrorContract(t *testing.T) {
 		}
 	})
 
+	t.Run("no agent configured returns ErrNoAgent", func(t *testing.T) {
+		// Prompt present, but no agent anywhere: no top-level agent and the
+		// workflow sets none. The agent check fires before prompt resolution.
+		cfg := &ProjectConfig{
+			Model: "m",
+			Workflows: map[string]Workflow{
+				"implement": {Prompt: "p"},
+			},
+		}
+
+		_, err := cfg.Plan(configDir, "implement", nil, ov)
+		if !errors.Is(err, ErrNoAgent) {
+			t.Errorf("err = %v, want errors.Is ErrNoAgent", err)
+		}
+	})
+
 	t.Run("unknown agent via override wraps ErrUnknownAgent", func(t *testing.T) {
 		// Valid config, but a bogus agent name forced through the override.
 		// NewProfile must wrap ErrUnknownAgent and Plan must return it intact.

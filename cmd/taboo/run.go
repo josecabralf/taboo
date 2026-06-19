@@ -25,12 +25,6 @@ import (
 // preflight refusal from a failure inside the run itself.
 var errRunFailed = errors.New("run: preflight failed")
 
-// errNoPrompt is the sentinel resolvePrompt returns when neither the workflow
-// nor the defaults configure any prompt at all; resolvePlan maps it to a
-// friendly "set prompt or prompt-file" message, whereas a prompt-file that is
-// configured but unreadable is a different, precisely-surfaced error.
-var errNoPrompt = errors.New("run: no prompt configured")
-
 // runOptions are the parsed flags for the run subcommand: the highest-precedence
 // layer of run-param resolution (top-level config -> workflow -> these flags).
 type runOptions struct {
@@ -109,29 +103,12 @@ func newRunCmd(env Env) *cobra.Command {
 	return cmd
 }
 
-// runPlan is the fully resolved description of one run: everything translated
-// from the loaded config, the selection, and the flags into the values pkg/taboo
-// consumes. It is the seam between resolution (pure, testable, side-effect free)
-// and execution, so --dry-run can print it without running anything.
-type runPlan struct {
-	workflow         string
-	runnerConfig     taboo.Config
-	branch           string
-	model            string
-	prompt           string
-	timeout          time.Duration
-	maxIterations    int
-	completionSignal string
-	// adhoc marks a run with no named workflow (an off-the-defaults --prompt run),
-	// so the human-facing summaries name it as such instead of as a workflow.
-	adhoc bool
-}
-
 // runRun is the run command's select-resolve-preflight-execute flow. It discovers
 // and loads the config, selects what to run (named workflow, ad-hoc, or default),
-// resolves that into a plan, and then either prints the plan (--dry-run) or runs a
-// host preflight and executes it. Each stage's failure is surfaced before the
-// next, so a misconfigured project never reaches the workshop.
+// resolves that into a plan via the pkg/taboo config→run bridge, and then either
+// prints the plan (--dry-run) or runs a host preflight and executes it. Each
+// stage's failure is surfaced before the next, so a misconfigured project never
+// reaches the workshop.
 func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error {
 	configPath, cfg, err := loadProjectConfig(env)
 	if err != nil {
@@ -141,9 +118,14 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 	if err != nil {
 		return err
 	}
-	plan, err := resolvePlan(cfg, configPath, sel, opts)
+	configDir := filepath.Dir(configPath)
+	vars, err := resolveVars(opts, configDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", sel.describe(), err)
+	}
+	plan, err := cfg.Plan(configDir, sel.workflowName(), vars, planOverrides(env, opts))
+	if err != nil {
+		return mapPlanError(cfg, sel, opts, err)
 	}
 
 	if opts.dryRun {
@@ -162,7 +144,41 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 		_, _ = fmt.Fprintln(env.Stderr, "Aborted.")
 		return nil
 	}
-	return executePlan(ctx, env, opts.asJSON, plan)
+	return executeRun(ctx, env, opts.asJSON, plan)
+}
+
+// mapPlanError translates the bridge's library-owned sentinels into the CLI's
+// existing user-facing wording. The bridge owns resolution and returns neutral,
+// errors.Is-matchable sentinels; the CLI re-adds the run-command phrasing — the
+// selection-scoped no-prompt and no-agent hints and the fuzzy unknown-agent
+// suggestion — that the neutral sentinels drop. Non-sentinel errors pass through
+// verbatim.
+func mapPlanError(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions, err error) error {
+	switch {
+	case errors.Is(err, taboo.ErrNoPrompt):
+		return fmt.Errorf("%s has no prompt (set prompt or prompt-file)", sel.describe())
+	case errors.Is(err, taboo.ErrNoAgent):
+		return fmt.Errorf("%s has no agent configured (set agent: on the workflow or a top-level agent:)", sel.describe())
+	case errors.Is(err, taboo.ErrUnknownAgent):
+		return unknownAgentError(effectiveAgent(cfg, sel.wf, opts), err)
+	case errors.Is(err, taboo.ErrUnknownWorkflow):
+		return unknownWorkflowError(cfg, sel.label)
+	default:
+		return err
+	}
+}
+
+// planOverrides packs the CLI flags into the bridge's PlanOverrides. The agent's
+// live output streams to stderr (both sinks point at env.Stderr) so the machine
+// result on stdout stays clean.
+func planOverrides(env Env, opts *runOptions) taboo.PlanOverrides {
+	return taboo.PlanOverrides{
+		Agent: opts.agent, Model: opts.model,
+		Timeout: opts.timeout, MaxIterations: opts.iterations,
+		CompletionSignal: opts.signal, Branch: opts.branch, From: opts.from,
+		Prompt: opts.prompt, PromptFile: opts.promptFile,
+		Stdout: env.Stderr, Stderr: env.Stderr,
+	}
 }
 
 // confirmRun gates a real run behind an interactive confirmation: at a TTY
@@ -171,7 +187,7 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 // workshop launch. A non-interactive caller (a pipe, CI) or --yes proceeds
 // without prompting, keeping scripts and automation unblocked; --dry-run never
 // reaches here.
-func confirmRun(env Env, opts *runOptions, plan runPlan) (bool, error) {
+func confirmRun(env Env, opts *runOptions, plan *taboo.Plan) (bool, error) {
 	if !runNeedsConfirm(isInteractive(env), opts) {
 		return true, nil
 	}
@@ -187,13 +203,13 @@ func runNeedsConfirm(interactive bool, opts *runOptions) bool {
 // promptConfirm prints a one-line run summary to stderr and reads a y/N answer
 // from stdin, returning true only on an explicit yes. A blank line (the default),
 // EOF, or anything else declines, so an accidental Enter never launches a run.
-func promptConfirm(env Env, plan runPlan) (bool, error) {
-	target := fmt.Sprintf("workflow %q", plan.workflow)
-	if plan.adhoc {
+func promptConfirm(env Env, plan *taboo.Plan) (bool, error) {
+	target := fmt.Sprintf("workflow %q", plan.Workflow)
+	if plan.Workflow == "" {
 		target = "an ad-hoc prompt"
 	}
 	msg := fmt.Sprintf("About to run %s on branch %q (agent %s, workshop %s). Continue? [y/N] ",
-		target, plan.branch, plan.runnerConfig.Agent.Name(), plan.runnerConfig.Workshop)
+		target, plan.Request.Branch, plan.Config.Agent.Name(), plan.Config.Workshop)
 	return promptYesNo(env, msg)
 }
 
@@ -236,6 +252,15 @@ func (s runSelection) describe() string {
 		return "ad-hoc run"
 	}
 	return fmt.Sprintf("workflow %q", s.label)
+}
+
+// workflowName is the bridge's workflow argument: the selected name, or "" for an
+// ad-hoc run.
+func (s runSelection) workflowName() string {
+	if s.adhoc {
+		return ""
+	}
+	return s.label
 }
 
 // selectRun decides what a run invocation targets, applying the selection
@@ -302,7 +327,7 @@ func loadProjectConfig(env Env) (string, *taboo.ProjectConfig, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("determine working directory: %w", err)
 	}
-	path, found := findConfig(wd, statFileExists)
+	path, found := taboo.FindConfig(wd)
 	if !found {
 		return "", nil, fmt.Errorf("no taboo.yaml found from %s — run `taboo init` first", wd)
 	}
@@ -313,103 +338,12 @@ func loadProjectConfig(env Env) (string, *taboo.ProjectConfig, error) {
 	return path, cfg, nil
 }
 
-// resolvePlan translates the loaded config + the selection + the flags into a
-// runPlan. It bridges two shapes: the library consumes a flat Config +
-// OrchestratedRequest, while the config layers flags over workflow over top
-// level. Every precedence rule and required-field refusal lives here so both
-// --dry-run and a real run resolve identically. The workflow lookup already
-// happened in selectRun, so sel.wf is the chosen block (zero for an ad-hoc run).
-func resolvePlan(cfg *taboo.ProjectConfig, configPath string, sel runSelection, opts *runOptions) (runPlan, error) {
-	// A non-nil defaults lets the resolvers drop their nil guards: the config may
-	// omit the defaults block entirely, so substitute an empty one here.
-	defaults := cfg.Defaults
-	if defaults == nil {
-		defaults = &taboo.RunDefaults{}
-	}
-
-	profile, err := resolveRunProfile(cfg, sel, opts)
-	if err != nil {
-		return runPlan{}, err
-	}
-
-	base := filepath.Dir(configPath)
-	prompt, err := resolvePrompt(opts, sel.wf, defaults, base)
-	if errors.Is(err, errNoPrompt) {
-		return runPlan{}, fmt.Errorf("%s has no prompt (set prompt or prompt-file)", sel.describe())
-	}
-	if err != nil {
-		return runPlan{}, fmt.Errorf("%s: read prompt-file: %w", sel.describe(), err)
-	}
-
-	prompt, err = injectVars(prompt, opts, base)
-	if err != nil {
-		return runPlan{}, fmt.Errorf("%s: %w", sel.describe(), err)
-	}
-
-	repoPath, err := filepath.Abs(cfg.Repo)
-	if err != nil {
-		return runPlan{}, fmt.Errorf("resolve repo path %q: %w", cfg.Repo, err)
-	}
-
-	// --from overrides the source-definition recorded in taboo.yaml.
-	sourceDefinition := cfg.SourceDefinition
-	if opts.from != "" {
-		sourceDefinition = opts.from
-	}
-
-	plan := runPlan{
-		workflow: sel.label,
-		runnerConfig: taboo.Config{
-			Workshop:         taboo.WorkshopName(cfg.Workshop, profile.Name()),
-			Base:             cfg.Base,
-			Agent:            profile,
-			RepoPath:         repoPath,
-			ProjectDir:       base,
-			SourceDefinition: sourceDefinition,
-		},
-		model:            resolveModel(cfg, sel, opts),
-		prompt:           prompt,
-		timeout:          resolveTimeout(opts, sel.wf, defaults),
-		maxIterations:    resolveMaxIterations(opts, sel.wf, defaults),
-		completionSignal: resolveSignal(opts, defaults),
-		adhoc:            sel.adhoc,
-	}
-	plan.branch = resolveBranch(opts.branch, defaults.BranchPrefix, sel.label)
-	return plan, nil
-}
-
-// resolveRunProfile resolves the run's agent profile from the effective agent and
-// model, applying the full precedence chain (top-level config -> workflow ->
-// CLI flags) to each. The agent and model are re-resolved here rather than reused
-// from LoadConfig's wf.Profile so a --model (or --agent) flag can override them;
-// with no flags the result is identical to the loaded profile. A missing agent
-// anywhere is refused, and an unknown agent (only reachable via a flag, since
-// LoadConfig already validated config agents) is surfaced through unknownAgentError,
-// with a fuzzy "did you mean" suggestion when a registered agent is close.
-func resolveRunProfile(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions) (taboo.AgentProfile, error) {
-	agent := effectiveAgent(cfg, sel.wf, opts)
-	if agent == "" {
-		return nil, fmt.Errorf("%s has no agent configured (set agent: on the workflow or a top-level agent:)", sel.describe())
-	}
-	profile, err := taboo.NewProfile(agent, resolveModel(cfg, sel, opts))
-	if err != nil {
-		return nil, unknownAgentError(agent, err)
-	}
-	return profile, nil
-}
-
-// resolveModel applies the model precedence chain (top-level config -> workflow ->
-// --model flag). It is the single source of that precedence, shared by the
-// profile resolution and the dry-run plan so both report the same model.
-func resolveModel(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions) string {
-	return orElse(opts.model, orElse(sel.wf.Model, cfg.Model))
-}
-
 // effectiveAgent applies the agent precedence chain (top-level config -> workflow
 // -> --agent flag) to one workflow block. The ad-hoc gate in selectRun passes the
 // zero Workflow (an ad-hoc run has none), so it reduces to flag-then-top-level
-// there, while resolveRunProfile passes the selected block. Sharing it keeps the
-// ad-hoc gate and the profile resolution from drifting apart.
+// there, while mapPlanError passes the selected block to name the agent the
+// bridge rejected. Sharing it keeps the ad-hoc gate and that message aligned with
+// the bridge's own agent precedence.
 func effectiveAgent(cfg *taboo.ProjectConfig, wf taboo.Workflow, opts *runOptions) string {
 	return orElse(opts.agent, orElse(wf.Agent, cfg.Agent))
 }
@@ -451,51 +385,6 @@ func availableWorkflows(cfg *taboo.ProjectConfig) string {
 	return strings.Join(names, ", ")
 }
 
-// resolvePrompt applies the prompt precedence (flag inline → workflow inline →
-// workflow file → defaults inline → defaults file), returning the first non-empty
-// resolution. A prompt-file path is read relative to the config file's directory
-// (the same base validate uses), so a relative path resolves identically here and
-// in the preflight. No prompt anywhere is an error — there is nothing for the
-// agent to do.
-func resolvePrompt(opts *runOptions, wf taboo.Workflow, defaults *taboo.RunDefaults, base string) (string, error) {
-	if opts.prompt != "" {
-		return opts.prompt, nil
-	}
-	if opts.promptFile != "" {
-		return readPromptFile(opts.promptFile, base)
-	}
-	if wf.Prompt != "" {
-		return wf.Prompt, nil
-	}
-	if wf.PromptFile != "" {
-		return readPromptFile(wf.PromptFile, base)
-	}
-	if defaults.Prompt != "" {
-		return defaults.Prompt, nil
-	}
-	if defaults.PromptFile != "" {
-		return readPromptFile(defaults.PromptFile, base)
-	}
-	return "", errNoPrompt
-}
-
-// injectVars fills the prompt's {{VAR}} placeholders from --vars-file and --var
-// (--var wins on a key clash). With no vars it returns the prompt unchanged, so a
-// prompt that legitimately contains {{...}} is left alone. It uses the pure
-// taboo.Substitute (a single literal pass), not the shell-expanding
-// PromptTemplate.Resolve, so injected values are never shell-expanded or
-// re-substituted — safe for untrusted text. See docs/run-vars.md.
-func injectVars(prompt string, opts *runOptions, base string) (string, error) {
-	vars, err := resolveVars(opts, base)
-	if err != nil {
-		return "", err
-	}
-	if len(vars) == 0 {
-		return prompt, nil
-	}
-	return taboo.Substitute(prompt, vars)
-}
-
 // resolveVars gathers the run's caller-supplied template variables, layering the
 // repeatable --var KEY=VALUE flags on top of the --vars-file JSON object so a --var
 // overrides a matching file key. The vars-file path is relative to the config dir
@@ -523,23 +412,10 @@ func resolveVars(opts *runOptions, base string) (map[string]string, error) {
 	return vars, nil
 }
 
-// readPromptFile returns the contents of a prompt file, resolving a relative
-// path against base. The contents are used verbatim as the prompt.
-func readPromptFile(path, base string) (string, error) {
-	resolved := resolvePromptFilePath(path, base)
-	// resolved derives from a trusted config path under a trusted base, not from
-	// untrusted input.
-	data, err := os.ReadFile(resolved) // #nosec G304
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-// resolvePromptFilePath resolves a configured prompt-file path: absolute paths
-// are used verbatim, relative ones resolve against base (the config file's
-// directory). Both run (readPromptFile) and validate (promptFileChecks) share
-// this so a relative prompt-file resolves identically in both.
+// resolvePromptFilePath resolves a config-relative file path: absolute paths are
+// used verbatim, relative ones resolve against base (the config file's
+// directory). Run's resolveVars (for --vars-file) and validate (promptFileChecks)
+// share this so a relative path resolves identically in both.
 func resolvePromptFilePath(path, base string) string {
 	if filepath.IsAbs(path) {
 		return path
@@ -547,53 +423,10 @@ func resolvePromptFilePath(path, base string) string {
 	return filepath.Join(base, path)
 }
 
-// resolveTimeout applies flag-then-workflow-then-defaults precedence for the
-// per-exec timeout (zero means no timeout).
-func resolveTimeout(opts *runOptions, wf taboo.Workflow, defaults *taboo.RunDefaults) time.Duration {
-	if opts.timeout > 0 {
-		return opts.timeout
-	}
-	return taboo.ResolveTimeout(wf, defaults)
-}
-
-// resolveMaxIterations applies flag-then-workflow-then-defaults precedence for
-// the iteration cap (zero or negative means a single run; the Orchestrator floors
-// it).
-func resolveMaxIterations(opts *runOptions, wf taboo.Workflow, defaults *taboo.RunDefaults) int {
-	if opts.iterations > 0 {
-		return opts.iterations
-	}
-	return taboo.ResolveMaxIterations(wf, defaults)
-}
-
-// resolveSignal applies flag-then-defaults precedence for the completion signal.
-// There is no workflow-level signal field, so this is a two-layer chain (the
-// completion signal lives only in the defaults block and as a CLI flag).
-func resolveSignal(opts *runOptions, defaults *taboo.RunDefaults) string {
-	if opts.signal != "" {
-		return opts.signal
-	}
-	return taboo.ResolveCompletionSignal(defaults)
-}
-
-// resolveBranch returns the run's branch: the override verbatim when set, else a
-// fresh name composed of the prefix, the workflow, and a timestamp so every run
-// lands on its own branch and never collides with a prior one. The nanosecond
-// component keeps two back-to-back runs of the same workflow within the same
-// wall-clock second from producing an identical branch (which would make the
-// real git worktree add fail on a name clash).
-func resolveBranch(override, prefix, workflow string) string {
-	if override != "" {
-		return override
-	}
-	now := time.Now()
-	return fmt.Sprintf("%s%s-%s-%09d", prefix, workflow, now.Format("20060102-150405"), now.Nanosecond())
-}
-
 // runPreflight gathers the lightweight host probe (is workshop callable) plus
 // the run-scoped config-correctness checks and refuses the run when any errors.
 // The checks are run-scoped (runConfigChecks, not the full validateChecks): they
-// skip prompt-file existence, which resolvePlan already proved for the one file
+// skip prompt-file existence, which cfg.Plan already proved for the one file
 // this run consumes. The report goes to stderr (not stdout) so a refusal does not
 // pollute the machine result stream a successful run writes there. It returns
 // errRunFailed so main exits non-zero without echoing cobra noise.
@@ -607,33 +440,19 @@ func runPreflight(ctx context.Context, env Env) error {
 	return nil
 }
 
-// executePlan builds a Runner + Orchestrator from the plan and runs it. Live
-// agent output (stdout and stderr both) is routed to env.Stderr to keep the
-// machine result clean on env.Stdout; a brief start line goes to stderr too so an
-// interactive caller sees the run begin. On success the machine result is written
-// to stdout; a failure inside the run is printed to stderr and returned (exit 1),
-// mirroring init.
-func executePlan(ctx context.Context, env Env, asJSON bool, plan runPlan) error {
-	target := fmt.Sprintf("workflow %q", plan.workflow)
-	if plan.adhoc {
+// executeRun drives a resolved *taboo.Plan end-to-end via the bridge's Run. Live
+// agent output (the Plan already routes both streams to env.Stderr via the
+// overrides) keeps the machine result clean on env.Stdout; a brief start line goes
+// to stderr too so an interactive caller sees the run begin. On success the
+// machine result is written to stdout; a failure inside the run is printed to
+// stderr and returned (exit 1), mirroring init.
+func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) error {
+	target := fmt.Sprintf("workflow %q", plan.Workflow)
+	if plan.Workflow == "" {
 		target = "ad-hoc prompt"
 	}
-	_, _ = fmt.Fprintf(env.Stderr, "Running %s on branch %q (agent %s)…\n", target, plan.branch, plan.runnerConfig.Agent.Name())
-
-	runner := taboo.New(plan.runnerConfig, env.Cmd)
-	orch := taboo.NewOrchestrator(runner)
-	req := taboo.OrchestratedRequest{
-		RunRequest: taboo.RunRequest{
-			Branch:  plan.branch,
-			Prompt:  plan.prompt,
-			Timeout: plan.timeout,
-			Stdout:  env.Stderr,
-			Stderr:  env.Stderr,
-		},
-		MaxIterations:    plan.maxIterations,
-		CompletionSignal: plan.completionSignal,
-	}
-	res, err := orch.Run(ctx, req)
+	_, _ = fmt.Fprintf(env.Stderr, "Running %s on branch %q (agent %s)…\n", target, plan.Request.Branch, plan.Config.Agent.Name())
+	res, err := plan.Run(ctx, env.Cmd)
 	if err != nil {
 		_, _ = fmt.Fprintln(env.Stderr, "Error:", err)
 		return err
@@ -683,25 +502,25 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 // would do without any host side effects. Every label is padded to one width so
 // the values line up in a single column; the longest label
 // ("completion-signal:") sets that width.
-func printPlan(env Env, plan runPlan) {
+func printPlan(env Env, plan *taboo.Plan) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo run (dry run) — resolved plan:")
-	planLabel, planTarget := "workflow:", plan.workflow
-	if plan.adhoc {
+	planLabel, planTarget := "workflow:", plan.Workflow
+	if plan.Workflow == "" {
 		planLabel, planTarget = "run:", "ad-hoc (--prompt)"
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", planLabel, planTarget)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "branch:", plan.branch)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "agent:", plan.runnerConfig.Agent.Name())
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "model:", plan.model)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "workshop:", plan.runnerConfig.Workshop)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "repo:", plan.runnerConfig.RepoPath)
-	if plan.runnerConfig.SourceDefinition != "" {
-		_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "source-definition:", plan.runnerConfig.SourceDefinition)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "branch:", plan.Request.Branch)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "agent:", plan.Config.Agent.Name())
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "model:", plan.Model)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "workshop:", plan.Config.Workshop)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "repo:", plan.Config.RepoPath)
+	if plan.Config.SourceDefinition != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "source-definition:", plan.Config.SourceDefinition)
 	}
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "timeout:", plan.timeout)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %d\n", "max-iterations:", plan.maxIterations)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "completion-signal:", plan.completionSignal)
-	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "prompt:", promptSummary(plan.prompt))
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "timeout:", plan.Request.Timeout)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %d\n", "max-iterations:", plan.Request.MaxIterations)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "completion-signal:", plan.Request.CompletionSignal)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "prompt:", promptSummary(plan.Request.Prompt))
 }
 
 // promptSummary renders a prompt on one line so a multi-line (often
