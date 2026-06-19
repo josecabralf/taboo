@@ -24,13 +24,15 @@ single PR review, and clears the label. On either side a failure adds
 `agent:blocked` and comments a run link plus a retry hint; re-adding the trigger
 label retries.
 
-The chain from implement to review is automatic, but only because the
-`agent:review` label is applied with a personal access token rather than the
-default `GITHUB_TOKEN`. A label applied with `GITHUB_TOKEN` does not trigger
-another workflow — GitHub suppresses that to prevent recursive runs. So the
-cascade depends on `secrets.AGENT_PAT`; without it the PR is created and labelled
-but the review workflow never wakes up. This is the single non-obvious wiring
-fact in the whole loop, and the one-time setup below calls it out.
+The chain from implement to review — and CI on the resulting PR — is automatic,
+but only because the implement workflow opens the PR and applies the
+`agent:review` label with a personal access token rather than the default
+`GITHUB_TOKEN`. An event created with `GITHUB_TOKEN` does not trigger another
+workflow — GitHub suppresses that to prevent recursive runs. So the cascade
+depends on `secrets.AGENT_PAT`; without it the PR is opened and labelled but
+nothing downstream fires — neither the PR's CI nor the review workflow wakes up.
+This is the single non-obvious wiring fact in the whole loop, and the one-time
+setup below calls it out.
 
 ## Why the boundary is "scaffolding only"
 
@@ -138,10 +140,16 @@ Before the loop can run, a repository admin sets up four things by hand:
   exist.
 - **Add the agent credential secret:** `OPENROUTER_API_KEY`, the OpenRouter API
   key the opencode agent authenticates with inside the workshop.
-- **Add `AGENT_PAT`:** a personal access token with `repo` scope. The implement
-  workflow applies the `agent:review` label with this PAT so the review workflow
-  cascades; a label applied with the default `GITHUB_TOKEN` does not trigger
-  another workflow, so without the PAT the chain stops at the open PR.
+- **Add `AGENT_PAT`:** a credential with a real identity, used to open the draft
+  PR and apply the `agent:review` label (see the wiring note above — without it
+  neither the PR's CI nor `agent-review` fires). Prefer a **fine-grained PAT
+  scoped to this repository** with `Contents: read/write`, `Pull requests:
+  read/write`, `Issues: read/write` (labels go through the issues API), and the
+  baseline `Metadata: read` — or, better, a short-lived **GitHub App** token
+  (`actions/create-github-app-token`). The identity must have write access to the
+  repo. A classic `repo`-scoped PAT works too but is far broader than needed, and
+  this credential is exposed in the `pull_request_target` review job, so the
+  narrowest scope wins.
 - **Confirm Actions permissions:** GitHub Actions must be allowed to push
   branches, open and label pull requests, and post reviews (workflow `contents`,
   `issues`, and `pull-requests` write permissions, plus repository settings that
