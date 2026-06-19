@@ -16,17 +16,16 @@ steps did every GitHub side effect (issue fetch, push, PR, label) with `gh`.
 That arrangement has the orchestration logic — branch naming, prompt-variable
 injection, plan-to-PR-body assembly, error handling — living in workflow YAML,
 where it is untestable, unrunnable locally, and shells out to taboo's *CLI*
-rather than its primary deliverable, the `pkg/taboo` library. taboo sells itself
-as a library for "engineers building agent pipelines in Go" (CONTEXT.md); the
-canonical AFK pipeline not using that library was a credibility gap and a
-dogfooding miss.
+rather than its primary deliverable, the `pkg/taboo` library. taboo ships as a
+library for "engineers building agent pipelines in Go" (CONTEXT.md), but the
+canonical AFK pipeline didn't use `pkg/taboo`, the library taboo ships.
 
 **Decision: the AFK loop becomes a small Go application built on `pkg/taboo`.**
 A new `afk` binary owns the whole `implement` flow as ordinary, testable Go;
 GitHub I/O moves into Go behind a fakeable seam; the workflow keeps only
-checkout/setup, token plumbing, and label bookkeeping. This is the **foundation
-tracer bullet** for AFK — the implement slice — that later slices (review,
-multi-issue waves) stack on. Four choices make it up.
+checkout/setup, token plumbing, and label bookkeeping. This is the foundation
+tracer bullet for AFK: the implement flow, which later work (review, multi-issue
+waves) builds on.
 
 ### Orchestrate in Go on `pkg/taboo`, not bash on the CLI
 
@@ -76,8 +75,8 @@ it explicitly** — a dedicated `ci.yml` step (`cd .taboo/orchestrator && go bui
 The binary uses stdlib `flag` for subcommand dispatch (`afk implement --issue
 N`) — no cobra. The CLI under `cmd/taboo` carries cobra because it is the
 product; the AFK example is a *demonstration of the library*, and it stays as
-lean as `pkg/taboo` itself, whose only dependency is yaml.v3. Adding cobra to a
-two-subcommand-at-most example would be more framework than the example is code.
+lean as `pkg/taboo` itself, whose only dependency is yaml.v3. The example has one
+subcommand; cobra would add a dependency for nothing.
 
 ## Considered options
 
@@ -114,8 +113,6 @@ two-subcommand-at-most example would be more framework than the example is code.
 - **Nested-module tax, paid in two places.** It is not `go run`-able from the
   parent (`cd`-in or build-then-run, cwd = repo root); and `ci.yml` carries a
   dedicated build/vet/test step because `make build/test` skips dot-dirs.
-- **Foundation for later AFK slices.** The `ghio`/`taborun` seams and the
-  `flag`-dispatched binary are the substrate the review loop and multi-issue
-  fan-out build on, without re-litigating these choices.
-- Implemented in issue #78 (the implement tracer bullet), replacing the bash
-  loop from PR #65.
+- Implemented in issue #78, replacing the bash loop from PR #65. The
+  `ghio`/`taborun` seams and the `flag`-dispatched binary are reusable by later
+  AFK work (review loop, multi-issue fan-out).

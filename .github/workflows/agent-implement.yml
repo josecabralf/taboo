@@ -6,12 +6,17 @@
 #
 # ENGINE: the orchestration is a Go application — the `afk` binary, a nested Go
 # module at .taboo/orchestrator built on pkg/taboo (taboo's own library). It does
-# everything: fetch the issue, create a fresh git worktree+branch off main inside
-# a taboo-provisioned LXD "workshop", run the opencode agent (qwen via OpenRouter)
-# with cwd=/workspace where it COMMITS IN PLACE, then push the branch, open the
-# draft PR and apply the agent:review label. The agent is git-PUSH DENIED — all
-# GitHub I/O happens in Go (internal/ghio), never in this workflow's bash. This
-# layer keeps only checkout/setup, token plumbing and label bookkeeping.
+# the whole loop:
+#   1. fetch the issue
+#   2. create a fresh git worktree+branch off main in a taboo-provisioned LXD
+#      "workshop"
+#   3. run the opencode agent (qwen via OpenRouter), which commits in place and
+#      is push-denied
+#   4. push the branch
+#   5. open the draft PR
+#   6. apply the agent:review label
+# All GitHub I/O happens in Go (internal/ghio), never in this workflow's bash.
+# This layer keeps only checkout/setup, token plumbing and label bookkeeping.
 #
 # VALIDATION: the workshop is derived from the project's own workshop.yaml
 # (ADR 0009), so the agent runs `make lint test build` itself and converges to

@@ -1,11 +1,11 @@
 # afk — the taboo orchestrator
 
-`afk` is a small Go application built on **`pkg/taboo`** that runs taboo's AFK
-("away from keyboard") agent loop. It replaces the bash-around-`taboo run`
-workflow (PR #65) with ordinary, testable Go: the orchestration logic lives here,
-and the GitHub Actions layer keeps only checkout/setup and token plumbing. This
-is the foundation for the AFK implement/review loop — the `implement` slice ships
-first, later slices stack on the same seams. See
+`afk` runs taboo's AFK ("away from keyboard") agent loop: take a GitHub issue,
+have an agent implement it, push the branch, and open a draft PR. The
+orchestration is ordinary Go built on **`pkg/taboo`** — unit-testable and
+runnable locally — and GitHub Actions only does checkout, setup, and token
+plumbing. Only the `implement` flow exists today; it replaced an earlier
+bash-around-`taboo run` workflow (PR #65). See
 [ADR 0010](../../docs/adr/0010-go-orchestrator-on-pkg-taboo.md).
 
 ## Layout
@@ -31,29 +31,9 @@ afk implement --issue N
 3. **Push** the run's branch to origin.
 4. **Open a draft PR** whose body is the agent's plan (read from `.taboo-plan.md`
    in the worktree), prefixed with `Closes #N`.
-5. **Label** the PR `agent:review` to cascade into the review workflow.
+5. **Label** the PR `agent:review`, which triggers the review workflow.
 
 All GitHub I/O is in Go; none of it is workflow bash.
-
-### Running it (nested-module constraint)
-
-`afk` is a **nested** Go module (see below), so from the repository root:
-
-```
-cd .taboo/orchestrator && go run . implement --issue N
-```
-
-`go run ./.taboo/orchestrator` from the repo root does **not** work — Go excludes
-nested modules and reports "main module does not contain package …". In CI the
-binary is built inside the module and run from the repo root instead:
-
-```
-( cd .taboo/orchestrator && go build -o "$RUNNER_TEMP/afk" . )
-"$RUNNER_TEMP/afk" implement --issue N
-```
-
-Either way, the binary must run with **cwd = the repository root**: it resolves
-the repo from `os.Getwd()` and reads `.taboo/taboo.yaml` relative to it.
 
 ## Nested module
 
@@ -63,6 +43,24 @@ on purpose: Go tooling ignores directories beginning with `.`, so packages here
 are invisible to the root module's `./...` (and therefore to `make build/test`).
 Nesting isolates the example as its own module while `replace` keeps it building
 against the parent.
+
+Because it is nested, `go run ./.taboo/orchestrator` from the repo root does
+**not** work — Go excludes nested modules and reports "main module does not
+contain package …". Run it from inside the module:
+
+```
+cd .taboo/orchestrator && go run . implement --issue N
+```
+
+In CI the binary is built inside the module and run from the repo root instead:
+
+```
+( cd .taboo/orchestrator && go build -o "$RUNNER_TEMP/afk" . )
+"$RUNNER_TEMP/afk" implement --issue N
+```
+
+Either way, the binary must run with **cwd = the repository root**: it resolves
+the repo from `os.Getwd()` and reads `.taboo/taboo.yaml` relative to it.
 
 Because `./...` skips it, build/vet/test it explicitly:
 

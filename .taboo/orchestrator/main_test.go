@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSlugBranchLowercasesAndSlugs(t *testing.T) {
@@ -92,8 +93,25 @@ func TestPrTitleCapsAt256(t *testing.T) {
 
 	title := strings.Repeat("x", 300)
 	got := prTitle(title)
-	if len(got) != 256 {
-		t.Errorf("prTitle length = %d, want 256", len(got))
+	if n := utf8.RuneCountInString(got); n != 256 {
+		t.Errorf("prTitle rune count = %d, want 256", n)
+	}
+}
+
+func TestPrTitleCapsAt256RunesWithoutCorruptingMultibyte(t *testing.T) {
+	t.Parallel()
+
+	// A title of 300 multibyte runes; truncating by byte would split a rune at the
+	// 256-byte boundary and produce invalid UTF-8. Rune-aware truncation must keep
+	// exactly 256 whole runes and stay valid UTF-8.
+	title := strings.Repeat("é", 300)
+	got := prTitle(title)
+
+	if !utf8.ValidString(got) {
+		t.Errorf("prTitle = %q is not valid UTF-8", got)
+	}
+	if n := utf8.RuneCountInString(got); n != 256 {
+		t.Errorf("prTitle rune count = %d, want 256", n)
 	}
 }
 

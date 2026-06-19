@@ -3,8 +3,9 @@
 // workflow (the agent commits in place, push-denied), pushes the branch, opens a
 // draft PR carrying the agent's plan, and applies the agent:review label. All
 // GitHub/git I/O funnels through internal/ghio; the taboo run through
-// internal/taborun. Invoked in CI as `go run ./.taboo/orchestrator implement
-// --issue <n>`.
+// internal/taborun. In CI it is built inside its own module and run from the
+// repo root (it cannot be `go run` from the parent module, which excludes nested
+// modules); see .github/workflows/agent-implement.yml.
 package main
 
 import (
@@ -104,11 +105,7 @@ func runImplement(ctx context.Context, args []string) error {
 
 	body := prBody(iss.Number, readPlan(filepath.Join(res.WorktreePath, planFile)))
 
-	url, err := gh.CreateDraftPR(ctx, ghio.PRSpec{
-		Branch: branch,
-		Title:  prTitle(iss.Title),
-		Body:   body,
-	})
+	url, err := gh.CreateDraftPR(ctx, branch, prTitle(iss.Title), body)
 	if err != nil {
 		return fmt.Errorf("open draft PR: %w", err)
 	}
@@ -158,10 +155,13 @@ func prBody(number int, plan string) string {
 	return fmt.Sprintf("Closes #%d\n\nImplemented by the taboo agent for issue #%d.\n\n_(No plan file was produced; see the commit for details.)_\n", number, number)
 }
 
-// prTitle caps an issue title at 256 characters for use as the PR title.
+// prTitle caps an issue title at 256 runes (characters) for use as the PR title.
+// It truncates by rune, not byte, so a multibyte UTF-8 character is never split
+// at the boundary.
 func prTitle(title string) string {
-	if len(title) > 256 {
-		return title[:256]
+	rs := []rune(title)
+	if len(rs) > 256 {
+		return string(rs[:256])
 	}
 	return title
 }

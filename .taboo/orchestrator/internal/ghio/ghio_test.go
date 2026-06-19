@@ -72,11 +72,7 @@ func TestCreateDraftPRBuildsArgvAndReturnsURL(t *testing.T) {
 	fe := &fakeExec{stdout: "https://github.com/o/r/pull/42\n"}
 	c := New(fe)
 
-	got, err := c.CreateDraftPR(context.Background(), PRSpec{
-		Branch: "afk/issue-78",
-		Title:  "AFK: issue 78",
-		Body:   "line one\nline two",
-	})
+	got, err := c.CreateDraftPR(context.Background(), "afk/issue-78", "AFK: issue 78", "line one\nline two")
 	if err != nil {
 		t.Fatalf("CreateDraftPR returned error: %v", err)
 	}

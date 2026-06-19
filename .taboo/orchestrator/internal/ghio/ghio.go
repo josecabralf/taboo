@@ -75,21 +75,14 @@ func (c *Client) PushBranch(ctx context.Context, branch string) error {
 	return err
 }
 
-// PRSpec describes the draft PR the orchestrator opens for a run.
-type PRSpec struct {
-	Branch string
-	Title  string
-	Body   string
-}
-
 // CreateDraftPR opens a draft PR for the run's branch against main and returns
 // its URL.
-func (c *Client) CreateDraftPR(ctx context.Context, p PRSpec) (string, error) {
+func (c *Client) CreateDraftPR(ctx context.Context, branch, title, body string) (string, error) {
 	out, err := c.exec.Run(ctx, "gh", "pr", "create", "--draft",
 		"--base", "main",
-		"--head", p.Branch,
-		"--title", p.Title,
-		"--body", p.Body)
+		"--head", branch,
+		"--title", title,
+		"--body", body)
 	if err != nil {
 		return "", err
 	}
