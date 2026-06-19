@@ -1,4 +1,4 @@
-.PHONY: help setup build test test-race test-integration lint vet tidy
+.PHONY: help setup build test test-race test-integration fmt lint vet tidy
 
 .DEFAULT_GOAL := help
 
@@ -28,6 +28,9 @@ test-race: ## Run unit tests under the race detector
 # workshop or CI; run it directly on a machine with workshop + LXD installed.
 test-integration: ## Run integration tests (requires workshop + LXD)
 	go test -tags integration ./pkg/taboo/ -count=1 -v
+
+fmt: ## Format code with golangci-lint
+	golangci-lint fmt
 
 lint: ## Run golangci-lint
 	golangci-lint run ./...

@@ -35,6 +35,7 @@ Why taboo is built the way it is.
 
 - [Isolation model](explanation/isolation-model.md) — workshops, the two-mount rule, the `/tmp` trap, and why commits land on the host branch with no extraction step.
 - [Design](explanation/design.md) — why the library is the primary contract, the single side-effecting `Commander` seam, and the agent registry.
+- [Dogfooding the agent loop](explanation/dogfooding.md) — how taboo runs its own issue-to-review loop with two label-driven Actions and `taboo run`, the label state machine, and the trust model.
 
 ## Architecture decisions
 
