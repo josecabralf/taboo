@@ -16,10 +16,10 @@ The loop is two label-triggered workflows in `.github/workflows/`:
 
 Four labels carry the state. Applying `agent:implement` to an issue claims it:
 the implement workflow swaps the issue to `agent:in-progress`, runs
-`taboo run implement` (opencode / qwen) inside a workshop on the runner,
+`taboo run implement` (Claude Code / Opus) inside a workshop on the runner,
 pushes the agent's branch, opens a draft PR whose body is the agent's plan, and
 labels that PR `agent:review`. The review workflow swaps the PR to
-`agent:in-progress`, runs `taboo run review` (opencode / qwen-coder), posts a
+`agent:in-progress`, runs `taboo run review` (Claude Code / Sonnet), posts a
 single PR review, and clears the label. On either side a failure adds
 `agent:blocked` and comments a run link plus a retry hint; re-adding the trigger
 label retries.
@@ -124,7 +124,7 @@ that a maintainer's label vouched for them.
 This is **not hardened for untrusted public forks.** The review workflow uses
 `pull_request_target`, which runs with the base repository's secrets even for a
 fork's PR. On a repository that accepts drive-by fork PRs, a labeller could be
-tricked into running agent code with access to `OPENROUTER_API_KEY` and
+tricked into running agent code with access to `CLAUDE_CODE_OAUTH_TOKEN` and
 `AGENT_PAT` — the classic `pull_request_target` secret-exfiltration footgun. The
 loop assumes a trusted-contributor repository where everyone who can label is
 already trusted with secrets. Hardening it for open public contribution (forks,
@@ -138,8 +138,10 @@ Before the loop can run, a repository admin sets up four things by hand:
 - **Create the four `agent:*` labels:** `agent:implement`, `agent:review`,
   `agent:in-progress`, and `agent:blocked`. The workflows assume they already
   exist.
-- **Add the agent credential secret:** `OPENROUTER_API_KEY`, the OpenRouter API
-  key the opencode agent authenticates with inside the workshop.
+- **Add the agent credential secret:** `CLAUDE_CODE_OAUTH_TOKEN`, the Claude
+  subscription token (from `claude setup-token`) the Claude Code agent
+  authenticates with inside the workshop. API users set `ANTHROPIC_API_KEY`
+  instead.
 - **Add `AGENT_PAT`:** a credential with a real identity, used to open the draft
   PR and apply the `agent:review` label (see the wiring note above — without it
   neither the PR's CI nor `agent-review` fires). Prefer a **fine-grained PAT

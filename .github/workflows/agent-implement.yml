@@ -10,8 +10,8 @@
 #   1. fetch the issue
 #   2. create a fresh git worktree+branch off main in a taboo-provisioned LXD
 #      "workshop"
-#   3. run the opencode agent (qwen via OpenRouter), which commits in place and
-#      is push-denied
+#   3. run the Claude Code agent (Opus on a Claude subscription via
+#      CLAUDE_CODE_OAUTH_TOKEN), which commits in place and is push-denied
 #   4. push the branch
 #   5. open the draft PR
 #   6. apply the agent:review label
@@ -84,7 +84,7 @@ jobs:
         # the orchestrator applies cascades into agent-review.yml; the branch push
         # reuses the checkout's authenticated remote.
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
