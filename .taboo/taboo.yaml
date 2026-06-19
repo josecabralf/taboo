@@ -24,4 +24,4 @@ workflows:
     model: claude-opus-4-8
   review:
     prompt-file: prompts/review.md
-    model: claude-sonnet-4-6
+    model: claude-opus-4-8

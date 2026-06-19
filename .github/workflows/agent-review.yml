@@ -9,9 +9,11 @@
 # fork PR would expose secrets. That trade-off is deliberate and documented in
 # docs/explanation/dogfooding.md.
 #
-# Flow: read the review agent's .taboo-review.json, drop any inline comment
-# whose path:line isn't on the RIGHT side of the PR diff (drop, never error),
-# then post exactly ONE PR review via `gh api`.
+# Flow: read the review agent's .taboo-review.json (or, if the agent emitted its
+# review as prose instead of writing the file, fall back to the run's .output as
+# a top-level-only review), drop any inline comment whose path:line isn't on the
+# RIGHT side of the PR diff (drop, never error), then post exactly ONE PR review
+# via `gh api`.
 name: agent-review
 
 on:
@@ -42,12 +44,12 @@ jobs:
           gh pr edit "$PR_NUMBER" --add-label agent:in-progress
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.26"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -97,13 +99,22 @@ jobs:
               REVIEW_OUTPUT_PATH: $REVIEW_OUTPUT_PATH
             }' > "$RUNNER_TEMP/vars.json"
 
+      - name: Check out the PR head as the review base
+        run: |
+          set -euo pipefail
+          # Move HEAD to the PR tip just before the run so the agent sees the
+          # actual changed tree. Tooling stays frozen (built from main above).
+          # pull/N/head works for both same-repo and fork PRs (see trust note).
+          git fetch --no-tags origin "pull/$PR_NUMBER/head"
+          git checkout --detach FETCH_HEAD
+
       - name: Run review agent
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
           # The review agent writes .taboo-review.json into its throwaway worktree
-          # and makes no code change; we never push its branch.
+          # (now based on the PR head) and makes no code change; we never push it.
           "$RUNNER_TEMP/taboo" run review \
             --vars-file "$RUNNER_TEMP/vars.json" \
             --yes --json | tee "$RUNNER_TEMP/run.json"
@@ -116,14 +127,15 @@ jobs:
           worktree=$(jq -r .worktree "$RUNNER_TEMP/run.json")
           review="$worktree/.taboo-review.json"
           if [ ! -f "$review" ]; then
-            echo "review agent did not produce $review" >&2
-            exit 1
+            # Fallback: agent wrote prose instead of the JSON file. Post
+            # run.json's .output as a top-level comment; never fail the run.
+            echo "review agent did not write $review; falling back to run.json .output" >&2
+            review="$RUNNER_TEMP/fallback-review.json"
+            jq '{ topLevelComment: (.output // ""), inlineComments: [] }' "$RUNNER_TEMP/run.json" > "$review"
           fi
 
-          # Build the set of valid "path:line" keys = lines present on the RIGHT
-          # (new) side of the diff: added ('+') and context (' ') lines. We track
-          # the current file from '+++ b/<path>' and the new-side line counter
-          # from each hunk header '@@ -a,b +c,d @@'.
+          # Build the set of valid "path:line" keys from the RIGHT side of the diff
+          # (added and context lines), tracking file and new-side line numbers.
           awk '
             /^diff --git / { file = ""; next }
             /^\+\+\+ b\// { file = substr($0, 7); next }
@@ -172,10 +184,8 @@ jobs:
               }
           ' "$review" > "$RUNNER_TEMP/payload.json"
 
-          # A COMMENT review with an empty body and no comments is rejected by
-          # GitHub (422). If the agent had nothing to say and every inline
-          # comment was dropped, skip the post rather than fail the run and
-          # falsely mark the PR blocked — degrade gracefully, never error.
+          # GitHub rejects a COMMENT review with no body and no comments (422).
+          # Skip the post if the agent had nothing to say; never fail the run.
           if [ "$(jq -r '((.body // "") == "") and ((.comments | length) == 0)' "$RUNNER_TEMP/payload.json")" = "true" ]; then
             echo "review is clean (empty body, no in-diff comments); nothing to post"
           else

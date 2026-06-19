@@ -6,12 +6,10 @@
 
 ## How
 
-Use the **implement-issue** skill — it carries the full mechanics; this prompt only injects the issue above.
+Use the **implement-issue** skill. It carries the full flow. Write the plan to `{{PLAN_OUTPUT_PATH}}`.
 
-Follow its flow: explore the codebase → write a mandatory plan to `{{PLAN_OUTPUT_PATH}}` → run **/tdd** for the tracer-bullet red-green-refactor loop (one test → one impl, vertical slices) → validate → commit in place.
+Run context:
 
-Boundaries (do not cross):
-
-- You are **git-push denied**. Commit to the current branch only; do not push, open a PR, or touch labels. taboo owns the worktree and the workflow layer owns all GitHub I/O.
-- You are already inside the run's worktree at `/workspace`. Do **not** create a nested worktree or branch.
-- The issue is injected above — there is no GitHub access inside this run.
+- You are inside the run's worktree at `/workspace`. Do not create a nested worktree or branch.
+- No GitHub access in this run; the issue is injected above.
+- git-push denied: commit to the current branch only.
