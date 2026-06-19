@@ -18,6 +18,10 @@ var ErrUnknownWorkflow = errors.New("taboo: unknown workflow")
 // in the override → workflow → defaults precedence chain.
 var ErrNoPrompt = errors.New("taboo: no prompt configured")
 
+// ErrNoAgent is the sentinel Plan returns when no agent is configured anywhere
+// in the override → workflow → top-level precedence chain.
+var ErrNoAgent = errors.New("taboo: no agent configured (set agent: on the workflow or a top-level agent:)")
+
 // PlanOverrides is the per-call override layer applied on top of the config when
 // resolving a Plan. A field's zero value means "unset": fall through to the
 // workflow, then the top-level/defaults layer. Numeric knobs gate on >0; strings
@@ -69,7 +73,7 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 	model := orElse(ov.Model, orElse(wf.Model, c.Model))
 	agent := orElse(ov.Agent, orElse(wf.Agent, c.Agent))
 	if agent == "" {
-		return nil, errors.New("taboo: no agent configured (set agent: on the workflow or a top-level agent:)")
+		return nil, ErrNoAgent
 	}
 	profile, err := NewProfile(agent, model)
 	if err != nil {

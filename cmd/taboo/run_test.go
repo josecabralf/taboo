@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -716,7 +717,7 @@ func TestRun_JSONResult(t *testing.T) {
 }
 
 // TestRun_ExecFailureSurfaced asserts a failure inside the run (the agent exec
-// erroring) propagates out of executePlan and is reported on stderr, rather than
+// erroring) propagates out of executeRun and is reported on stderr, rather than
 // being swallowed into a clean exit. Preflight and launch still succeed so the
 // flow reaches the exec; only the exec call fails.
 func TestRun_ExecFailureSurfaced(t *testing.T) {
@@ -1178,6 +1179,68 @@ func TestRun_UnknownAgentFlag(t *testing.T) {
 	}
 }
 
+// TestMapPlanError_SurfacesSentinels asserts the run command re-adds its
+// user-facing wording to the bridge's library-owned sentinels: mapPlanError
+// branches on each wrapped sentinel via errors.Is (so the bridge can wrap them
+// in any neutral text), restoring the selection-scoped no-prompt and no-agent
+// hints and the fuzzy unknown-agent suggestion, while a plain non-sentinel error
+// passes through unchanged via the default branch.
+func TestMapPlanError_SurfacesSentinels(t *testing.T) {
+	cfg := &taboo.ProjectConfig{}
+	sel := runSelection{label: "fix", wf: taboo.Workflow{}}
+	opts := &runOptions{agent: "claud"}
+
+	cases := []struct {
+		name     string
+		err      error
+		wantMsgs []string
+		// unchanged asserts the default branch returns the input error verbatim.
+		unchanged bool
+	}{
+		{
+			name:     "no prompt",
+			err:      fmt.Errorf("resolve fix: %w", taboo.ErrNoPrompt),
+			wantMsgs: []string{"set prompt or prompt-file"},
+		},
+		{
+			name:     "no agent",
+			err:      fmt.Errorf("resolve fix: %w", taboo.ErrNoAgent),
+			wantMsgs: []string{"has no agent configured", "set agent"},
+		},
+		{
+			name:     "unknown agent",
+			err:      fmt.Errorf("resolve fix: %w", taboo.ErrUnknownAgent),
+			wantMsgs: []string{"unknown agent", "claude-code"},
+		},
+		{
+			name:     "unknown workflow",
+			err:      fmt.Errorf("resolve fix: %w", taboo.ErrUnknownWorkflow),
+			wantMsgs: []string{"unknown workflow"},
+		},
+		{
+			name:      "non-sentinel passes through",
+			err:       errors.New("boom"),
+			unchanged: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapPlanError(cfg, sel, opts, tc.err)
+			if tc.unchanged {
+				if got != tc.err {
+					t.Errorf("mapPlanError returned %v, want the input error unchanged", got)
+				}
+				return
+			}
+			for _, want := range tc.wantMsgs {
+				if !strings.Contains(got.Error(), want) {
+					t.Errorf("mapPlanError = %q, want it to contain %q", got.Error(), want)
+				}
+			}
+		})
+	}
+}
+
 // TestRun_AdHocPrompt asserts an ad-hoc run — `taboo run --prompt …` with no
 // workflow — runs off the top-level defaults: it executes carrying the flag
 // prompt, on a branch slugged for an ad-hoc run.
@@ -1417,13 +1480,10 @@ func TestRunNeedsConfirm(t *testing.T) {
 // line (the default), a no, EOF, or junk all decline, so an accidental Enter
 // never launches a run.
 func TestPromptConfirm(t *testing.T) {
-	plan := runPlan{
-		workflow: "fix",
-		branch:   "taboo/fix-x",
-		runnerConfig: taboo.Config{
-			Workshop: "demo",
-			Agent:    taboo.OpenCode("anthropic/claude"),
-		},
+	plan := &taboo.Plan{
+		Workflow: "fix",
+		Config:   taboo.Config{Workshop: "demo", Agent: taboo.OpenCode("anthropic/claude")},
+		Request:  taboo.OrchestratedRequest{RunRequest: taboo.RunRequest{Branch: "taboo/fix-x"}},
 	}
 	cases := []struct {
 		in   string
@@ -1552,9 +1612,10 @@ func TestRun_AdHocAgentFromFlag(t *testing.T) {
 
 // TestRun_WorkflowBeatsDefaults locks the middle precedence rung for the two
 // params with a workflow level: with no flag, a workflow timeout and
-// max-iterations override the defaults: block. It guards resolveTimeout and
-// resolveMaxIterations against a regression that read defaults before the
-// workflow (a swap the flag-override tests alone would not catch).
+// max-iterations override the defaults: block. It guards the bridge's
+// workflow-beats-defaults precedence for timeout and max-iterations against a
+// regression that read defaults before the workflow (a swap the flag-override
+// tests alone would not catch).
 func TestRun_WorkflowBeatsDefaults(t *testing.T) {
 	root := t.TempDir()
 	body := "" +
@@ -1582,8 +1643,8 @@ func TestRun_WorkflowBeatsDefaults(t *testing.T) {
 
 // TestRun_PromptFlagBeatsWorkflowPromptFile closes the one prompt-precedence edge
 // the flag-override tests miss: --prompt must beat a workflow prompt-file, not
-// just a workflow inline prompt. Guards resolvePrompt against reading the workflow
-// file before the flag.
+// just a workflow inline prompt. Guards the bridge's prompt resolution against
+// reading the workflow file before the flag.
 func TestRun_PromptFlagBeatsWorkflowPromptFile(t *testing.T) {
 	root := t.TempDir()
 	writeTabooProject(t, root, "") // create the .taboo dir first
