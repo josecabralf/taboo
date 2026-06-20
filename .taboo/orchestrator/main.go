@@ -1,12 +1,15 @@
-// Command afk is the taboo orchestrator entrypoint. It drives one GitHub issue
-// end-to-end on the host's pkg: it fetches the issue, runs the implement
-// workflow (the agent commits in place, push-denied), pushes the branch, opens a
-// draft PR carrying the agent's plan, and applies the agent:review label. All
-// GitHub/git I/O funnels through internal/ghio; the taboo run goes through the
-// taboo bridge one-liner taboo.RunWorkflow (config discovery + resolution +
-// run). In CI it is built inside its own module and run from the
-// repo root (it cannot be `go run` from the parent module, which excludes nested
-// modules); see .github/workflows/agent-implement.yml.
+// Command afk is the taboo orchestrator entrypoint. It drives the AFK agent loop
+// on the host's pkg. The "implement" subcommand fetches an issue, runs the
+// implement workflow (the agent commits in place, push-denied), pushes the
+// branch, opens a draft PR carrying the agent's plan, and applies the
+// agent:review label. The "review" subcommand fetches a PR's diff, runs the
+// review workflow for a structured <result>, drops any comment outside the diff,
+// and posts exactly one PR review. All GitHub/git I/O funnels through
+// internal/ghio; the taboo runs go through the taboo bridge one-liners
+// taboo.RunWorkflow / taboo.RunWorkflowAs (config discovery + resolution + run).
+// In CI it is built inside its own module and run from the repo root (it cannot
+// be `go run` from the parent module, which excludes nested modules); see
+// .github/workflows/agent-implement.yml and agent-review.yml.
 package main
 
 import (
@@ -54,16 +57,21 @@ func main() {
 	}
 }
 
-// run dispatches to a subcommand. Only "implement" exists today.
+// usage summarizes the orchestrator's subcommands.
+const usage = "usage: afk implement --issue <n> | afk review --pr <n>"
+
+// run dispatches to a subcommand: "implement" or "review".
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: afk implement --issue <n>")
+		return errors.New(usage)
 	}
 	switch args[0] {
 	case "implement":
 		return runImplement(context.Background(), args[1:])
+	case "review":
+		return runReview(context.Background(), args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (usage: afk implement --issue <n>)", args[0])
+		return fmt.Errorf("unknown command %q (%s)", args[0], usage)
 	}
 }
 
@@ -86,6 +94,27 @@ func runImplement(ctx context.Context, args []string) error {
 	}
 
 	return implement(ctx, startDir, *issue, ghio.New(ghio.NewExec()), taboo.RunWorkflow)
+}
+
+// runReview parses the review subcommand's flags, enforces --pr before any I/O,
+// and wires the production gh and taboo seams into review. The typed bridge
+// taboo.RunWorkflowAs[reviewResult] decodes the agent's <result> block in-loop.
+func runReview(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	pr := fs.Int("pr", 0, "GitHub pull-request number to review")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *pr <= 0 {
+		return errors.New("--pr is required")
+	}
+
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+
+	return review(ctx, startDir, *pr, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[reviewResult])
 }
 
 // implement is the testable core of the implement subcommand: it fetches the

@@ -19,8 +19,8 @@ the implement workflow swaps the issue to `agent:in-progress`, runs
 `taboo run implement` (Claude Code / Opus) inside a workshop on the runner,
 pushes the agent's branch, opens a draft PR whose body is the agent's plan, and
 labels that PR `agent:review`. The review workflow swaps the PR to
-`agent:in-progress`, runs `taboo run review` (Claude Code / Sonnet), posts a
-single PR review, and clears the label. On either side a failure adds
+`agent:in-progress`, runs the `afk review` orchestrator (Claude Code / Opus),
+posts a single PR review, and clears the label. On either side a failure adds
 `agent:blocked` and comments a run link plus a retry hint; re-adding the trigger
 label retries.
 
@@ -94,19 +94,22 @@ its workshop, and the host workflow still owns every GitHub side effect.
 
 ## Inline comments are dropped, not errored
 
-The review agent emits a JSON file shaped as a top-level comment plus an array of
-inline comments, each carrying a `path` and a `line`. GitHub's review API rejects
-the entire review if any inline comment points at a line that is not part of the
-diff — and an LLM, reading a unified diff, occasionally anchors a comment to a
-line just outside a hunk or on the deleted side.
+The review agent emits a `<result>` block shaped as a top-level summary plus an
+array of inline comments, each carrying a `path` and a `line`. GitHub's review
+API rejects the entire review if any inline comment points at a line that is not
+part of the diff — and an LLM, reading a unified diff, occasionally anchors a
+comment to a line just outside a hunk or on the deleted side.
 
-So the review workflow filters before it posts. It computes the set of valid
-`path:line` keys — every line present on the **right** (new) side of the diff,
-which is both added and context lines — and drops any inline comment that misses
-that set, logging a warning to the run log for each drop. Only the survivors, plus
-the top-level comment, go into the one review the workflow posts. A
-mis-anchored comment costs a warning, not a failed run. The choice is to degrade
-the review gracefully rather than lose it entirely to one bad line number.
+So the `afk review` orchestrator filters before it posts. Its `internal/diffmap`
+package parses the unified diff into the set of valid `path:line` positions —
+every line present on the **right** (new) side of the diff, which is both added
+and context lines — and drops any inline comment that misses that set, logging a
+notice for each drop. Only the survivors, plus the summary, go into the one
+review the orchestrator posts. A mis-anchored comment costs a notice, not a
+failed run. And if nothing survives — an empty summary and every comment dropped
+— it skips the post entirely rather than send an empty review GitHub would 422.
+The choice is to degrade the review gracefully rather than lose it entirely to
+one bad line number.
 
 ## Trust and security model
 
