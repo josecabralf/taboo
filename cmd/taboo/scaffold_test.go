@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // newScaffoldInputs builds scaffoldInputs for agent/model with a resolved
@@ -84,7 +84,7 @@ func TestPlan_SeedsPromptFiles(t *testing.T) {
 }
 
 // TestPlan_TemplateSingle asserts plan() adds a parseable main.go (importing
-// pkg/taboo and calling LoadConfig) and a go.mod that names the module after the
+// pkg and calling RunWorkflow, the one-call bridge) and a go.mod that names the module after the
 // workshop, carries the go directive, and pins the taboo library to the exact
 // libraryVersion with no replace and no @-pinned/latest version when Template is
 // "single", and adds neither file when Template is "none" or empty.
@@ -109,11 +109,11 @@ func TestPlan_TemplateSingle(t *testing.T) {
 		t.Errorf("main.go does not parse: %v", perr)
 	}
 	main := string(byPath["main.go"])
-	if !strings.Contains(main, "github.com/josecabralf/taboo/pkg/taboo") {
+	if !strings.Contains(main, "github.com/josecabralf/taboo/pkg") {
 		t.Errorf("main.go missing taboo import\nfull:\n%s", main)
 	}
-	if !strings.Contains(main, "LoadConfig") {
-		t.Errorf("main.go missing LoadConfig call\nfull:\n%s", main)
+	if !strings.Contains(main, "RunWorkflow") {
+		t.Errorf("main.go missing RunWorkflow call\nfull:\n%s", main)
 	}
 
 	if byPath["go.mod"] == nil {

@@ -1,8 +1,8 @@
 # taboo.yaml reference
 
 `taboo.yaml` is the parsed project config read by both the CLI and Go callers
-that drive runs through `pkg/taboo`. The schema is defined by `ProjectConfig`
-in `pkg/taboo/config.go`. `taboo.LoadConfig(path)` reads it, decodes it
+that drive runs through `pkg`. The schema is defined by `ProjectConfig`
+in `pkg/internal/config/config.go`. `taboo.LoadConfig(path)` reads it, decodes it
 strictly, and resolves the agent and model of the top level and of every
 workflow into an `AgentProfile`.
 
@@ -15,7 +15,7 @@ the model each expects, see [agents.md](agents.md).
 
 ## Top-level keys
 
-`ProjectConfig` (`pkg/taboo/config.go`). The YAML key is the struct tag in each
+`ProjectConfig` (`pkg/internal/config/config.go`). The YAML key is the struct tag in each
 row.
 
 | Key | Type | Default | Meaning |
@@ -31,7 +31,7 @@ row.
 | `default-workflow` | string | `""` | Workflow run when the CLI selects none. |
 
 `strategy` defaults to `branch` in `LoadConfig` when omitted (`defaultStrategy`,
-`pkg/taboo/config.go`). `agent` and `model` are resolved to a profile only where
+`pkg/internal/config/config.go`). `agent` and `model` are resolved to a profile only where
 an agent is set; an empty agent leaves the resolved `Profile` nil without error.
 Enforcing a required agent is the `validate` command's job, not the loader's.
 
@@ -40,7 +40,7 @@ populated by `LoadConfig`, not read from the file.
 
 ## defaults
 
-The `defaults:` block is `RunDefaults` (`pkg/taboo/config.go`): scalar-only run
+The `defaults:` block is `RunDefaults` (`pkg/internal/config/config.go`): scalar-only run
 settings applied when a workflow or flag does not override them. The whole block
 is optional; when omitted, `Defaults` is nil and every default is its zero
 value.
@@ -60,13 +60,13 @@ resolves their precedence.
 
 `timeout` is a `Duration`, a config-friendly `time.Duration` that parses Go
 duration strings such as `30m` or `1h30m` through `time.ParseDuration`; an empty
-value yields zero (`pkg/taboo/config.go`, `Duration.UnmarshalYAML`). It marshals
+value yields zero (`pkg/internal/config/config.go`, `Duration.UnmarshalYAML`). It marshals
 back to a Go duration string (`Duration.MarshalYAML`).
 
 ## workflows
 
 The `workflows:` block is a map from workflow name to `Workflow`
-(`pkg/taboo/config.go`). A workflow overrides the top-level run parameters for a
+(`pkg/internal/config/config.go`). A workflow overrides the top-level run parameters for a
 named task type.
 
 | Key | Type | Default | Meaning |
@@ -118,7 +118,7 @@ then workflow, then top level (`effectiveAgent`, `resolveModel`, via `orElse`).
 ## Strict decode
 
 `LoadConfig` decodes the document strictly (`decodeStrict`,
-`pkg/taboo/config.go`):
+`pkg/internal/config/config.go`):
 
 - Unknown keys are rejected. The decoder sets `KnownFields(true)`, so any key
   not in the schema fails with `taboo: invalid config` (`ErrConfigParse`).

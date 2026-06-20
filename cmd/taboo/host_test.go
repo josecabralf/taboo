@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // newHostEnv builds an Env wired to fake for host-check tests: no config is

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // findConfig ascends from start looking for a taboo.yaml: either start itself is

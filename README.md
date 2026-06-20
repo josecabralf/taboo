@@ -7,8 +7,8 @@ Each agent run gets its own workshop, an LXD-backed dev sandbox provisioned by
 the `workshop` snap, with a fresh git worktree bind-mounted in at `/taboo/workspace`.
 The repo's main `.git` is mounted at its identical host absolute path inside the
 workshop, so a linked worktree's `.git` pointer resolves the same on both sides
-(the two-mount rule in `pkg/taboo/template.go`, `gitCommonTarget`). The agent
-edits and commits in place, and those commits land directly on the host branch
+(the two-mount rule). The agent edits and commits in place, and those commits
+land directly on the host branch
 with no extraction or sync step. `git push` is denied inside the workshop, so
 the host owns integration. The library is the primary contract; a thin CLI
 (`taboo`) wraps the common paths.
@@ -21,10 +21,9 @@ the host owns integration. The library is the primary contract; a thin CLI
   runtime. Install with `sudo snap install workshop`.
 - LXD, installed and initialized. Install with `sudo snap install lxd`.
 - `git`.
-- A baked agent SDK. taboo ships the agent SDKs embedded
-  (`//go:embed sdk` in `pkg/taboo/runner.go`) and seeds them into the project on
-  first run, so the agent CLI exists inside the workshop. You do not author the
-  workshop definition.
+- A baked agent SDK. taboo ships the agent SDKs embedded and seeds them into the
+  project on first run, so the agent CLI exists inside the workshop. You do not
+  author the workshop definition.
 - Agent credentials in the host environment, per agent (see
   [docs/reference/agents.md](docs/reference/agents.md)). They are forwarded per
   run via `workshop exec --env` and never written to disk.
@@ -35,10 +34,10 @@ the host owns integration. The library is the primary contract; a thin CLI
 
 ## Install
 
-Library (package `taboo`, import path `github.com/josecabralf/taboo/pkg/taboo`):
+Library (package `taboo`, import path `github.com/josecabralf/taboo/pkg`):
 
 ```sh
-go get github.com/josecabralf/taboo/pkg/taboo
+go get github.com/josecabralf/taboo/pkg
 ```
 
 CLI (binary `taboo`):
@@ -51,8 +50,10 @@ The library and the CLI are one Go module, `github.com/josecabralf/taboo`.
 
 ## Quickstart (library)
 
-Construct a `taboo.Config`, build a `Runner` with `taboo.New` and the production
-`Commander`, then call `Run` with a `RunRequest`:
+Scaffold a `taboo.yaml` once (`taboo init`, see the CLI quickstart below), then
+call `taboo.RunWorkflow`: it locates the nearest `taboo.yaml` above the start
+directory, resolves the named workflow into a run, and executes it over the
+production `Commander`.
 
 ```go
 package main
@@ -61,28 +62,19 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 func main() {
-	cfg := taboo.Config{
-		Workshop:   "myrepo-opencode",
-		Base:       "ubuntu@24.04",
-		Agent:      taboo.OpenCode("openrouter/qwen/qwen3-coder-plus"),
-		RepoPath:   "/home/me/code/myrepo",
-		ProjectDir: "/home/me/code/myrepo/.taboo",
-	}
-
-	runner := taboo.New(cfg, taboo.NewExecCommander())
-
-	res, err := runner.Run(context.Background(), taboo.RunRequest{
-		Branch: "taboo/fix-readme",
-		Prompt: "Fix the typos in README.md and commit.",
-		Stdout: os.Stderr,
-		Stderr: os.Stderr,
-	})
+	res, err := taboo.RunWorkflow(
+		context.Background(),
+		"/home/me/code/myrepo", // start dir; taboo.yaml is found above it
+		"fix",                  // workflow name
+		nil,                    // template vars for {{VAR}} placeholders
+		taboo.PlanOverrides{Branch: "taboo/fix-readme"},
+		taboo.NewExecCommander(),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,14 +83,14 @@ func main() {
 }
 ```
 
-`Run` does Setup (ensure the workshop, add a fresh worktree on `req.Branch`, swap
-it into the workshop) then Exec (run the agent once). The agent commits in place,
-so `res.Commit` is the branch HEAD on the host after the run. `res.Branch` and
-`res.WorktreePath` come from Setup; `res.Output` holds the captured agent stdout.
-The run itself needs a workshop host (workshop + LXD).
+`RunWorkflow` prepares the workshop, adds a fresh worktree on the override branch,
+and runs the agent. The agent commits in place, so `res.Commit` is the branch HEAD
+on the host after the run. `res.Branch` and `res.WorktreePath` describe the
+worktree; `res.Output` holds the captured agent stdout. The run itself needs a
+workshop host (workshop + LXD).
 
-The godoc example `ExampleRunner_Run` in `pkg/taboo/example_test.go` mirrors this
-shape. For a fuller walkthrough, see
+`RunWorkflowAs[T]` is the typed variant: it decodes the agent's structured output
+into a `T` with no caller assertion. For a fuller walkthrough, see
 [docs/tutorials/library-first-run.md](docs/tutorials/library-first-run.md).
 
 ## Quickstart (CLI)
@@ -119,43 +111,45 @@ step needs a workshop host. See
 
 ## Entry points
 
-The library exposes three run drivers and a set of building blocks. Full
-signatures are in [docs/reference/library-api.md](docs/reference/library-api.md).
+The library has three entry patterns and a set of building blocks, all reached
+through the single `github.com/josecabralf/taboo/pkg` import. Full signatures are
+in [docs/reference/library-api.md](docs/reference/library-api.md).
 
-`Runner` (`pkg/taboo/runner.go`) is the single-run primitive. `New(cfg, cmd)`
-builds one; `Run` does Setup then Exec. `Setup` and `Exec` are also exported, so
-you can Setup once and Exec repeatedly into the same worktree.
+`RunWorkflow` / `RunWorkflowAs[T]` is the one-call bridge from a `taboo.yaml`. It
+locates the nearest config above a start directory, resolves the named workflow
+into a run, and executes it over a `Commander`. `RunWorkflowAs[T]` decodes the
+agent's structured output into a statically typed `T`. Both return an
+`OrchestratedResult` with `Iterations`, `StopReason`, and a decoded `Result`. See
+[docs/guides/iterate-until-done.md](docs/guides/iterate-until-done.md).
 
-`Orchestrator` (`pkg/taboo/orchestrator.go`) wraps a `Runner` in an iteration
-loop. `NewOrchestrator(runner).Run(ctx, req)` re-execs the agent up to
-`MaxIterations`, stopping early when `CompletionSignal` appears in the agent's
-stdout. `OrchestratedResult` adds `Iterations`, `StopReason`, and a decoded
-`Result`. See [docs/guides/iterate-until-done.md](docs/guides/iterate-until-done.md).
+`Plan` is the inspect-then-run path. `LoadConfig` parses a `taboo.yaml` into a
+`ProjectConfig`; `(*ProjectConfig).Plan` resolves a workflow plus per-call
+`PlanOverrides` into a `Plan`, a pure, inspectable description of one run; tweak
+`plan.Config` and `plan.Request`, then `(*Plan).Run` executes it. The iteration
+loop (`MaxIterations`, `CompletionSignal`) lives on `plan.Request`.
 
-`Pool` (`pkg/taboo/pool.go`) fans out runs. `NewPool(cfg, limit, cmd).Run(ctx,
-reqs)` runs many `RunRequest`s with at most `limit` in flight, one workshop per
-slot. Results return in input order; a per-run failure is recorded on
-`results[i].Err` without aborting the batch. See
-[docs/guides/fan-out-runs.md](docs/guides/fan-out-runs.md).
+`Pool` fans out runs. `NewPool(plan.Config, limit, cmd).Run(ctx, reqs)` runs many
+`RunRequest`s with at most `limit` in flight, one workshop per slot. Results
+return in input order; a per-run failure is recorded on `results[i].Err` without
+aborting the batch. See [docs/guides/fan-out-runs.md](docs/guides/fan-out-runs.md).
 
-`AgentProfile` (`pkg/taboo/agent.go`) is the agent contract: `Name`,
-`BuildCommand`, `CredentialEnvKeys`, `Sessions`. The constructors are
-`OpenCode(model)`, `ClaudeCode(model)`, `Copilot(model)`. See
+`AgentProfile` is the agent contract: `Name`, `BuildCommand`, `CredentialEnvKeys`,
+`Sessions`. Build one with `NewProfile(name, model)` for `opencode`, `claude-code`,
+or `copilot`; it returns a wrapped `ErrUnknownAgent` for an unknown name. See
 [docs/reference/agents.md](docs/reference/agents.md).
 
-`ResultExtractor` (`pkg/taboo/result.go`) decodes a typed result from agent
-output. `JSONResult[T]()` finds the last `<result>...</result>` block and decodes
-its JSON into `T`, with `WithStrictFields`, `WithDelimiters`, and an optional
-`Validator`. See [docs/guides/typed-results.md](docs/guides/typed-results.md).
+`ResultExtractor` decodes a typed result from agent output. `JSONResult[T]()`
+finds the last `<result>...</result>` block and decodes its JSON into `T`, with
+`WithStrictFields`, `WithDelimiters`, and an optional `Validator`. See
+[docs/guides/typed-results.md](docs/guides/typed-results.md).
 
-`Substitute` (`pkg/taboo/prompt.go`) is a pure prompt-template helper:
-`Substitute(tmpl, vars)` fills `{{VAR}}` placeholders and errors on any missing
-variable.
+`Substitute` is a pure prompt-template helper: `Substitute(tmpl, vars)` fills
+`{{VAR}}` placeholders and errors on any missing variable.
 
-`Hooks` (`pkg/taboo/hooks.go`) run lifecycle commands. `Hooks{OnWorkshopReady:
-[]Hook{...}}` runs after the workshop starts and before the agent execs, on every
-run. A hook runs on the host in the worktree by default, or via `workshop exec`
-when `InWorkshop` is true. See
+`Hooks` run lifecycle commands. Set `RunRequest.Hooks` to
+`Hooks{OnWorkshopReady: []Hook{...}}` and the hooks run after the workshop starts
+and before the agent execs, on every run. A hook runs on the host in the worktree
+by default, or via `workshop exec` when `InWorkshop` is true. See
 [docs/guides/prepare-the-workspace-with-hooks.md](docs/guides/prepare-the-workspace-with-hooks.md).
 
 ## CLI
@@ -194,8 +188,8 @@ The `docs/` tree is organized by Diátaxis type. Start at
 ## Design and decisions
 
 The library is the primary contract and the CLI is a thin consumer of it. All
-host side effects pass through a single `Commander` seam (`pkg/taboo/commander.go`),
-so tests substitute a fake while `NewExecCommander` shells out in production.
+host side effects pass through a single `Commander` seam, so tests substitute a
+fake while `NewExecCommander` shells out in production.
 taboo runs one workshop per distinct agent, launched lazily and reused. The
 load-bearing decisions are recorded as ADRs:
 [argv/stdin command contract](docs/adr/0001-agentprofile-argv-stdin-command-contract.md),
@@ -250,8 +244,8 @@ taboo core stays frozen.
 ## Status
 
 The library is feature-complete and tested. A run produces a named, isolated
-branch per worktree, driven by `Runner`, `Orchestrator`, or `Pool`. Three agents
-are supported: `opencode`, `claude-code`, and `copilot`. The CLI covers `init`,
+branch per worktree, driven by `RunWorkflow`, a resolved `Plan`, or `Pool`. Three
+agents are supported: `opencode`, `claude-code`, and `copilot`. The CLI covers `init`,
 `run`, `validate`, `doctor`, `list`, and `clean`; its `run` drives the iteration
 loop through `--iterations` and `--signal`. Fan-out, typed structured output,
 and lifecycle hooks are available through the Go API only. The module is

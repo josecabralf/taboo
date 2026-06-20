@@ -1,5 +1,5 @@
 // Command afk is the taboo orchestrator entrypoint. It drives one GitHub issue
-// end-to-end on the host's pkg/taboo: it fetches the issue, runs the implement
+// end-to-end on the host's pkg: it fetches the issue, runs the implement
 // workflow (the agent commits in place, push-denied), pushes the branch, opens a
 // draft PR carrying the agent's plan, and applies the agent:review label. All
 // GitHub/git I/O funnels through internal/ghio; the taboo run goes through the
@@ -21,7 +21,7 @@ import (
 
 	"afk/internal/ghio"
 
-	"github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // planFile is the path, relative to the run's worktree, where the implement agent
@@ -67,7 +67,7 @@ func run(args []string) error {
 	}
 }
 
-// runImplement drives one issue end-to-end on pkg/taboo: fetch the issue, run the
+// runImplement drives one issue end-to-end on pkg: fetch the issue, run the
 // implement workflow (agent commits in place, push-denied), push the branch, open
 // a draft PR whose body is the agent's plan, and apply the agent:review label.
 func runImplement(ctx context.Context, args []string) error {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // writeTabooProject lays out <root>/.taboo/taboo.yaml with body and returns the

@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // Env carries the injected dependencies the CLI commands need so command

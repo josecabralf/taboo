@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // newListCmd builds the `list` subcommand: a read-only, per-.taboo lifecycle
@@ -254,7 +254,7 @@ func parseWorkshopStatus(out string) string {
 
 // projectWorkshops returns the workshop names taboo provisions for this
 // project: one per distinct agent referenced by the config, each derived as
-// <workshop>-<agent> (taboo.WorkshopName) — matching what `run` launches, so
+// <workshop>-<agent> (workshopName) — matching what `run` launches, so
 // the listing reflects the workshops that actually exist. Deterministic order
 // follows distinctProfiles (sorted by agent name).
 func projectWorkshops(cfg *taboo.ProjectConfig) []string {
@@ -263,7 +263,7 @@ func projectWorkshops(cfg *taboo.ProjectConfig) []string {
 	}
 	var names []string
 	for _, p := range distinctProfiles(cfg) {
-		names = append(names, taboo.WorkshopName(cfg.Workshop, p.Name()))
+		names = append(names, workshopName(cfg.Workshop, p.Name()))
 	}
 	return names
 }

@@ -31,7 +31,7 @@ test-race: ## Run unit tests under the race detector
 # Host-only: exercises the real `workshop` CLI and LXD. Not wired into the dev
 # workshop or CI; run it directly on a machine with workshop + LXD installed.
 test-integration: ## Run integration tests (requires workshop + LXD)
-	go test -tags integration ./pkg/taboo/ -count=1 -v
+	go test -tags integration ./pkg/ -count=1 -v
 
 fmt: ## Format code with golangci-lint
 	golangci-lint fmt

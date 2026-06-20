@@ -1,6 +1,6 @@
 # taboo documentation
 
-taboo is a Go library that orchestrates AI coding agents inside Canonical workshop environments. The library (`pkg/taboo`) is the primary contract; the `taboo` CLI wraps the common paths.
+taboo is a Go library that orchestrates AI coding agents inside Canonical workshop environments. The library (package `taboo`, import path `github.com/josecabralf/taboo/pkg`) is the primary contract; the `taboo` CLI wraps the common paths.
 
 New here? Start with one of the two tutorials below: [the library first run](tutorials/library-first-run.md) drives an agent from Go, and [the CLI first run](tutorials/cli-first-run.md) drives one from `taboo run`.
 
@@ -8,14 +8,14 @@ New here? Start with one of the two tutorials below: [the library first run](tut
 
 Learning-oriented, start-to-finish walkthroughs.
 
-- [Library first run](tutorials/library-first-run.md) — go from a small Go program to a commit on a host branch with `Config`, `New`, and `Run`.
+- [Library first run](tutorials/library-first-run.md) — go from a small Go program to a commit on a host branch with `RunWorkflow`.
 - [CLI first run](tutorials/cli-first-run.md) — `go install` the `taboo` binary, scaffold a project with `taboo init`, set one credential, check the host with `taboo doctor`, then `taboo run fix`.
 
 ## How-to guides
 
 Goal-oriented recipes for a single task.
 
-- [Iterate until done](guides/iterate-until-done.md) — re-run an agent with `Orchestrator` until it emits a completion signal or hits the iteration cap.
+- [Iterate until done](guides/iterate-until-done.md) — re-run an agent with `RunWorkflow` until it emits a completion signal or hits the iteration cap.
 - [Fan out runs](guides/fan-out-runs.md) — run many prompts in parallel with `Pool`.
 - [Typed results](guides/typed-results.md) — decode a structured result from agent output with `JSONResult` and validate it.
 - [Prepare the workspace with hooks](guides/prepare-the-workspace-with-hooks.md) — run setup commands with `Hooks` before the agent starts.
@@ -24,7 +24,7 @@ Goal-oriented recipes for a single task.
 
 Look-it-up facts about the API and the configuration surface.
 
-- [Library API](reference/library-api.md) — the exported `pkg/taboo` surface: entry points, request and result types, building blocks, errors.
+- [Library API](reference/library-api.md) — the exported `package taboo` surface: entry points, request and result types, building blocks, errors.
 - [Agents](reference/agents.md) — the three supported agents, their credential env keys, prompt delivery, sessions, and model hints.
 - [CLI](reference/cli.md) — every `taboo` command, its flags, output, and exit behaviour.
 - [taboo.yaml](reference/taboo-yaml.md) — every config key, its type and default, and the precedence chain.

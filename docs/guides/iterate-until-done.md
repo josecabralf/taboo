@@ -3,33 +3,48 @@
 Re-run an agent in one worktree until it emits a completion signal or a maximum
 iteration count is reached, then read why the loop stopped.
 
-Use `Orchestrator` when a single agent pass is not enough: a fix that needs a
-second look at the test output, a refactor that converges over a few passes. The
-`Runner` runs the agent once; the `Orchestrator` wraps it in a loop.
+Use a looped run when a single agent pass is not enough: a fix that needs a
+second look at the test output, a refactor that converges over a few passes.
+taboo prepares the worktree once and re-execs the agent into it, so each pass
+continues from the previous pass's commit.
 
 ## How the loop works
 
-`Orchestrator` (`pkg/taboo/orchestrator.go`) prepares the worktree once with
-`Runner.Setup`, then re-runs the agent with `Runner.Exec` into that same
-worktree. Every iteration shares one worktree and the agent commits in place, so
-each pass continues from the previous pass's commit.
+A run loops when its resolved plan has a `MaxIterations` above 1. taboo prepares
+the worktree once, then re-runs the agent into that same worktree. Every
+iteration shares one worktree and the agent commits in place, so each pass
+continues from the previous pass's commit.
 
 The loop stops on the first of two conditions:
 
-- The agent's stdout contains `CompletionSignal`. The loop stops early and
+- The agent's stdout contains the completion signal. The loop stops early and
   `StopReason` is `StopSignal` (the string `"signal"`).
 - The loop has run `MaxIterations` times. `StopReason` is `StopMaxIterations`
   (the string `"max-iterations"`).
 
-`MaxIterations` below 1 means a single run. An empty `CompletionSignal` disables
+`MaxIterations` below 1 means a single run. An empty completion signal disables
 the early stop, so the loop always runs the full `MaxIterations`.
 
-## Build and run an orchestrated request
+## Configure the loop in taboo.yaml
 
-Construct an `Orchestrator` from a `Runner`, then call `Run` with an
-`OrchestratedRequest`. `OrchestratedRequest` embeds `RunRequest`, so the
-single-run fields (`Branch`, `Prompt`, `Timeout`, `Stdout`, `Stderr`) sit
-alongside the loop knobs.
+The loop knobs live on the workflow (or in `defaults`) of your `taboo.yaml`, so
+the one-call bridge picks them up without extra Go code:
+
+```yaml
+workshop: demo
+base: ubuntu@24.04
+repo: /home/me/repos/demo
+agent: opencode
+model: openrouter/qwen/qwen3-coder-plus
+workflows:
+  iterate:
+    prompt: "Fix the failing tests. Print DONE when all tests pass."
+    max-iterations: 5
+    completion-signal: DONE
+```
+
+`RunWorkflow` locates this config above the start directory, resolves the
+`iterate` workflow into a plan, and runs the loop over a `Commander`:
 
 ```go
 package main
@@ -38,31 +53,19 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 func main() {
-	cfg := taboo.Config{
-		Workshop:   "demo",
-		Base:       "ubuntu@24.04",
-		Agent:      taboo.OpenCode("openrouter/qwen/qwen3-coder-plus"),
-		RepoPath:   "/home/me/repos/demo",
-		ProjectDir: "/home/me/repos/demo/.taboo",
-	}
-	orch := taboo.NewOrchestrator(taboo.New(cfg, taboo.NewExecCommander()))
-
-	res, err := orch.Run(context.Background(), taboo.OrchestratedRequest{
-		RunRequest: taboo.RunRequest{
-			Branch: "taboo/iterate",
-			Prompt: "Fix the failing tests. Print DONE when all tests pass.",
-			Stdout: os.Stdout,
-			Stderr: os.Stderr,
-		},
-		MaxIterations:    5,
-		CompletionSignal: "DONE",
-	})
+	res, err := taboo.RunWorkflow(
+		context.Background(),
+		"/home/me/repos/demo", // start dir; taboo.yaml is found above it
+		"iterate",             // workflow name
+		nil,                   // template vars for {{VAR}} placeholders
+		taboo.PlanOverrides{Branch: "taboo/iterate"},
+		taboo.NewExecCommander(),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -71,20 +74,52 @@ func main() {
 }
 ```
 
-This program needs a workshop host: `orch.Run` launches a workshop and execs the
-agent. The rest of the page describes the values it returns.
+This program needs a workshop host: `RunWorkflow` launches a workshop and execs
+the agent. The rest of the page describes the values it returns.
+
+`PlanOverrides` is the per-call override layer: a non-zero field wins over the
+config. To raise the iteration count for one call without touching `taboo.yaml`,
+set `taboo.PlanOverrides{Branch: "taboo/iterate", MaxIterations: 8}`.
+
+## Inspect the plan before running
+
+When you want to see or adjust the resolved loop before it runs, load the config,
+resolve a `Plan`, then call `Run`. The plan is a pure, inspectable description of
+one run; `Plan.Request` is the `OrchestratedRequest` the loop will execute.
+
+```go
+cfg, err := taboo.LoadConfig("/home/me/repos/demo/.taboo/taboo.yaml")
+if err != nil {
+	log.Fatal(err)
+}
+
+plan, err := cfg.Plan("/home/me/repos/demo", "iterate", nil, taboo.PlanOverrides{Branch: "taboo/iterate"})
+if err != nil {
+	log.Fatal(err)
+}
+
+// Inspect or tweak the resolved loop before it runs.
+plan.Request.MaxIterations = 8
+
+res, err := plan.Run(context.Background(), taboo.NewExecCommander())
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Printf("stopped after %d iteration(s): %s\n", res.Iterations, res.StopReason)
+```
 
 ## Read the result
 
-`Run` returns an `OrchestratedResult`. It embeds `RunResult` (the final
-iteration's `Branch`, `WorktreePath`, `Commit`, `Output`) and adds three fields:
+Both `RunWorkflow` and `Plan.Run` return an `OrchestratedResult`. It embeds
+`RunResult` (the final iteration's `Branch`, `WorktreePath`, `Commit`, `Output`)
+and adds three fields:
 
 - `Iterations` is how many times the agent ran.
 - `StopReason` is `StopSignal` or `StopMaxIterations`. It is only meaningful when
-  `Run` returns a nil error. On a `Setup` or `Exec` failure, `Run` returns the
+  the call returns a nil error. On a setup or exec failure, the call returns the
   partial result with the error and leaves `StopReason` at its zero value, so
   check `err` before reading `StopReason`.
-- `Result` holds a decoded typed value when a `ResultExtractor` is set, otherwise
+- `Result` holds a decoded typed value when a result extractor is set, otherwise
   nil. See below.
 
 The final `Commit` is the branch HEAD after the last iteration. Because every
@@ -93,10 +128,11 @@ one.
 
 ## Decode a typed result after the loop
 
-Set `ResultExtractor` to pull a structured value out of the final iteration's
-output. The orchestrator runs the extractor once after the loop ends, over the
-last iteration's stdout, and records the value on `OrchestratedResult.Result` as
-`any`. Type-assert it to your result type.
+Use `RunWorkflowAs[T]` to pull a structured value out of the final iteration's
+output. It runs the same locate-load-plan-run pipeline as `RunWorkflow`, but
+threads a `JSONResult[T]` extractor into the plan so the agent's structured
+output is decoded in-loop and returned as a statically typed `T`, with no caller
+assertion.
 
 ```go
 type review struct {
@@ -104,45 +140,43 @@ type review struct {
 	Notes  string `json:"notes"`
 }
 
-res, err := orch.Run(ctx, taboo.OrchestratedRequest{
-	RunRequest:       taboo.RunRequest{Branch: "taboo/review", Prompt: prompt},
-	MaxIterations:    3,
-	CompletionSignal: "DONE",
-	ResultExtractor:  taboo.JSONResult[review](),
-})
+got, res, err := taboo.RunWorkflowAs[review](
+	context.Background(),
+	"/home/me/repos/demo",
+	"iterate",
+	nil,
+	taboo.PlanOverrides{Branch: "taboo/review"},
+	taboo.NewExecCommander(),
+)
 if err != nil {
 	log.Fatal(err)
 }
-r := res.Result.(review)
-fmt.Println(r.Passed, r.Notes)
+fmt.Println(got.Passed, got.Notes)
 ```
 
 The agent prints a `<result>{"passed":true,"notes":"..."}</result>` block in its
-output and the extractor decodes it. For the block convention, strict fields, and
-the `Validator` interface, see [Get a typed result out of a run](typed-results.md).
+output and the extractor decodes it. `res.Result` carries the same value as
+`any`; `got` is already typed. For the block convention, strict fields, and the
+`Validator` interface, see [Get a typed result out of a run](typed-results.md).
 
 Extraction failure is reported through the error, but the result stays populated:
 `Branch`, `Commit`, `Output`, `Iterations`, and `StopReason` survive so a failed
 decode never discards the agent's commit. A failed extraction returns
-`ErrNoResult` or `ErrInvalidResult`.
+`ErrNoResult` or `ErrInvalidResult`, and `got` is the zero `T`.
+
+To set an extractor on the inspect-then-run path instead, assign one to
+`plan.Request.ResultExtractor` before calling `Plan.Run`, then type-assert
+`res.Result`.
 
 ## Do not combine fork with a loop
 
 `RunRequest` has a `Fork` field that forks a resumed session. A looped run
-re-execs the same `RunRequest` every iteration, so a fork would re-fork the
-source session on every pass rather than continuing one fork. The orchestrator
-rejects this before any `Setup`:
+re-execs the same request every iteration, so a fork would re-fork the source
+session on every pass rather than continuing one fork. taboo rejects this before
+any setup: a plan whose `Fork` is set and `MaxIterations` is greater than 1
+returns `ErrForkLoop` before any workshop is launched.
 
-```go
-res, err := orch.Run(ctx, taboo.OrchestratedRequest{
-	RunRequest:    taboo.RunRequest{ResumeSession: "abc", Fork: true},
-	MaxIterations: 3,
-})
-// err is taboo.ErrForkLoop; no workshop is launched.
-```
-
-`Run` returns `ErrForkLoop` when `Fork` is set and `MaxIterations` is greater
-than 1. A single-iteration fork (`MaxIterations` at or below 1) is allowed, and a
+A single-iteration fork (`MaxIterations` at or below 1) is allowed, and a
 multi-iteration plain resume (`ResumeSession` set, `Fork` false) is allowed.
 
 ## See also
@@ -150,4 +184,4 @@ multi-iteration plain resume (`ResumeSession` set, `Fork` false) is allowed.
 - [Get a typed result out of a run](typed-results.md) for the `<result>` block
   and `JSONResult[T]`.
 - [Library API reference](../reference/library-api.md) for the exact signatures
-  of `Orchestrator`, `OrchestratedRequest`, and `OrchestratedResult`.
+  of `RunWorkflow`, `Plan`, `OrchestratedRequest`, and `OrchestratedResult`.

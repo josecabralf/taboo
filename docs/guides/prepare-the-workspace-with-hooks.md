@@ -9,9 +9,14 @@ sees, so its effects are visible to the agent.
 
 ## Attach a hook to a run
 
-Hooks live on `RunRequest.Hooks`. The one hook point is `OnWorkshopReady`
-(`pkg/taboo/hooks.go`), a slice of `Hook`. Each `Hook` has a `Command` (the
-executable and its arguments) and an `InWorkshop` flag.
+Hooks live on `RunRequest.Hooks`. The one hook point is `OnWorkshopReady`, a
+slice of `Hook`. Each `Hook` has a `Command` (the executable and its arguments)
+and an `InWorkshop` flag.
+
+Set them through the inspect-then-run path: load the config, resolve a `Plan`, and
+assign the hooks to `plan.Request.Hooks` before running. `plan.Request` is an
+`OrchestratedRequest` that embeds `RunRequest`, so its `Hooks` field is the same
+one. The `taboo.yaml` supplies the workshop, agent, and repo.
 
 ```go
 package main
@@ -21,36 +26,37 @@ import (
 	"log"
 	"os"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 func main() {
-	cfg := taboo.Config{
-		Workshop:   "demo",
-		Base:       "ubuntu@24.04",
-		Agent:      taboo.OpenCode("openrouter/qwen/qwen3-coder-plus"),
-		RepoPath:   "/home/me/repos/demo",
-		ProjectDir: "/home/me/repos/demo/.taboo",
+	cfg, err := taboo.LoadConfig("/home/me/repos/demo/.taboo/taboo.yaml")
+	if err != nil {
+		log.Fatal(err)
 	}
-	runner := taboo.New(cfg, taboo.NewExecCommander())
 
-	_, err := runner.Run(context.Background(), taboo.RunRequest{
+	plan, err := cfg.Plan("/home/me/repos/demo", "fix", nil, taboo.PlanOverrides{
 		Branch: "taboo/with-deps",
 		Prompt: "Add a benchmark for the parser.",
 		Stderr: os.Stderr,
-		Hooks: taboo.Hooks{
-			OnWorkshopReady: []taboo.Hook{
-				{Command: []string{"go", "mod", "download"}, InWorkshop: true},
-			},
-		},
 	})
 	if err != nil {
+		log.Fatal(err)
+	}
+
+	plan.Request.Hooks = taboo.Hooks{
+		OnWorkshopReady: []taboo.Hook{
+			{Command: []string{"go", "mod", "download"}, InWorkshop: true},
+		},
+	}
+
+	if _, err := plan.Run(context.Background(), taboo.NewExecCommander()); err != nil {
 		log.Fatal(err)
 	}
 }
 ```
 
-This program needs a workshop host: `runner.Run` launches a workshop and runs the
+This program needs a workshop host: `plan.Run` launches a workshop and runs the
 hook inside it.
 
 ## When and how often hooks run
@@ -88,20 +94,24 @@ run in the same context as the agent.
 
 ## Timeout
 
-The run's `Timeout` (from `RunRequest.Timeout`) bounds each hook the same way it
-bounds the agent exec. A hook that hangs cannot stall the run past the timeout.
-When `Timeout` is zero, hooks are unbounded. Set a timeout on the request if a
-hook might hang:
+The run's `Timeout` (carried on `plan.Request.Timeout`) bounds each hook the same
+way it bounds the agent exec. A hook that hangs cannot stall the run past the
+timeout. When `Timeout` is zero, hooks are unbounded. Set a timeout through
+`PlanOverrides` when resolving the plan if a hook might hang:
 
 ```go
-taboo.RunRequest{
+plan, err := cfg.Plan("/home/me/repos/demo", "fix", nil, taboo.PlanOverrides{
 	Branch:  "taboo/with-deps",
 	Prompt:  prompt,
 	Timeout: 5 * time.Minute,
-	Hooks: taboo.Hooks{
-		OnWorkshopReady: []taboo.Hook{
-			{Command: []string{"go", "mod", "download"}, InWorkshop: true},
-		},
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+plan.Request.Hooks = taboo.Hooks{
+	OnWorkshopReady: []taboo.Hook{
+		{Command: []string{"go", "mod", "download"}, InWorkshop: true},
 	},
 }
 ```
@@ -109,6 +119,6 @@ taboo.RunRequest{
 ## See also
 
 - [Drive one agent run from Go](../tutorials/library-first-run.md) for the basic
-  `Runner.Run` flow without hooks.
+  one-call `RunWorkflow` flow without hooks.
 - [Library API reference](../reference/library-api.md) for the `Hook` and `Hooks`
   type definitions.

@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // runWizard collects and confirms agent, model, base, and repo through an

@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // errValidateFailed is the sentinel validate returns when any check is an error.
@@ -138,7 +138,7 @@ func deriveChecks(cfg taboo.ProjectConfig, statFile func(string) bool) []check {
 		return nil // unknown agent: agentChecks already flags it, don't double-report.
 	}
 	runnerCfg := taboo.Config{
-		Workshop: taboo.WorkshopName(cfg.Workshop, profile.Name()),
+		Workshop: workshopName(cfg.Workshop, profile.Name()),
 		Agent:    profile,
 		RepoPath: cfg.Repo,
 	}

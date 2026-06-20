@@ -15,7 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // errRunFailed is the sentinel run returns when its preflight finds an error
