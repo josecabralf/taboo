@@ -6,9 +6,13 @@
 // review workflow for a structured <result>, drops any comment outside the diff,
 // and posts exactly one PR review. The "plan" subcommand lists the open
 // ready-for-agent issues and runs the plan workflow to print a parallel-safe
-// batch of them as JSON. All GitHub/git I/O funnels through
-// internal/ghio; the taboo runs go through the taboo bridge one-liners
-// taboo.RunWorkflow / taboo.RunWorkflowAs (config discovery + resolution + run).
+// batch of them as JSON. The "write-pr" subcommand computes a branch's diff
+// against main, runs the write-pr workflow for a structured {title, body}
+// <result>, and opens a PR for the branch — updating the branch's existing open
+// PR instead of opening a duplicate when one is already present. All GitHub/git
+// I/O funnels through internal/ghio; the taboo runs go through the taboo bridge
+// one-liners taboo.RunWorkflow / taboo.RunWorkflowAs (config discovery +
+// resolution + run).
 // In CI it is built inside its own module and run from the repo root (it cannot
 // be `go run` from the parent module, which excludes nested modules); see
 // .github/workflows/agent-implement.yml and agent-review.yml.
@@ -60,9 +64,9 @@ func main() {
 }
 
 // usage summarizes the orchestrator's subcommands.
-const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan"
+const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>]"
 
-// run dispatches to a subcommand: "implement", "review" or "plan".
+// run dispatches to a subcommand: "implement", "review", "plan" or "write-pr".
 func run(args []string) error {
 	if len(args) == 0 {
 		return errors.New(usage)
@@ -74,6 +78,8 @@ func run(args []string) error {
 		return runReview(context.Background(), args[1:])
 	case "plan":
 		return runPlan(context.Background(), args[1:])
+	case "write-pr":
+		return runWritePR(context.Background(), args[1:])
 	default:
 		return fmt.Errorf("unknown command %q (%s)", args[0], usage)
 	}
@@ -134,6 +140,23 @@ func runPlan(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 	return plan(ctx, startDir, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[[]planItem])
+}
+
+// runWritePR parses the write-pr subcommand's flags (--branch defaults to the
+// current branch) and wires the production gh and taboo seams into writePR. The
+// typed bridge taboo.RunWorkflowAs[prContent] decodes the agent's <result> block
+// into a prContent in-loop.
+func runWritePR(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("write-pr", flag.ContinueOnError)
+	branch := fs.String("branch", "", "branch to open a PR for (default: the current branch)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+	return writePR(ctx, startDir, *branch, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[prContent])
 }
 
 // implement is the testable core of the implement subcommand: it fetches the

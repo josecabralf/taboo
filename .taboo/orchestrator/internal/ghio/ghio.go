@@ -195,3 +195,75 @@ func (c *Client) AddLabel(ctx context.Context, prRef, label string) error {
 	_, err := c.exec.Run(ctx, "gh", "pr", "edit", prRef, "--add-label", label)
 	return err
 }
+
+// CurrentBranch returns the name of the branch currently checked out in the
+// working tree via `git rev-parse --abbrev-ref HEAD`. The write-pr subcommand
+// uses it to default --branch to the run's own branch.
+func (c *Client) CurrentBranch(ctx context.Context) (string, error) {
+	out, err := c.exec.Run(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// BranchDiff returns the unified diff of branch against main using the three-dot
+// range `main...<branch>` — the changes introduced on the branch since it
+// diverged from main, the same set GitHub renders for a PR. It is the input the
+// write-pr workflow reasons over when composing the PR title and body.
+func (c *Client) BranchDiff(ctx context.Context, branch string) (string, error) {
+	return c.exec.Run(ctx, "git", "diff", "main..."+branch)
+}
+
+// PR identifies an open pull request the orchestrator found for a branch: its
+// number and URL. The write-pr subcommand uses it to decide whether to update an
+// existing PR (an idempotent re-run) or open a new one.
+type PR struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+// PRForBranch returns the open PR whose head is branch, if one exists, via
+// `gh pr list --head <branch>`. The bool is false when no open PR targets the
+// branch (the JSON array is empty), so write-pr can choose between create and
+// update without treating "none" as an error.
+func (c *Client) PRForBranch(ctx context.Context, branch string) (PR, bool, error) {
+	out, err := c.exec.Run(ctx, "gh", "pr", "list", "--head", branch, "--state", "open", "--limit", "1", "--json", "number,url")
+	if err != nil {
+		return PR{}, false, err
+	}
+	var prs []PR
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return PR{}, false, fmt.Errorf("parsing gh pr list output: %w", err)
+	}
+	if len(prs) == 0 {
+		return PR{}, false, nil
+	}
+	return prs[0], true, nil
+}
+
+// CreatePR opens a ready (non-draft) PR for branch against main and returns its
+// URL. Unlike CreateDraftPR (the implement flow's work-in-progress draft),
+// write-pr produces a finished PR from an agent-authored title and body.
+func (c *Client) CreatePR(ctx context.Context, branch, title, body string) (string, error) {
+	out, err := c.exec.Run(ctx, "gh", "pr", "create",
+		"--base", "main",
+		"--head", branch,
+		"--title", title,
+		"--body", body)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// EditPR updates an existing PR's title and body via `gh pr edit`. The prRef
+// argument is the PR's number, URL or head branch (write-pr passes the URL
+// PRForBranch returned). It is how a re-run refreshes a PR in place instead of
+// opening a duplicate.
+func (c *Client) EditPR(ctx context.Context, prRef, title, body string) error {
+	_, err := c.exec.Run(ctx, "gh", "pr", "edit", prRef,
+		"--title", title,
+		"--body", body)
+	return err
+}
