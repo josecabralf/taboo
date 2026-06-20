@@ -256,20 +256,19 @@ func TestValidate_DeriveMissingSourceFails(t *testing.T) {
 
 // TestDeriveChecks_EmptyRepoEmitsNoChecksAndProbesNothing asserts that with no
 // top-level repo: configured, deriveChecks returns no checks and never probes a
-// path. Without the empty-repo guard it would build filepath.Join("",
-// "workshop.yaml") == a bare relative "workshop.yaml" and stat it against the
-// validate CWD — a false positive if a stray workshop.yaml happens to sit there.
-// Since repoValidateChecks already flags the unset repo, deriveChecks must stay
-// silent (mirroring doctor's workshopProjectChecks).
+// path. Without the empty-repo guard it would stat a workshop.yaml under the
+// resolved repo base, a needless probe (and a confusing report) for a config the
+// repo check already condemns. Since repoValidateChecks already flags the unset
+// repo, deriveChecks must stay silent (mirroring doctor's workshopProjectChecks).
 func TestDeriveChecks_EmptyRepoEmitsNoChecksAndProbesNothing(t *testing.T) {
 	t.Parallel()
 	var probed []string
 	statFile := func(p string) bool {
 		probed = append(probed, p)
-		return true // a stray relative workshop.yaml would "exist" — the trap the guard avoids.
+		return true // a resolved workshop.yaml would "exist" — the trap the guard avoids.
 	}
 
-	checks := deriveChecks(taboo.ProjectConfig{Agent: "opencode", Model: "x"}, statFile)
+	checks := deriveChecks(taboo.ProjectConfig{Agent: "opencode", Model: "x"}, "/proj", statFile)
 
 	if len(checks) != 0 {
 		t.Errorf("deriveChecks(empty repo) = %+v, want no checks", checks)
@@ -323,6 +322,75 @@ func TestValidate_DeriveRejectsBadSource(t *testing.T) {
 			// The file is present; only the derivation failed, so source-definition stays ok.
 			if s := findCheck(checks, "source-definition"); s == nil || s.Status != statusOK {
 				t.Errorf("source-definition = %+v, want ok (the file is present)\nchecks: %+v", s, checks)
+			}
+		})
+	}
+}
+
+// TestValidate_DeriveResolvesRepoRelativeToConfigNotCWD is the regression test
+// for the CWD-sensitivity bug. With a dot repo and the config in a .taboo
+// subdir, the source workshop.yaml lives at the project ROOT (the parent of
+// .taboo, where the dot repo resolves), not under the CWD. Running validate from
+// the config dir (.taboo) must still find that root workshop.yaml and derive
+// cleanly, exactly as a real run resolves it (resolveRepoPath in pkg). Before the
+// fix deriveChecks statted a bare relative "workshop.yaml" against the CWD, so
+// from .taboo it looked for .taboo/workshop.yaml (the gitignored derived output,
+// absent here) and reported source-definition + derive as errors.
+func TestValidate_DeriveResolvesRepoRelativeToConfigNotCWD(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// A dot repo means the project root is the parent of the .taboo config dir.
+	writeTabooProject(t, root,
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\n"+
+			"model: openrouter/qwen/qwen3-coder-plus\nrepo: .\n")
+	// The SOURCE workshop.yaml sits at the project root, NOT under .taboo.
+	if err := os.WriteFile(filepath.Join(root, "workshop.yaml"),
+		[]byte("name: x\nbase: ubuntu@24.04\nsdks: []\n"), 0o600); err != nil {
+		t.Fatalf("write source workshop.yaml: %v", err)
+	}
+	fake := &fakeCommander{stdoutFn: okHostStdout}
+	// Getwd returns the CONFIG dir (.taboo), the natural place to run from — the
+	// exact scenario that surfaced the bug. Pre-fix this is where it failed.
+	configDir := filepath.Join(root, ".taboo")
+	env := configEnv(t, fake, configDir, nil)
+
+	checks := validateChecks(context.Background(), env, realStat)
+	if got := statusOf(checks, "source-definition"); got != "ok" {
+		t.Errorf("source-definition status = %q, want ok (must resolve repo: . against the config dir, not the CWD)\nchecks: %+v", got, checks)
+	}
+	if got := statusOf(checks, "derive"); got != "ok" {
+		t.Errorf("derive status = %q, want ok\nchecks: %+v", got, checks)
+	}
+	// repo-path is intentionally not asserted clean here: with config-anchored
+	// resolution, repo: . resolves to the project root (a t.TempDir() under /tmp),
+	// which repoLocationCheck correctly flags as tmpfs. This test pins derive
+	// resolution; TestValidate_Repo covers the repo-path/repo-git leaves.
+}
+
+// TestResolveRepoBase pins every branch of the config-anchored repo resolver: an
+// absolute repo stands alone, a relative non-dot repo joins the config dir, a dot
+// repo in a .taboo config resolves to the parent, and a dot repo beside a bare
+// taboo.yaml resolves to the config dir itself. It mirrors the runtime
+// resolveRepoPath, locking the relative-non-dot branch the integration test
+// (which only exercises the dot-repo case) leaves uncovered.
+func TestResolveRepoBase(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		configDir string
+		repo      string
+		want      string
+	}{
+		{"absolute repo stands alone", "/proj/.taboo", "/elsewhere/repo", "/elsewhere/repo"},
+		{"relative repo joins config dir", "/proj/.taboo", "../sibling", "/proj/sibling"},
+		{"dot repo in .taboo resolves to parent", "/proj/.taboo", ".", "/proj"},
+		{"dot repo beside bare taboo.yaml is the config dir", "/proj", ".", "/proj"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveRepoBase(tc.configDir, tc.repo); got != tc.want {
+				t.Errorf("resolveRepoBase(%q, %q) = %q, want %q", tc.configDir, tc.repo, got, tc.want)
 			}
 		})
 	}
