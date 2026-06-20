@@ -181,7 +181,8 @@ func TestPlan_TemplateSingle(t *testing.T) {
 
 // TestPlan_TemplateFanout asserts plan() adds a parseable main.go that
 // demonstrates parallel fan-out (taboo.NewPool) and structured output
-// (taboo.JSONResult) when Template is "fanout".
+// (taboo.JSONResult) when Template is "fanout", with the pool's Config
+// obtained from a resolved Plan rather than hand-built.
 func TestPlan_TemplateFanout(t *testing.T) {
 	t.Parallel()
 	in := newScaffoldInputs(t, "opencode", "some/model")
@@ -208,6 +209,11 @@ func TestPlan_TemplateFanout(t *testing.T) {
 	}
 	if !strings.Contains(main, "JSONResult") {
 		t.Errorf("main.go missing JSONResult\nfull:\n%s", main)
+	}
+	// #94 bridge contract: the pool's Config must come from a resolved Plan
+	// (cfg.Plan(...) → NewPool(plan.Config, ...)), not a hand-built Config.
+	if !strings.Contains(main, "NewPool(plan.Config") {
+		t.Errorf("main.go must feed plan.Config into NewPool (Config obtained from a Plan)\nfull:\n%s", main)
 	}
 	// A scaffolded main.go must be a runnable main package: package main, not the
 	// CLI's own package app (which would compile as a library and break go run .).
