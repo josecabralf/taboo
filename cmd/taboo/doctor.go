@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // errChecksFailed is the sentinel doctor returns when any check is an error. The

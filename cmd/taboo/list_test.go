@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // listProjectBody is a minimal valid taboo.yaml the list tests build on. It

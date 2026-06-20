@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // defaultBase is the workshop base image init assumes when none is supplied.

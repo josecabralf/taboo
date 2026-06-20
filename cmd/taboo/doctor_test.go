@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // invocations renders each recorded Commander call as a [name, args...] slice so

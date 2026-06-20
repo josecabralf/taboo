@@ -1,6 +1,6 @@
 # taboo CLI reference
 
-The `taboo` binary wraps the common `pkg/taboo` paths. The root command is
+The `taboo` binary wraps the common library paths. The root command is
 `taboo` ("taboo orchestrates agent runs inside workshop environments",
 `cmd/taboo/main.go`). It registers six subcommands: `doctor`, `init`,
 `validate`, `run`, `list`, `clean` (`cmd/taboo/main.go`, `newRootCmd`).
@@ -63,8 +63,8 @@ template, a refused overwrite, or a write failure.
 
 Run a workflow (or an ad-hoc prompt) end-to-end on a fresh branch
 (`cmd/taboo/run.go`, `newRunCmd`). It loads `taboo.yaml`, selects what to run,
-resolves the run parameters into a plan, runs a host preflight, and drives the
-plan through the `pkg/taboo` `Orchestrator` on a new per-run branch.
+resolves the run parameters into a `Plan`, runs a host preflight, and drives the
+plan through the library's `(*Plan).Run` looped run on a new per-run branch.
 
 ```
 taboo run [workflow] [flags]
@@ -250,7 +250,7 @@ Positional arguments: none (`cobra.NoArgs`).
 Sections (`runList`):
 
 - workshops: one entry per distinct agent the config references, named
-  `<workshop>-<agent>` (`projectWorkshops`, `taboo.WorkshopName`). The state
+  `<workshop>-<agent>` (`projectWorkshops`, `workshopName`). The state
   comes from `workshop --project <projectDir> info <name>`; a probe error means
   `not provisioned`, an unparseable status means `unknown` (`workshopState`).
 - worktrees: the worktrees under `<projectDir>/worktrees/`, from

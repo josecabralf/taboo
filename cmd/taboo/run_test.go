@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // runProjectBody is a complete, valid taboo.yaml the run tests build on. Its
@@ -1480,9 +1480,13 @@ func TestRunNeedsConfirm(t *testing.T) {
 // line (the default), a no, EOF, or junk all decline, so an accidental Enter
 // never launches a run.
 func TestPromptConfirm(t *testing.T) {
+	profile, err := taboo.NewProfile("opencode", "anthropic/claude")
+	if err != nil {
+		t.Fatalf("NewProfile: %v", err)
+	}
 	plan := &taboo.Plan{
 		Workflow: "fix",
-		Config:   taboo.Config{Workshop: "demo", Agent: taboo.OpenCode("anthropic/claude")},
+		Config:   taboo.Config{Workshop: "demo", Agent: profile},
 		Request:  taboo.OrchestratedRequest{RunRequest: taboo.RunRequest{Branch: "taboo/fix-x"}},
 	}
 	cases := []struct {

@@ -1,62 +1,91 @@
 # Library API reference
 
-The exported surface of `package taboo` (`github.com/josecabralf/taboo/pkg/taboo`).
-Import path: `taboo "github.com/josecabralf/taboo/pkg/taboo"`.
+The exported surface of `package taboo` (`github.com/josecabralf/taboo/pkg`).
+Import path: `taboo "github.com/josecabralf/taboo/pkg"`.
 
-Signatures below are copied from the Go source files named in each section. The
-generated godoc, including unexported helpers' doc comments, is the rendered
-source of truth: <https://pkg.go.dev/github.com/josecabralf/taboo/pkg/taboo>.
+Signatures below are copied from the package's public surface. The package
+decomposes into `internal/` packages behind a facade, so the implementations live
+out of sight; everything documented here is reachable through the single import
+path above. The generated godoc is the rendered source of truth:
+<https://pkg.go.dev/github.com/josecabralf/taboo/pkg>.
+
+The library has three entry patterns, from highest-level to lowest:
+
+1. **One call from a `taboo.yaml`** — `RunWorkflow` / `RunWorkflowAs[T]`.
+2. **Inspect, then run** — `LoadConfig` → `(*ProjectConfig).Plan` → `(*Plan).Run`.
+3. **Fan out** — `NewPool` → `(*Pool).Run`.
 
 ## Entry points
 
-Source: `runner.go`, `orchestrator.go`, `pool.go`, `commander.go`.
-
-`Runner` drives one agent run. `Orchestrator` wraps a `Runner` in an iteration
-loop. `Pool` fans runs out across bounded workshops. All three take a `Config`
-and a `Commander`.
-
-### Runner
+### RunWorkflow and RunWorkflowAs
 
 ```go
-func New(cfg Config, cmd Commander) *Runner
-func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error)
-func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error)
-func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunResult, error)
+func RunWorkflow(ctx context.Context, startDir, workflow string, vars map[string]string, ov PlanOverrides, cmd Commander) (OrchestratedResult, error)
+
+func RunWorkflowAs[T any](ctx context.Context, startDir, workflow string, vars map[string]string, ov PlanOverrides, cmd Commander) (T, OrchestratedResult, error)
 ```
 
-`New` returns a `Runner` bound to `cfg`, driving workshop and git commands
-through `cmd`.
+`RunWorkflow` is the one-call bridge: it locates the nearest `taboo.yaml` above
+`startDir`, loads it, resolves the named `workflow` into a `Plan`, and runs it
+over `cmd`. `vars` fills `{{VAR}}` placeholders in the resolved prompt; `ov`
+applies per-call `PlanOverrides`. A missing config is a distinct error naming
+`startDir`.
 
-`Run` executes one agent run end-to-end: `Setup` the worktree, then `Exec` the
-agent once in it.
+`RunWorkflowAs[T]` is the typed one-call bridge. It runs the same
+locate-load-plan-run pipeline, but threads a `JSONResult[T]` extractor into the
+plan so the agent's structured output is decoded in-loop and returned as a
+statically typed `T`, with no caller assertion. On a locate/load/plan failure it
+short-circuits before running, returning the zero `T` and a zero
+`OrchestratedResult`. On an extraction failure (`ErrNoResult` / `ErrInvalidResult`)
+the run already happened: the error surfaces with the zero `T` alongside the
+populated `OrchestratedResult`. See [Iterate until done](../guides/iterate-until-done.md).
 
-`Setup` ensures the workshop exists, creates a fresh worktree on `req.Branch`,
-and swaps it (and the repo's `.git`) into the workshop via stop, remount, start.
-It runs once per worktree. The returned `RunResult` carries `Branch` and
-`WorktreePath` for the subsequent `Exec` call(s).
-
-`Exec` runs the agent once in the worktree `Setup` prepared (`base.WorktreePath`),
-then records the agent's stdout and the branch HEAD on the returned result.
-Calling it more than once re-runs the agent in place. The `base` argument
-supplies `Branch` and `WorktreePath` from `Setup`.
-
-### Orchestrator
+### Plan: inspect, then run
 
 ```go
-func NewOrchestrator(runner *Runner) *Orchestrator
-func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (OrchestratedResult, error)
+func LoadConfig(path string) (*ProjectConfig, error)
+func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string, ov PlanOverrides) (*Plan, error)
+func (p *Plan) Run(ctx context.Context, cmd Commander) (OrchestratedResult, error)
+
+type Plan struct {
+    Config   Config              // the resolved workshop runner input
+    Request  OrchestratedRequest // the resolved looped run
+    Workflow string              // originating workflow name ("" = ad-hoc)
+    Model    string              // resolved model string (informational)
+}
 ```
 
-`NewOrchestrator` returns an `Orchestrator` that drives `runner`.
+`LoadConfig` parses a `taboo.yaml` into a `ProjectConfig`. `(*ProjectConfig).Plan`
+resolves a `workflow` plus per-call `PlanOverrides` into a `Plan`: a pure,
+inspectable description of one run (modulo reading a prompt file). Inspect or
+adjust `Plan.Config` and `Plan.Request` before running. `(*Plan).Run` executes
+the resolved plan — the sole side effect — driving the iteration loop over `cmd`.
 
-`Run` prepares the worktree once via `Runner.Setup`, then re-execs the agent up
-to `req.MaxIterations` times in that same worktree with `Runner.Exec`, stopping
-early once `req.CompletionSignal` appears in the agent's stdout. On a `Setup` or
-`Exec` failure it returns the populated result so far alongside the error, with
-`StopReason` left at its zero value. A forked request with `MaxIterations` above
-1 returns `ErrForkLoop` before any `Setup`.
+Use this path when you want to see or tweak the resolved run before it happens;
+`RunWorkflow` is the same pipeline collapsed into one call.
 
-### Pool
+### PlanOverrides
+
+```go
+type PlanOverrides struct {
+    Agent, Model       string
+    Timeout            time.Duration
+    MaxIterations      int
+    CompletionSignal   string
+    Branch             string
+    From               string
+    Prompt, PromptFile string
+    Stdout, Stderr     io.Writer
+}
+```
+
+`PlanOverrides` is the per-call override layer applied on top of the config when
+resolving a `Plan`. A field's zero value means "unset": fall through to the
+workflow, then the top-level `defaults` layer. Numeric knobs gate on `>0`; strings
+gate on non-empty. `Stdout`/`Stderr` are output sinks (nil = discard), not part of
+the precedence chain.
+
+### Pool: fan out
 
 ```go
 func NewPool(cfg Config, limit int, cmd Commander) *Pool
@@ -64,39 +93,20 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error)
 ```
 
 `NewPool` returns a `Pool` that fans runs out across at most `limit` concurrent
-workshops derived from `cfg`. A `limit` below 1 is treated as 1. Each
-concurrency slot owns a workshop named `"<Workshop>-<slot>"` under a project
-directory `"<ProjectDir>/slot-<slot>"`.
+workshops derived from `cfg`. A `limit` below 1 is treated as 1. Each concurrency
+slot owns a workshop named `"<Workshop>-<slot>"` under a project directory
+`"<ProjectDir>/slot-<slot>"`. The `Config` for a pool comes from a resolved
+`Plan` (`plan.Config`) or is built directly.
 
 `Run` executes each request concurrently, bounded by the pool's limit, and
 returns one `RunResult` per request in input order (`results[i]` corresponds to
 `reqs[i]`). A request that fails does not abort the batch: its error is recorded
-on the corresponding `RunResult.Err` and the remaining runs proceed. The
-returned error is non-nil only when the batch cannot be started at all (the
-context is already canceled at entry). A single `Pool` is not safe for
-concurrent `Run` calls.
+on the corresponding `RunResult.Err` and the remaining runs proceed. The returned
+error is non-nil only when the batch cannot be started at all (the context is
+already canceled at entry). A single `Pool` is not safe for concurrent `Run`
+calls. See [Run many prompts in parallel](../guides/fan-out-runs.md).
 
 ## Requests and results
-
-Source: `template.go` (`Config`), `runner.go` (`RunRequest`, `RunResult`),
-`orchestrator.go` (`OrchestratedRequest`, `OrchestratedResult`, `StopReason`).
-
-### Config
-
-```go
-type Config struct {
-    Workshop   string       // workshop name (the definition's `name:`)
-    Base       string       // base image, e.g. "ubuntu@24.04"
-    Agent      AgentProfile // the agent profile run inside the workshop
-    RepoPath   string       // absolute path to the host git repository
-    ProjectDir string       // host directory taboo owns (.workshop/, worktrees/)
-}
-```
-
-`Config` describes a taboo-managed workshop and the agent that runs inside it.
-`RepoPath` is the absolute path to the host git repository whose worktrees the
-agent operates on. `ProjectDir` is the host directory taboo owns: it holds the
-rendered workshop definition and is passed to every `workshop --project` call.
 
 ### RunRequest
 
@@ -125,14 +135,12 @@ type RunResult struct {
     WorktreePath string
     Commit       string // HEAD of the branch after the agent ran
     Output       string // captured agent exec stdout (stderr is not retained)
-    Err          error  // populated by Pool per run; nil from Runner.Run/Setup/Exec
+    Err          error  // populated by Pool per run; nil from the single-run path
 }
 ```
 
 `RunResult` reports the outcome of a run. `Err` is populated by `Pool` when
-fanning out so one failed run does not abort the batch. The single-run
-primitives (`Runner.Run`, `Setup`, `Exec`) return their error separately and
-leave `Err` nil.
+fanning out so one failed run does not abort the batch.
 
 ### OrchestratedRequest
 
@@ -146,8 +154,8 @@ type OrchestratedRequest struct {
 ```
 
 `OrchestratedRequest` describes a looped run: an embedded `RunRequest` plus the
-loop's own knobs. `ResultExtractor` is nil to skip extraction, leaving
-`OrchestratedResult.Result` nil.
+loop's own knobs. It is the type of `Plan.Request`. `ResultExtractor` is nil to
+skip extraction, leaving `OrchestratedResult.Result` nil.
 
 ### OrchestratedResult
 
@@ -160,10 +168,11 @@ type OrchestratedResult struct {
 }
 ```
 
-`OrchestratedResult` reports the outcome of a looped run. `Iterations` is how
-many times the agent was run. `StopReason` is only meaningful when `Run` returns
-a nil error; on a `Setup` or `Exec` failure it stays at its zero value. `Result`
-is type-asserted by the caller (e.g. `res.Result.(MyResult)`).
+`OrchestratedResult` is what `RunWorkflow`, `RunWorkflowAs[T]`, and `Plan.Run`
+return. `Iterations` is how many times the agent was run. `StopReason` is only
+meaningful when the call returns a nil error; on a setup or exec failure it stays
+at its zero value. `Result` is type-asserted by the caller
+(e.g. `res.Result.(MyResult)`); `RunWorkflowAs[T]` returns it already typed.
 
 ### StopReason
 
@@ -176,15 +185,10 @@ const StopSignal        StopReason = "signal"
 
 `StopReason` explains why an orchestrated run's iteration loop ended.
 `StopMaxIterations` means the loop exhausted `MaxIterations` without seeing the
-completion signal. `StopSignal` means the agent emitted the completion signal
-and the loop stopped early.
+completion signal. `StopSignal` means the agent emitted the completion signal and
+the loop stopped early.
 
 ## Building blocks
-
-Source: `agent.go` (`AgentProfile`, `CommandOptions`, `AgentCommand`,
-`SessionSpec`), `result.go` (`ResultExtractor`, `JSONResult`, `Option`,
-`Validator`), `prompt.go` (`Substitute`, `PromptTemplate`), `hooks.go` (`Hook`,
-`Hooks`).
 
 ### AgentProfile
 
@@ -202,8 +206,8 @@ environment and builds the invocation taboo runs inside the workshop. `Name`
 equals the SDK name baked into the workshop. `CredentialEnvKeys` are host
 environment variable names whose values reach the agent via
 `workshop exec --env NAME`. `Sessions` reports where the agent persists session
-state, with `ok` false for a sessionless agent. The concrete profiles are listed
-in [agents.md](agents.md).
+state, with `ok` false for a sessionless agent. Resolve a profile through
+`NewProfile`; the concrete profiles are listed in [agents.md](agents.md).
 
 ### CommandOptions
 
@@ -227,9 +231,9 @@ type AgentCommand struct {
 }
 ```
 
-`AgentCommand` is the agent invocation taboo execs. `Argv` is the command and
-its arguments. When `Stdin` is non-empty the runner pipes it to the agent's
-stdin instead of carrying the prompt in argv.
+`AgentCommand` is the agent invocation taboo execs. `Argv` is the command and its
+arguments. When `Stdin` is non-empty the runner pipes it to the agent's stdin
+instead of carrying the prompt in argv.
 
 ### SessionSpec
 
@@ -254,7 +258,7 @@ type ResultExtractor interface {
 
 func JSONResult[T any](opts ...Option) ResultExtractor
 
-type Option func(*extractOptions)
+type Option // opaque; construct with the options below
 func WithDelimiters(open, close string) Option
 func WithStrictFields() Option
 
@@ -268,7 +272,8 @@ as `any` for the caller to type-assert.
 
 `JSONResult[T]` builds a `ResultExtractor` that locates the last
 `<result>...</result>` block in the agent's output and decodes its JSON payload
-into `T`. The caller's struct is the schema.
+into `T`. The caller's struct is the schema. `RunWorkflowAs[T]` wires this in
+automatically.
 
 `WithDelimiters` overrides the block delimiters; the defaults are `<result>` and
 `</result>`. `WithStrictFields` makes decoding reject a payload that carries
@@ -277,25 +282,17 @@ semantic-validation hook: if the decoded type implements it, `Extract` calls
 `Validate` after decoding and treats a non-nil error as `ErrInvalidResult`. See
 the [typed results guide](../guides/typed-results.md).
 
-### Substitute and PromptTemplate
+### Substitute
 
 ```go
 func Substitute(tmpl string, vars map[string]string) (string, error)
-
-func NewPromptTemplate(cmd Commander, project, ws string) *PromptTemplate
-func (p *PromptTemplate) Resolve(ctx context.Context, tmpl string, vars map[string]string) (string, error)
-func (p *PromptTemplate) Expand(ctx context.Context, prompt string) (string, error)
 ```
 
 `Substitute` replaces every `{{VAR}}` placeholder in `tmpl` with `vars[VAR]`,
 where `VAR` matches `[A-Za-z_][A-Za-z0-9_]*`. It is pure. A placeholder with no
 matching key returns an error of the form
-`prompt template: undefined variable(s): ...`.
-
-`PromptTemplate` resolves a prompt against a workshop: `{{VAR}}` substitution
-followed by shell-expression expansion executed inside the workshop through the
-`Commander` seam. `Resolve` runs substitution then expansion; `Expand` runs only
-the in-workshop shell expansion.
+`prompt template: undefined variable(s): ...`. The bridge's `vars` argument runs
+through this.
 
 ### Hook and Hooks
 
@@ -311,17 +308,15 @@ type Hooks struct {
 ```
 
 `Hook` is a single setup command run at a lifecycle point. By default it runs on
-the host through the `Commander` seam, in the run's worktree. Setting
-`InWorkshop` runs it inside the workshop via `workshop exec` (cwd `/taboo/workspace`)
-with the agent's credential env keys and the same mounts.
+the host through the `Commander` seam, in the run's worktree. Setting `InWorkshop`
+runs it inside the workshop via `workshop exec` (cwd `/taboo/workspace`) with the
+agent's credential env keys and the same mounts.
 
 `OnWorkshopReady` hooks run after the workshop starts with the run's worktree
 mounted, before the agent execs. They run on every run. See the
 [hooks guide](../guides/prepare-the-workspace-with-hooks.md).
 
 ## Execution seam
-
-Source: `commander.go`.
 
 ```go
 type Cmd struct {
@@ -347,29 +342,24 @@ implementation shells out, and tests substitute a fake that records invocations.
 `NewExecCommander` returns a `Commander` that runs commands as real host
 processes via `os/exec`.
 
-## Config and registry
-
-Source: `config.go` (`LoadConfig`, `ProjectConfig`, `RunDefaults`, `Workflow`,
-`Duration`), `registry.go` (`NewProfile`, `AgentNames`, `MatchModelFormat`),
-`workshop.go` (`WorkshopName`), `agent_opencode.go`, `agent_claudecode.go`,
-`agent_copilot.go` (constructors).
-
-### LoadConfig and ProjectConfig
+## Config model
 
 ```go
 func LoadConfig(path string) (*ProjectConfig, error)
+func FindConfig(start string) (string, bool)
 
 type ProjectConfig struct {
-    Workshop        string              `yaml:"workshop"`
-    Base            string              `yaml:"base"`
-    Repo            string              `yaml:"repo"`
-    Agent           string              `yaml:"agent"`
-    Model           string              `yaml:"model"`
-    Strategy        string              `yaml:"strategy,omitempty"`
-    Defaults        *RunDefaults        `yaml:"defaults,omitempty"`
-    Workflows       map[string]Workflow `yaml:"workflows,omitempty"`
-    DefaultWorkflow string              `yaml:"default-workflow,omitempty"`
-    Profile         AgentProfile        `yaml:"-"`
+    Workshop         string              `yaml:"workshop"`
+    Base             string              `yaml:"base"`
+    Repo             string              `yaml:"repo"`
+    Agent            string              `yaml:"agent"`
+    Model            string              `yaml:"model"`
+    Strategy         string              `yaml:"strategy,omitempty"`
+    SourceDefinition string              `yaml:"source-definition,omitempty"`
+    Defaults         *RunDefaults        `yaml:"defaults,omitempty"`
+    Workflows        map[string]Workflow `yaml:"workflows,omitempty"`
+    DefaultWorkflow  string              `yaml:"default-workflow,omitempty"`
+    Profile          AgentProfile        `yaml:"-"`
 }
 ```
 
@@ -377,24 +367,29 @@ type ProjectConfig struct {
 model of the top level and of every workflow to an `AgentProfile` via the
 registry, and returns the config. Decoding is strict: unknown keys are rejected
 and only a single YAML document is accepted. `Profile` is the resolved top-level
-profile, nil when no agent is set. It is not serialized. The full key reference
-is in [taboo-yaml.md](../reference/taboo-yaml.md).
+profile, nil when no agent is set; it is not serialized.
+
+`FindConfig` ascends from `start` looking for the nearest `taboo.yaml` (bare,
+then under `.taboo`), returning its path and whether one was found. It is the
+locate step `RunWorkflow` runs for you. The full key reference is in
+[taboo-yaml.md](taboo-yaml.md).
 
 ### RunDefaults
 
 ```go
 type RunDefaults struct {
-    BranchPrefix     string   `yaml:"branch-prefix,omitempty"`
-    Prompt           string   `yaml:"prompt,omitempty"`
-    PromptFile       string   `yaml:"prompt-file,omitempty"`
-    Timeout          Duration `yaml:"timeout,omitempty"`
-    MaxIterations    int      `yaml:"max-iterations,omitempty"`
-    CompletionSignal string   `yaml:"completion-signal,omitempty"`
+    BranchPrefix     string `yaml:"branch-prefix,omitempty"`
+    Prompt           string `yaml:"prompt,omitempty"`
+    PromptFile       string `yaml:"prompt-file,omitempty"`
+    Timeout          string `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
+    MaxIterations    int    `yaml:"max-iterations,omitempty"`
+    CompletionSignal string `yaml:"completion-signal,omitempty"`
 }
 ```
 
 `RunDefaults` are scalar-only run settings applied when a workflow or flag does
-not override them.
+not override them. `Timeout` is a YAML duration string such as `30m` or `1h30m`,
+parsed internally; callers set it in `taboo.yaml`, not as a Go value.
 
 ### Workflow
 
@@ -405,92 +400,85 @@ type Workflow struct {
     Model         string       `yaml:"model,omitempty"`
     Agent         string       `yaml:"agent,omitempty"`
     MaxIterations int          `yaml:"max-iterations,omitempty"`
-    Timeout       Duration     `yaml:"timeout,omitempty"`
+    Timeout       string       `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
     Profile       AgentProfile `yaml:"-"`
 }
 ```
 
 `Workflow` is a named, reusable task type that overrides scalar run params.
 `Profile` is the resolved effective profile (workflow agent and model, falling
-back to the top level). It is not serialized. A workflow with no agent anywhere
+back to the top level); it is not serialized. A workflow with no agent anywhere
 leaves `Profile` nil.
 
-### Duration
+### Config
 
 ```go
-type Duration time.Duration
+type Config struct {
+    Workshop   string       // workshop name (the definition's `name:`)
+    Base       string       // base image, e.g. "ubuntu@24.04"
+    Agent      AgentProfile // the agent profile run inside the workshop
+    RepoPath   string       // absolute path to the host git repository
+    ProjectDir string       // host directory taboo owns (.workshop/, worktrees/)
+}
 ```
 
-`Duration` is a config-friendly `time.Duration` that marshals and unmarshals Go
-duration strings such as `30m` or `1h30m` in YAML. An empty value yields zero.
+`Config` describes a taboo-managed workshop and the agent that runs inside it. It
+is the runner input carried by `Plan.Config` and consumed by `NewPool`.
+`RepoPath` is the absolute path to the host git repository whose worktrees the
+agent operates on. `ProjectDir` is the host directory taboo owns: it holds the
+rendered workshop definition and is passed to every `workshop --project` call.
 
-### NewProfile, AgentNames, MatchModelFormat
+## Agent registry and CLI-support facet
 
 ```go
 func NewProfile(name, model string) (AgentProfile, error)
 func AgentNames() []string
 func MatchModelFormat(agent, model string) (ok bool, expected string)
+
+func DryRunDerive(cfg Config, source []byte) (projectNames []string, err error)
+func SourceDefinitions(repoPath string) ([]string, error)
+func ValidateSourceDefinition(named []string, selection string) error
 ```
 
 `NewProfile` resolves a canonical agent name to its `AgentProfile`, constructed
 for `model`. It validates the name only; its sole error is a wrapped
 `ErrUnknownAgent`. `AgentNames` returns every registered agent's canonical name,
-sorted. `MatchModelFormat` reports whether `model` looks well-formed for the
-named `agent` and returns that agent's human-readable expected-format string. It
-is advisory: an unknown agent, a no-opinion hint, or a pattern match all yield
-`ok` true. `expected` is `""` exactly when the agent is unknown or has no
-opinion. Agent resolution is detailed in [agents.md](agents.md).
+sorted. `MatchModelFormat` reports whether `model` looks well-formed for the named
+`agent` and returns that agent's human-readable expected-format string. It is
+advisory: an unknown agent, a no-opinion hint, or a pattern match all yield `ok`
+true. `expected` is `""` exactly when the agent is unknown or has no opinion.
+Agent resolution is detailed in [agents.md](agents.md).
 
-### Agent constructors
-
-```go
-func OpenCode(model string) AgentProfile
-func ClaudeCode(model string) AgentProfile
-func Copilot(model string) AgentProfile
-```
-
-Each constructor returns the `AgentProfile` for that agent's CLI configured to
-run `model`. See [agents.md](agents.md) for the per-agent contract.
-
-### WorkshopName
-
-```go
-func WorkshopName(base, agent string) string
-```
-
-`WorkshopName` derives the per-agent workshop name from a base name and an agent
-name (`"<base>-<agent>"`), so taboo provisions one workshop per distinct agent,
-reused across runs.
+`DryRunDerive`, `SourceDefinitions`, and `ValidateSourceDefinition` are the
+workshop-derivation facet the CLI's `validate`, `init`, and `list` commands lean
+on. `SourceDefinitions` returns the sorted names of a repo's named workshop
+definitions; `ValidateSourceDefinition` checks a selection names one of them;
+`DryRunDerive` validates that taboo could derive the agent's workshop from a
+source without launching anything or writing to the host filesystem.
 
 ## Errors
 
-Source: `result.go`, `orchestrator.go`, `registry.go`, `config.go`.
+| Sentinel | Meaning |
+|---|---|
+| `ErrNoResult` | No complete result block was found in the agent's output. |
+| `ErrInvalidResult` | A result block was found but its payload would not decode or validate. |
+| `ErrForkLoop` | A forked run was given more than one iteration. |
+| `ErrUnknownAgent` | An agent name matched no registered agent. |
+| `ErrConfigRead` | The config file could not be read. |
+| `ErrConfigParse` | The config document was malformed, carried an unknown field, or held multiple documents. |
+| `ErrUnknownWorkflow` | The requested workflow name matched no config entry. |
+| `ErrNoPrompt` | No prompt is configured anywhere in the precedence chain. |
+| `ErrNoAgent` | No agent is configured anywhere in the precedence chain. |
 
-| Sentinel | Source | Meaning |
-|---|---|---|
-| `ErrNoResult` | `result.go` | No complete result block was found in the agent's output. |
-| `ErrInvalidResult` | `result.go` | A result block was found but its payload would not decode or validate. |
-| `ErrForkLoop` | `orchestrator.go` | A forked run was given more than one iteration. |
-| `ErrUnknownAgent` | `registry.go` | An agent name matched no registered agent. |
-| `ErrConfigRead` | `config.go` | The config file could not be read. |
-| `ErrConfigParse` | `config.go` | The config document was malformed, carried an unknown field, or held multiple documents. |
-
-The exact messages are:
-
-```go
-var ErrNoResult      = errors.New("taboo: no result block found")
-var ErrInvalidResult = errors.New("taboo: result block invalid")
-var ErrForkLoop      = errors.New("taboo: fork cannot be combined with multiple iterations")
-var ErrUnknownAgent  = errors.New("taboo: unknown agent")
-var ErrConfigRead    = errors.New("taboo: cannot read config")
-var ErrConfigParse   = errors.New("taboo: invalid config")
-```
-
-These are wrapped with `%w`, so match them with `errors.Is`.
+All sentinels carry a `taboo:` message prefix and are wrapped with `%w`, so match
+them with `errors.Is`.
 
 ## See also
 
+- [Iterate until done](../guides/iterate-until-done.md) for the looped-run bridge.
+- [Run many prompts in parallel](../guides/fan-out-runs.md) for `Pool`.
+- [Get a typed result out of a run](../guides/typed-results.md) for `JSONResult[T]`.
 - [Agents reference](agents.md) for the per-agent contract.
-- [taboo.yaml reference](../reference/taboo-yaml.md) for the config schema.
+- [taboo.yaml reference](taboo-yaml.md) for the config schema.
 - [Isolation model](../explanation/isolation-model.md) for the workshop and
   commit-in-place design.

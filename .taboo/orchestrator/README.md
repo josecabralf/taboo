@@ -2,7 +2,8 @@
 
 `afk` runs taboo's AFK ("away from keyboard") agent loop: take a GitHub issue,
 have an agent implement it, push the branch, and open a draft PR. The
-orchestration is ordinary Go built on **`pkg/taboo`** — unit-testable and
+orchestration is ordinary Go built on **`pkg`** (imported as
+`github.com/josecabralf/taboo/pkg`, package `taboo`) — unit-testable and
 runnable locally — and GitHub Actions only does checkout, setup, and token
 plumbing. Only the `implement` flow exists today; it replaced an earlier
 bash-around-`taboo run` workflow (PR #65). See
@@ -11,7 +12,7 @@ bash-around-`taboo run` workflow (PR #65). See
 ## Layout
 
 - `main.go` — the `afk` binary; stdlib-`flag` dispatch and the `implement`
-  subcommand that wires the end-to-end flow. The run goes onto `pkg/taboo`
+  subcommand that wires the end-to-end flow. The run goes onto `pkg`
   through the bridge one-liner `taboo.RunWorkflow`, which discovers `taboo.yaml`,
   resolves the named workflow, and drives the run.
 - `internal/ghio` — GitHub/git I/O (`gh issue view`, `git push`, draft-PR
@@ -26,7 +27,7 @@ afk implement --issue N
 `implement` drives one issue end-to-end:
 
 1. **Fetch** the issue title/body via `gh` (`internal/ghio`).
-2. **Run** the `implement` workflow on `pkg/taboo`: the agent runs inside a
+2. **Run** the `implement` workflow on `pkg`: the agent runs inside a
    taboo-provisioned workshop and **commits in place** — it is git-**push-denied**.
 3. **Push** the run's branch to origin.
 4. **Open a draft PR** whose body is the agent's plan (read from `.taboo-plan.md`

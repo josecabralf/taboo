@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // scaffoldInputs are the resolved values init renders the .taboo/ scaffold from:
@@ -93,7 +93,7 @@ func renderMainGo(in scaffoldInputs) []byte {
 	if in.Template == "fanout" {
 		return []byte(`// Command main fans several agent runs out across a pool of workshops and
 // extracts a typed result from each. ` + "`taboo init --template fanout`" + ` scaffolds it
-// as a richer skeleton (see github.com/josecabralf/taboo/pkg/taboo). It reads the
+// as a richer skeleton (see github.com/josecabralf/taboo/pkg). It reads the
 // same taboo.yaml the CLI uses; grow the prompts slice and the Finding schema
 // into your real task.
 package main
@@ -102,8 +102,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // Finding is the typed result each run emits inside a <result>...</result>
@@ -120,12 +121,21 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	cfg, err := taboo.LoadConfig("taboo.yaml")
+	// Discover and load the same taboo.yaml the CLI uses, then resolve a Plan to
+	// get the shared runner Config (workshop name, base, agent, paths). The
+	// placeholder prompt only satisfies the resolver — fan-out feeds each run its
+	// own prompt below, so only plan.Config is used here.
+	path, found := taboo.FindConfig(".")
+	if !found {
+		return fmt.Errorf("no taboo.yaml found — run ` + "`taboo init`" + ` first")
+	}
+	cfg, err := taboo.LoadConfig(path)
 	if err != nil {
 		return err
 	}
-	if cfg.Profile == nil {
-		return fmt.Errorf("taboo.yaml needs an agent: set one and re-run")
+	plan, err := cfg.Plan(filepath.Dir(path), "", nil, taboo.PlanOverrides{Prompt: "fan-out placeholder"})
+	if err != nil {
+		return err
 	}
 
 	// Edit these into your real tasks; each runs on its own branch and worktree.
@@ -134,13 +144,7 @@ func run(ctx context.Context) error {
 		"Summarize this repository's test setup. Emit the summary as JSON inside a <result>...</result> block.",
 	}
 
-	pool := taboo.NewPool(taboo.Config{
-		Workshop:   taboo.WorkshopName(cfg.Workshop, cfg.Profile.Name()),
-		Base:       cfg.Base,
-		Agent:      cfg.Profile,
-		RepoPath:   cfg.Repo,
-		ProjectDir: ".",
-	}, 2, taboo.NewExecCommander())
+	pool := taboo.NewPool(plan.Config, 2, taboo.NewExecCommander())
 
 	reqs := make([]taboo.RunRequest, len(prompts))
 	for i, p := range prompts {
@@ -174,12 +178,11 @@ func run(ctx context.Context) error {
 }
 `)
 	}
-	return []byte(`// Command main runs the agent configured in taboo.yaml once, directly through
-// the taboo library. ` + "`taboo init --template single`" + ` scaffolds it as a skeleton
-// to grow into fan-out or structured output (see
-// github.com/josecabralf/taboo/pkg/taboo). It reads the same taboo.yaml the CLI
-// uses, so moving from ` + "`taboo run`" + ` to ` + "`go run .`" + ` reuses the same config
-// with no extra setup.
+	return []byte(`// Command main runs an agent once, directly through the taboo library.
+// ` + "`taboo init --template single`" + ` scaffolds it as a skeleton to grow into
+// fan-out or structured output (see github.com/josecabralf/taboo/pkg). It
+// discovers the same taboo.yaml the CLI uses (ascending from "."), so moving
+// from ` + "`taboo run`" + ` to ` + "`go run .`" + ` reuses the same config with no extra setup.
 package main
 
 import (
@@ -187,7 +190,7 @@ import (
 	"fmt"
 	"os"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 func main() {
@@ -198,31 +201,15 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	cfg, err := taboo.LoadConfig("taboo.yaml")
-	if err != nil {
-		return err
-	}
-	if cfg.Profile == nil {
-		return fmt.Errorf("taboo.yaml needs an agent: set one and re-run")
-	}
-
-	runner := taboo.New(taboo.Config{
-		Workshop:   taboo.WorkshopName(cfg.Workshop, cfg.Profile.Name()),
-		Base:       cfg.Base,
-		Agent:      cfg.Profile,
-		RepoPath:   cfg.Repo,
-		ProjectDir: ".",
+	// RunWorkflow discovers taboo.yaml from ".", resolves an ad-hoc run from the
+	// inline prompt (workflow ""), and drives it end-to-end. Edit the prompt, or
+	// pass a workflow name and nil overrides to run a configured workflow instead.
+	res, err := taboo.RunWorkflow(ctx, ".", "", nil, taboo.PlanOverrides{
+		Prompt: "Summarize what this repository does.",
+		Branch: "taboo/go-run",
+		Stdout: os.Stderr,
+		Stderr: os.Stderr,
 	}, taboo.NewExecCommander())
-
-	// Edit this prompt, or read one of your workflow prompt files under prompts/.
-	res, err := taboo.NewOrchestrator(runner).Run(ctx, taboo.OrchestratedRequest{
-		RunRequest: taboo.RunRequest{
-			Branch: "taboo/go-run",
-			Prompt: "Summarize what this repository does.",
-			Stdout: os.Stderr,
-			Stderr: os.Stderr,
-		},
-	})
 	if err != nil {
 		return err
 	}

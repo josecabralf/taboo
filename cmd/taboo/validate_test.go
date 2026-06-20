@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 // runValidate executes a freshly built validate command with the given env and

@@ -5,14 +5,16 @@ result per request.
 
 Use `Pool` when you have several independent prompts to run against the same
 repo: try three approaches to one bug on three branches, or run the same workflow
-over a list of files. The `Runner` runs one agent at a time; `Pool` fans the work
-out across concurrency slots.
+over a list of files. A single-call run handles one prompt at a time; `Pool` fans
+the work out across concurrency slots.
 
 ## Build a pool and run a batch
 
-`NewPool` (`pkg/taboo/pool.go`) takes the same `Config` as a `Runner`, a
-concurrency `limit`, and a `Commander`. `Run` takes a slice of `RunRequest` and
-returns a slice of `RunResult`.
+`NewPool` takes a `Config`, a concurrency `limit`, and a `Commander`. `Run` takes
+a slice of `RunRequest` and returns a slice of `RunResult`. The `Config` is the
+workshop runner input: build one directly, or take it from a resolved plan's
+`Config` field (`plan.Config`, from `(*ProjectConfig).Plan`) to reuse your
+`taboo.yaml` settings.
 
 ```go
 package main
@@ -22,14 +24,18 @@ import (
 	"fmt"
 	"log"
 
-	taboo "github.com/josecabralf/taboo/pkg/taboo"
+	taboo "github.com/josecabralf/taboo/pkg"
 )
 
 func main() {
+	agent, err := taboo.NewProfile("opencode", "openrouter/qwen/qwen3-coder-plus")
+	if err != nil {
+		log.Fatal(err)
+	}
 	cfg := taboo.Config{
 		Workshop:   "demo",
 		Base:       "ubuntu@24.04",
-		Agent:      taboo.OpenCode("openrouter/qwen/qwen3-coder-plus"),
+		Agent:      agent,
 		RepoPath:   "/home/me/repos/demo",
 		ProjectDir: "/home/me/repos/demo/.taboo",
 	}
@@ -109,8 +115,8 @@ Two rules hold while a batch is in flight:
   collide on the same slot directories and workshop names. Serialize `Run` calls
   per `Pool` instance.
 
-`Config.Agent` must be safe for concurrent use. The built-in profiles
-(`OpenCode`, `ClaudeCode`, `Copilot`) are immutable values and meet this.
+`Config.Agent` must be safe for concurrent use. The built-in profiles returned by
+`NewProfile` are immutable values and meet this.
 
 ## Choosing the limit
 
