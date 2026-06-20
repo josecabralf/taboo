@@ -265,7 +265,7 @@ func TestDeriveChecks_EmptyRepoEmitsNoChecksAndProbesNothing(t *testing.T) {
 	var probed []string
 	statFile := func(p string) bool {
 		probed = append(probed, p)
-		return true // a resolved workshop.yaml would "exist" — the trap the guard avoids.
+		return true // always "finds" a file: without the empty-repo guard deriveChecks would probe and emit a check; the asserts prove the guard fires first.
 	}
 
 	checks := deriveChecks(taboo.ProjectConfig{Agent: "opencode", Model: "x"}, "/proj", statFile)
@@ -330,14 +330,19 @@ func TestValidate_DeriveRejectsBadSource(t *testing.T) {
 // TestValidate_DeriveResolvesRepoRelativeToConfigNotCWD is the regression test
 // for the CWD-sensitivity bug. With a dot repo and the config in a .taboo
 // subdir, the source workshop.yaml lives at the project ROOT (the parent of
-// .taboo, where the dot repo resolves), not under the CWD. Running validate from
-// the config dir (.taboo) must still find that root workshop.yaml and derive
-// cleanly, exactly as a real run resolves it (resolveRepoPath in pkg). Before the
-// fix deriveChecks statted a bare relative "workshop.yaml" against the CWD, so
-// from .taboo it looked for .taboo/workshop.yaml (the gitignored derived output,
-// absent here) and reported source-definition + derive as errors.
+// .taboo, where the dot repo resolves), not under the process CWD. Validate must
+// still find that root workshop.yaml and derive cleanly, exactly as a real run
+// resolves it (resolveRepoPath in pkg).
+//
+// Before the fix deriveChecks statted a bare relative "workshop.yaml" via
+// os.Stat, which resolves against the *process* CWD — so it found the source
+// only when the test binary happened to run beside a workshop.yaml. We t.Chdir
+// into an empty dir to pin that down: pre-fix the bare-relative stat fails there
+// (red), post-fix the config-anchored absolute path still resolves (green),
+// regardless of where `go test` is invoked.
 func TestValidate_DeriveResolvesRepoRelativeToConfigNotCWD(t *testing.T) {
-	t.Parallel()
+	// Not parallel: t.Chdir pins the process CWD, which parallel tests must not share.
+	t.Chdir(t.TempDir())
 	root := t.TempDir()
 	// A dot repo means the project root is the parent of the .taboo config dir.
 	writeTabooProject(t, root,
@@ -349,8 +354,9 @@ func TestValidate_DeriveResolvesRepoRelativeToConfigNotCWD(t *testing.T) {
 		t.Fatalf("write source workshop.yaml: %v", err)
 	}
 	fake := &fakeCommander{stdoutFn: okHostStdout}
-	// Getwd returns the CONFIG dir (.taboo), the natural place to run from — the
-	// exact scenario that surfaced the bug. Pre-fix this is where it failed.
+	// env.Getwd returns the CONFIG dir (.taboo) — that drives config discovery, the
+	// natural place to run validate from. The pre-fix bug was in the separate source
+	// stat (process CWD, pinned empty above), not in discovery.
 	configDir := filepath.Join(root, ".taboo")
 	env := configEnv(t, fake, configDir, nil)
 
