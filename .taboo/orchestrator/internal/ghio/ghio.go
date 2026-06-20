@@ -64,11 +64,15 @@ type Client struct {
 // New returns a Client that drives gh/git through the given Exec.
 func New(exec Exec) *Client { return &Client{exec: exec} }
 
-// Issue holds the fields the orchestrator injects into the implement prompt.
+// Issue holds the issue fields the orchestrator passes to the agents — injected
+// into the implement prompt and marshaled into the plan prompt's candidate list.
+// The JSON tags let it both decode `gh`'s output and marshal cleanly into that
+// candidate list; it stays comparable (no slice fields) so tests can assert
+// equality directly.
 type Issue struct {
-	Number int
-	Title  string
-	Body   string
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
 }
 
 // IssueView fetches an issue's number, title and body via `gh issue view`.
@@ -82,6 +86,37 @@ func (c *Client) IssueView(ctx context.Context, number int) (Issue, error) {
 		return Issue{}, fmt.Errorf("parsing gh issue view output: %w", err)
 	}
 	return i, nil
+}
+
+// IssueState returns an issue's state ("OPEN" or "CLOSED") via `gh issue view`.
+// The plan subcommand uses it to tell whether a "Blocked by #N" dependency has
+// been resolved.
+func (c *Client) IssueState(ctx context.Context, number int) (string, error) {
+	out, err := c.exec.Run(ctx, "gh", "issue", "view", strconv.Itoa(number), "--json", "state")
+	if err != nil {
+		return "", err
+	}
+	var s struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(out), &s); err != nil {
+		return "", fmt.Errorf("parsing gh issue view output: %w", err)
+	}
+	return s.State, nil
+}
+
+// ListOpenIssuesByLabel returns the open issues carrying the given label via
+// `gh issue list`, parsing each issue's number, title and body.
+func (c *Client) ListOpenIssuesByLabel(ctx context.Context, label string) ([]Issue, error) {
+	out, err := c.exec.Run(ctx, "gh", "issue", "list", "--label", label, "--state", "open", "--limit", "100", "--json", "number,title,body")
+	if err != nil {
+		return nil, err
+	}
+	var issues []Issue
+	if err := json.Unmarshal([]byte(out), &issues); err != nil {
+		return nil, fmt.Errorf("parsing gh issue list output: %w", err)
+	}
+	return issues, nil
 }
 
 // PushBranch force-pushes the run's branch to origin. The branch name is

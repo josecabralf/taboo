@@ -57,6 +57,55 @@ func TestIssueViewBuildsArgvAndParsesIssue(t *testing.T) {
 	}
 }
 
+func TestIssueStateBuildsArgvAndParses(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: `{"state":"OPEN"}`}
+	c := New(fe)
+
+	got, err := c.IssueState(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("IssueState returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"issue", "view", "7", "--json", "state"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+
+	if got != "OPEN" {
+		t.Errorf("state = %q, want %q", got, "OPEN")
+	}
+}
+
+func TestListOpenIssuesByLabelBuildsArgvAndParses(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: `[{"number":1,"title":"a","body":"x"},{"number":2,"title":"b","body":"y"}]`}
+	c := New(fe)
+
+	got, err := c.ListOpenIssuesByLabel(context.Background(), "ready-for-agent")
+	if err != nil {
+		t.Fatalf("ListOpenIssuesByLabel returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"issue", "list", "--label", "ready-for-agent", "--state", "open", "--limit", "100", "--json", "number,title,body"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+
+	want := []Issue{{Number: 1, Title: "a", Body: "x"}, {Number: 2, Title: "b", Body: "y"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("issues = %+v, want %+v", got, want)
+	}
+}
+
 func TestPushBranchForcePushesToOrigin(t *testing.T) {
 	t.Parallel()
 
