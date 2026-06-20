@@ -15,17 +15,19 @@ CONTEXT.md states the stance directly: "The primary deliverable is a Go module
 
 The audience is engineers building agent pipelines in Go who want to express
 fan-out, review loops, and custom orchestration in code, not through flags. So the
-library carries the full surface, and `cmd/taboo/` is a thin consumer of it. The
-CLI does not own behaviour the library lacks; it wires flags and config onto the
-same `Runner`, `Orchestrator`, and `Pool` a Go caller would construct. This is why
-the reference docs point Go callers and CLI users at the same concepts, and why the
-library is documented as the contract while the CLI is documented as a convenience
-over it.
+library carries the full surface, and the `cli/` module is a thin consumer of it.
+The CLI does not own behaviour the library lacks. It wires flags and config onto
+the same config→run bridge a Go caller drives: `(*ProjectConfig).Plan` resolves a
+`Plan`, and `(*Plan).Run` executes it. The `Runner` and `Orchestrator` that drive
+the loop stay internal behind that bridge; only `Pool` stays public, for fan-out.
+This is why the reference docs point Go callers and CLI users at the same concepts,
+and why the library is documented as the contract while the CLI is documented as a
+convenience over it.
 
 ## The single side-effecting seam
 
 Everything taboo does to the outside world, every `workshop` and `git` invocation,
-goes through one interface. `Commander` in `pkg/taboo/commander.go` is
+goes through one interface. `Commander` in `pkg/internal/exec/commander.go` is
 `Run(ctx context.Context, c Cmd) error`, and `Cmd` is a single host-side process
 invocation. `NewExecCommander` returns the production implementation that shells
 out via `os/exec`.
@@ -47,7 +49,7 @@ per-run `stop` reprovisions the rootfs from the declared SDKs (see
 as a workshop SDK and bakes it in, rather than installing it at runtime where the
 next `stop` would wipe it.
 
-The agent abstraction is `AgentProfile` in `pkg/taboo/agent.go`. One profile value
+The agent abstraction is `AgentProfile` in `pkg/internal/agent/agent.go`. One profile value
 fully describes an agent: its name (which doubles as the SDK qualifier), how to
 build its exec invocation, the credential env keys it needs, and its session
 redirect. The command builder returns `AgentCommand{Argv []string; Stdin string}`
@@ -75,7 +77,7 @@ sets only the credential they hold.
 The CLI resolves an agent name and model to an `AgentProfile`, and enumerates the
 canonical names so it can suggest a correction on a typo. ADR 0005
 ([the declarative roster](../adr/0005-agent-registry-declarative-roster.md)) records
-that `pkg/taboo/registry.go` holds an explicit slice of registrations rather than
+that `pkg/internal/agent/registry.go` holds an explicit slice of registrations rather than
 self-registering agents through `init()`. The public surface is
 `NewProfile(name, model string) (AgentProfile, error)`, which returns the wrapped
 `ErrUnknownAgent` sentinel on a miss, and `AgentNames() []string`, sorted, for the
@@ -95,7 +97,7 @@ anything is constructed. ADR 0008 covers the hint and the fuzzy match.
 
 taboo extracts a typed result from an agent's stdout: a delimited
 `<result>{...}</result>` block whose JSON payload becomes a typed Go value. The seam
-is `ResultExtractor` in `pkg/taboo/result.go`, an interface built by the generic
+is `ResultExtractor` in `pkg/internal/result/result.go`, an interface built by the generic
 constructor `JSONResult[T any](opts ...Option) ResultExtractor`.
 
 ADR 0002

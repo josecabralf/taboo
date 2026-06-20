@@ -433,7 +433,7 @@ rendered workshop definition and is passed to every `workshop --project` call.
 ```go
 func NewProfile(name, model string) (AgentProfile, error)
 func AgentNames() []string
-func MatchModelFormat(agent, model string) (ok bool, expected string)
+func MatchModelFormat(agentName, model string) (ok bool, expected string)
 
 func DryRunDerive(cfg Config, source []byte) (projectNames []string, err error)
 func SourceDefinitions(repoPath string) ([]string, error)
