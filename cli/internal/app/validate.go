@@ -102,9 +102,13 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 	if includePromptFiles {
 		checks = append(checks, promptFileChecks(cfg, path, statFile)...)
 	}
-	checks = append(checks, repoValidateChecks(ctx, env, cfg)...)
+	// Resolve the repo directory once, config-anchored (never the process CWD), so
+	// the repo checks and the derive check both speak about the same directory a
+	// real run resolves to.
+	repoBase := resolveRepoBase(filepath.Dir(path), cfg.Repo)
+	checks = append(checks, repoValidateChecks(ctx, env, cfg, repoBase)...)
 	if includePromptFiles {
-		checks = append(checks, deriveChecks(cfg, statFile)...)
+		checks = append(checks, deriveChecks(cfg, repoBase, statFile)...)
 	}
 	return checks
 }
@@ -116,19 +120,23 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 // derivation in memory (no launch, no FS writes) and reports derive as a hard
 // error carrying the underlying message when the source is malformed, ok
 // otherwise.
-func deriveChecks(cfg taboo.ProjectConfig, statFile func(string) bool) []check {
+//
+// The repoBase argument is the config-anchored repo directory (see
+// resolveRepoBase), resolved against the discovered config's directory rather
+// than the process CWD. A relative repo value (including the dot repo of a
+// dogfooded .taboo config) therefore lands on the same tracked
+// <root>/workshop.yaml whether validate runs from the repo root or from .taboo.
+func deriveChecks(cfg taboo.ProjectConfig, repoBase string, statFile func(string) bool) []check {
 	if cfg.Repo == "" {
 		// Mirror doctor's workshopProjectChecks: without a configured repo there is
-		// no <repo>/workshop.yaml to derive from. Guarding here also avoids statting
-		// a bare relative "workshop.yaml" against the validate CWD (a false positive
-		// if a stray one happens to sit there). repoValidateChecks already flags the
-		// unset repo as a hard error, so don't double-report.
+		// no <repo>/workshop.yaml to derive from. repoValidateChecks already flags
+		// the unset repo as a hard error, so don't double-report.
 		return nil
 	}
-	src := filepath.Join(cfg.Repo, "workshop.yaml")
+	src := filepath.Join(repoBase, "workshop.yaml")
 	if !statFile(src) {
 		return []check{
-			fail("source-definition", "no workshop.yaml found in "+cfg.Repo+": taboo derives the "+
+			fail("source-definition", "no workshop.yaml found in "+repoBase+": taboo derives the "+
 				"agent's workshop from the project's workshop.yaml; add a workshop.yaml, then re-run"),
 			fail("derive", "skipped: no source workshop.yaml to derive from (see source-definition above)"),
 		}
@@ -140,7 +148,7 @@ func deriveChecks(cfg taboo.ProjectConfig, statFile func(string) bool) []check {
 	runnerCfg := taboo.Config{
 		Workshop: workshopName(cfg.Workshop, profile.Name()),
 		Agent:    profile,
-		RepoPath: cfg.Repo,
+		RepoPath: repoBase,
 	}
 	// src comes from the configured repo path, not untrusted input.
 	source, err := os.ReadFile(src) // #nosec G304
@@ -154,6 +162,33 @@ func deriveChecks(cfg taboo.ProjectConfig, statFile func(string) bool) []check {
 		ok("source-definition", "resolves to "+src),
 		ok("derive", "agent workshop derives cleanly from "+src),
 	}
+}
+
+// resolveRepoBase resolves the project repo directory the same way a real run
+// does, anchored to the config's directory rather than the process CWD. It
+// mirrors the runtime resolver pkg/internal/config.resolveRepoPath (which the CLI
+// cannot import because it is internal). An absolute repo value stands on its
+// own; a relative one anchors to configDir; a dot repo in a .taboo config
+// resolves to the parent (the repo root). The result is best-effort absolute,
+// falling back to the joined path when filepath.Abs fails so the caller still has
+// a usable path.
+func resolveRepoBase(configDir, repo string) string {
+	base := configDir
+	switch {
+	case filepath.Clean(repo) != ".":
+		// An absolute repo value stands on its own; a relative one anchors to the
+		// config dir (filepath.Join would otherwise nest an absolute path under it).
+		base = repo
+		if !filepath.IsAbs(repo) {
+			base = filepath.Join(configDir, repo)
+		}
+	case filepath.Base(configDir) == ".taboo":
+		base = filepath.Dir(configDir)
+	}
+	if abs, err := filepath.Abs(base); err == nil {
+		return abs
+	}
+	return base
 }
 
 // decodeValidate strict-decodes data as a single taboo.yaml document into the
@@ -349,10 +384,13 @@ func promptFileChecks(cfg taboo.ProjectConfig, configPath string, statFile func(
 
 // repoValidateChecks confirms the configured repo is usable: it must be set, then
 // (reusing doctor's leaf checks) be on persistent storage (not tmpfs) and be a git
-// work tree. An unset repo is a hard failure — validate runs against a real repo.
-func repoValidateChecks(ctx context.Context, env Env, cfg taboo.ProjectConfig) []check {
+// work tree. The leaf checks run against repoBase, the config-anchored absolute
+// repo path deriveChecks and a real run also resolve to, not the raw configured
+// value, so a dot repo is judged where it actually lives rather than against the
+// process CWD. An unset repo is a hard failure: validate runs against a real repo.
+func repoValidateChecks(ctx context.Context, env Env, cfg taboo.ProjectConfig, repoBase string) []check {
 	if cfg.Repo == "" {
 		return []check{fail("repo", "no repo configured (set top-level repo:)")}
 	}
-	return []check{repoLocationCheck(cfg.Repo), repoGitCheck(ctx, env, cfg.Repo)}
+	return []check{repoLocationCheck(repoBase), repoGitCheck(ctx, env, repoBase)}
 }
