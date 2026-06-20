@@ -28,3 +28,6 @@ workflows:
   plan:
     prompt-file: prompts/plan.md
     model: claude-opus-4-8
+  write-pr:
+    prompt-file: prompts/write-pr.md
+    model: claude-opus-4-8

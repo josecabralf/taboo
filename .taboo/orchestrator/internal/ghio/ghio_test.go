@@ -269,3 +269,149 @@ func TestAddLabelBuildsArgv(t *testing.T) {
 		t.Errorf("args = %q, want %q", fe.args, wantArgs)
 	}
 }
+
+func TestCurrentBranchBuildsArgvAndTrims(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: "issue-82-afk-write-pr\n"}
+	c := New(fe)
+
+	got, err := c.CurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentBranch returned error: %v", err)
+	}
+
+	if fe.name != "git" {
+		t.Errorf("ran %q, want %q", fe.name, "git")
+	}
+	wantArgs := []string{"rev-parse", "--abbrev-ref", "HEAD"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+
+	want := "issue-82-afk-write-pr"
+	if got != want {
+		t.Errorf("branch = %q, want %q", got, want)
+	}
+}
+
+func TestBranchDiffBuildsArgvAndReturnsDiff(t *testing.T) {
+	t.Parallel()
+
+	diff := "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n"
+	fe := &fakeExec{stdout: diff}
+	c := New(fe)
+
+	got, err := c.BranchDiff(context.Background(), "issue-82-afk-write-pr")
+	if err != nil {
+		t.Fatalf("BranchDiff returned error: %v", err)
+	}
+
+	if fe.name != "git" {
+		t.Errorf("ran %q, want %q", fe.name, "git")
+	}
+	wantArgs := []string{"diff", "main...issue-82-afk-write-pr"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+	if got != diff {
+		t.Errorf("diff = %q, want %q", got, diff)
+	}
+}
+
+func TestPRForBranchReturnsExistingPR(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: `[{"number":7,"url":"https://github.com/o/r/pull/7"}]`}
+	c := New(fe)
+
+	got, found, err := c.PRForBranch(context.Background(), "issue-82-afk-write-pr")
+	if err != nil {
+		t.Fatalf("PRForBranch returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"pr", "list", "--head", "issue-82-afk-write-pr", "--state", "open", "--limit", "1", "--json", "number,url"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+
+	if !found {
+		t.Errorf("found = false, want true")
+	}
+	want := PR{Number: 7, URL: "https://github.com/o/r/pull/7"}
+	if got != want {
+		t.Errorf("pr = %+v, want %+v", got, want)
+	}
+}
+
+func TestPRForBranchReturnsFalseWhenNone(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: "[]"}
+	c := New(fe)
+
+	got, found, err := c.PRForBranch(context.Background(), "issue-82-afk-write-pr")
+	if err != nil {
+		t.Fatalf("PRForBranch returned error: %v", err)
+	}
+
+	if found {
+		t.Errorf("found = true, want false")
+	}
+	if got != (PR{}) {
+		t.Errorf("pr = %+v, want zero value", got)
+	}
+}
+
+func TestCreatePRBuildsArgvAndReturnsURL(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: "https://github.com/o/r/pull/9\n"}
+	c := New(fe)
+
+	got, err := c.CreatePR(context.Background(), "issue-82-afk-write-pr", "Add write-pr", "body line")
+	if err != nil {
+		t.Fatalf("CreatePR returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{
+		"pr", "create",
+		"--base", "main",
+		"--head", "issue-82-afk-write-pr",
+		"--title", "Add write-pr",
+		"--body", "body line",
+	}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+
+	want := "https://github.com/o/r/pull/9"
+	if got != want {
+		t.Errorf("url = %q, want %q", got, want)
+	}
+}
+
+func TestEditPRBuildsArgv(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.EditPR(context.Background(), "https://github.com/o/r/pull/7", "New title", "New body"); err != nil {
+		t.Fatalf("EditPR returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"pr", "edit", "https://github.com/o/r/pull/7", "--title", "New title", "--body", "New body"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
