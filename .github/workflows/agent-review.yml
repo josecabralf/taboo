@@ -60,7 +60,9 @@ jobs:
       - name: Build taboo
         run: |
           set -euo pipefail
-          go build -o "$RUNNER_TEMP/taboo" ./cmd/taboo
+          # The CLI is its own module now (github.com/josecabralf/taboo/cli) with
+          # no root go.mod, so it must be built from inside the module directory.
+          ( cd cli && go build -o "$RUNNER_TEMP/taboo" . )
 
       - name: Build vars file
         run: |

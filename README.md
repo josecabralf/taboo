@@ -16,7 +16,7 @@ the host owns integration. The library is the primary contract; a thin CLI
 ## Prerequisites
 
 - The `workshop` snap. The CLI's `doctor` and `run` enforce a floor of
-  `minWorkshopVersion = "0.9.1"` (`cmd/taboo/version.go`). The library has no
+  `minWorkshopVersion = "0.9.1"` (`cli/internal/app/version.go`). The library has no
   compile-time dependency on workshop; it shells out to the `workshop` binary at
   runtime. Install with `sudo snap install workshop`.
 - LXD, installed and initialized. Install with `sudo snap install lxd`.
@@ -43,10 +43,13 @@ go get github.com/josecabralf/taboo/pkg
 CLI (binary `taboo`):
 
 ```sh
-go install github.com/josecabralf/taboo/cmd/taboo@latest
+go install github.com/josecabralf/taboo/cli@latest
 ```
 
-The library and the CLI are one Go module, `github.com/josecabralf/taboo`.
+The library and the CLI are separate Go modules in this monorepo —
+`github.com/josecabralf/taboo/pkg` (yaml.v3-only) and
+`github.com/josecabralf/taboo/cli` — so depending on the library does not pull in
+the CLI's cobra/huh stack.
 
 ## Quickstart (library)
 
@@ -154,7 +157,7 @@ by default, or via `workshop exec` when `InWorkshop` is true. See
 
 ## CLI
 
-The `taboo` binary (`cmd/taboo/main.go`) registers these subcommands. Full flag
+The `taboo` binary (`cli/internal/app/main.go`) registers these subcommands. Full flag
 detail is in [docs/reference/cli.md](docs/reference/cli.md); the config file is
 documented in [docs/reference/taboo-yaml.md](docs/reference/taboo-yaml.md).
 

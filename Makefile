@@ -1,54 +1,54 @@
-.PHONY: help setup build test test-race test-integration fmt lint vet tidy orchestrator
+.PHONY: help setup build test test-race test-integration fmt lint vet tidy
 
 .DEFAULT_GOAL := help
 
-# The afk orchestrator is a nested Go module under the dot-directory .taboo/, so
-# the root ./... never sees it (see the orchestrator target).
-ORCHESTRATOR_DIR := .taboo/orchestrator
+# taboo is a monorepo of three Go modules with no root go.mod and no go.work:
+#   pkg/                 the yaml.v3-only library (github.com/josecabralf/taboo/pkg)
+#   cli/                 the cobra/huh CLI     (github.com/josecabralf/taboo/cli)
+#   .taboo/orchestrator/ the afk demo consumer (module afk)
+# Each module owns its own Makefile. These root targets fan out across all three
+# so `workshop run -- make <target>` and CI gate every module in one shot. The
+# workshop runs `make "$@"` at the repo root (see workshop.yaml).
+MODULES := pkg cli .taboo/orchestrator
+
+# fanout runs the current target ($@) in every module, stopping at the first
+# failure. The targets below reuse it via $(fanout), so each target name lives in
+# exactly one place and the echoed label can never drift from the target.
+define fanout
+@for m in $(MODULES); do echo "==> $@ $$m"; $(MAKE) -C $$m $@ || exit $$?; done
+endef
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile | awk -F ':.*## ' '{printf "  \033[1;36m%-16s\033[0m %s\n", $$1, $$2}'
 
-setup: ## Download module dependencies
-	go mod download
+setup: ## Download dependencies in every module
+	$(fanout)
 
-build: ## Build all packages
-	go build ./...
+build: ## Build every module
+	$(fanout)
 
-# Unit tests only. The integration suite is gated behind the `integration`
-# build tag (see test-integration) and is deliberately excluded here so it
-# never runs inside the dev workshop — a workshop within a workshop is
-# problematic. CI runs this target via `workshop run make test`.
-test: ## Run unit tests
-	go test ./... -count=1 -cover
+test: ## Unit-test every module
+	$(fanout)
 
-# Unit tests under the race detector. Requires cgo + a C compiler (the workshop's
-# setup-base hook installs gcc); CGO_ENABLED is forced on here so the rest of the
-# build stays pure-Go. Slower than `test`, so it's a separate opt-in target.
-test-race: ## Run unit tests under the race detector
-	CGO_ENABLED=1 go test -race ./... -count=1
+# Race detector needs cgo; only the library and CLI carry concurrency worth
+# racing (the afk demo is a thin orchestrator), so it runs on pkg and cli.
+test-race: ## Race-test pkg and cli
+	@$(MAKE) -C pkg test-race
+	@$(MAKE) -C cli test-race
 
-# Host-only: exercises the real `workshop` CLI and LXD. Not wired into the dev
-# workshop or CI; run it directly on a machine with workshop + LXD installed.
-test-integration: ## Run integration tests (requires workshop + LXD)
-	go test -tags integration ./pkg/ -count=1 -v
+# Host-only: the integration suite lives in the library module and needs the real
+# workshop CLI + LXD. Not wired into the dev workshop or CI.
+test-integration: ## Run library integration tests (requires workshop + LXD)
+	@$(MAKE) -C pkg test-integration
 
-fmt: ## Format code with golangci-lint
-	golangci-lint fmt
+fmt: ## Format every module
+	$(fanout)
 
-lint: ## Run golangci-lint
-	golangci-lint run ./...
+lint: ## Lint every module
+	$(fanout)
 
-vet: ## Run go vet
-	go vet ./...
+vet: ## Vet every module
+	$(fanout)
 
-tidy: ## Tidy Go module dependencies
-	go mod tidy
-
-# The root ./... skips dot-directories, so the nested afk module is invisible to
-# build/test above. Build, vet and test it explicitly so its agent-loop code is
-# gated on every PR. Each line runs in its own shell, so the cd is repeated.
-orchestrator: ## Build, vet and test the nested afk orchestrator module
-	cd $(ORCHESTRATOR_DIR) && go build ./...
-	cd $(ORCHESTRATOR_DIR) && go vet ./...
-	cd $(ORCHESTRATOR_DIR) && go test ./... -count=1 -cover
+tidy: ## Tidy every module
+	$(fanout)

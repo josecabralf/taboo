@@ -3,15 +3,20 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    # Subdir modules are served by subdir-prefixed tags only (pkg/vX.Y.Z,
+    # cli/vX.Y.Z); an unprefixed v* tag does not resolve for `go get`. See
+    # docs/RELEASING.md.
+    tags: ["pkg/v*", "cli/v*"]
   pull_request:
     branches: [main]
 
 # A workshop launch is expensive (installs the go SDK + golangci-lint), so the
 # whole pipeline runs in a single job: launch once, then drive each make target
-# through `workshop run`. The integration suite is intentionally not run here —
-# it needs its own workshop + LXD, and nesting a workshop inside the CI workshop
-# is problematic (see the Makefile's test-integration target).
+# through `workshop run`. Each root make target fans out across all three modules
+# (pkg, cli, afk), so a single run gates every module. The integration suite is
+# intentionally not run here — it needs its own workshop + LXD, and nesting a
+# workshop inside the CI workshop is problematic (see the Makefile's
+# test-integration target).
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -30,6 +35,3 @@ jobs:
 
       - name: Build
         run: workshop run -- make build
-
-      - name: Orchestrator module (build/vet/test)
-        run: workshop run -- make orchestrator
