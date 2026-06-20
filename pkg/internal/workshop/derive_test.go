@@ -12,10 +12,13 @@ import (
 )
 
 // findRepoWorkshopYAML locates and reads taboo's OWN workshop.yaml at the repo
-// root. The test CWD is <repo>/pkg, so it walks up from the working dir
-// until it finds a directory holding go.mod (the repo root marker) and reads the
-// workshop.yaml there; it falls back to ../../workshop.yaml. The dogfood must
-// actually run, so a genuine miss is a t.Fatal, never a silent skip.
+// root. The test CWD is <repo>/pkg/internal/workshop, so it walks up from the
+// working dir until it finds the directory that actually holds workshop.yaml
+// (the repo root marker) and reads it there; it falls back to ../../../
+// workshop.yaml. The marker is workshop.yaml rather than go.mod because the
+// three-module split puts a go.mod in pkg/ too, so go.mod no longer uniquely
+// identifies the repo root. The dogfood must actually run, so a genuine miss is
+// a t.Fatal, never a silent skip.
 func findRepoWorkshopYAML(t *testing.T) []byte {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -23,22 +26,18 @@ func findRepoWorkshopYAML(t *testing.T) []byte {
 		t.Fatalf("getwd: %v", err)
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			data, err := os.ReadFile(filepath.Join(dir, "workshop.yaml"))
-			if err != nil {
-				t.Fatalf("found repo root %q but could not read its workshop.yaml: %v", dir, err)
-			}
+		if data, err := os.ReadFile(filepath.Join(dir, "workshop.yaml")); err == nil {
 			return data
 		}
 		parent := filepath.Dir(dir)
-		if parent == dir { // reached filesystem root without a go.mod
+		if parent == dir { // reached filesystem root without a workshop.yaml
 			break
 		}
 		dir = parent
 	}
-	data, err := os.ReadFile(filepath.Join("..", "..", "workshop.yaml"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "workshop.yaml"))
 	if err != nil {
-		t.Fatalf("could not locate taboo's own workshop.yaml (walked up from CWD for go.mod, then ../../workshop.yaml): %v", err)
+		t.Fatalf("could not locate taboo's own workshop.yaml (walked up from CWD for workshop.yaml, then ../../../workshop.yaml): %v", err)
 	}
 	return data
 }

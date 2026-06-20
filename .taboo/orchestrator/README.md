@@ -38,8 +38,8 @@ All GitHub I/O is in Go; none of it is workflow bash.
 
 ## Nested module
 
-The module is `module afk` with `replace github.com/josecabralf/taboo => ../../`
-pinning it to the in-tree taboo. It is nested under the dot-directory `.taboo/`
+The module is `module afk` with `replace github.com/josecabralf/taboo/pkg => ../../pkg`
+pinning it to the in-tree taboo library module. It is nested under the dot-directory `.taboo/`
 on purpose: Go tooling ignores directories beginning with `.`, so packages here
 are invisible to the root module's `./...` (and therefore to `make build/test`).
 Nesting isolates the example as its own module while `replace` keeps it building

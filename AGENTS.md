@@ -1,10 +1,12 @@
 # taboo
 
-Go library + thin CLI (`github.com/josecabralf/taboo`, Go 1.26) that runs AI
-coding agents inside Canonical **workshop** (LXD) sandboxes and lands their
-commits on a host git branch. The library (`pkg`, package `taboo`, imported as
-`github.com/josecabralf/taboo/pkg`) is the primary contract; `cmd/taboo` is a
-thin consumer of it.
+Go library + thin CLI (Go 1.26) that runs AI coding agents inside Canonical
+**workshop** (LXD) sandboxes and lands their commits on a host git branch. This
+is a monorepo of three modules with no root `go.mod` and no `go.work`: the
+library `github.com/josecabralf/taboo/pkg` (`pkg/`, package `taboo`, yaml.v3-only)
+is the primary contract; the CLI `github.com/josecabralf/taboo/cli` (`cli/`) and
+the afk demo (`.taboo/orchestrator/`, module `afk`) are thin consumers wired to
+the library via `replace`.
 
 ## Layout
 
@@ -18,25 +20,30 @@ thin consumer of it.
 - `pkg/internal/workshop/sdk/<name>/` — agent SDKs, embedded via `//go:embed sdk`
   and seeded into the managed repo at runtime.
 - `pkg/internal/config/` — `taboo.yaml` parsing and the bridge/profile resolution.
-- `cmd/taboo/` — the `taboo` CLI (cobra + huh): `init`, `run`, `validate`,
-  `doctor`, `list`, `clean`.
+- `cli/` — the `taboo` CLI module (cobra + huh). A thin `cli/main.go` delegates
+  to `cli/internal/app/` (`init`, `run`, `validate`, `doctor`, `list`, `clean`),
+  which imports only the `pkg` facade.
+- `.taboo/orchestrator/` — the afk demo (module `afk`), the adopter-layout
+  reference consumer of the library.
 
 ## Commands
 
-Run from the repo root. The unit gate runs directly:
+Run from the repo root. Each target fans out across all three modules (pkg, cli,
+afk); the unit gate runs directly:
 
 ```sh
-make build   # go build ./...
-make vet     # go vet ./...
-make test    # go test ./... -count=1 -cover   (also compiles + runs the godoc examples)
+make build   # go build ./...   in every module
+make vet     # go vet ./...     in every module
+make test    # go test ./... -count=1 -cover   in every module (also runs the godoc examples)
 ```
 
 - **Lint through the workshop, not the host**: `workshop run -- make lint`. Raw
   `make lint` on the host emits stale-cache warnings and can report false
   results; the workshop has a clean, isolated cache. Needs a launched workshop
   (`workshop launch taboo`).
-- `make test-integration` (`go test -tags integration ./pkg/internal/run/`)
-  drives real `workshop` + LXD; host-only, never in the dev workshop or CI.
+- `make test-integration` (delegates to `pkg`: `go test -tags integration ./...`,
+  the suite in `pkg/internal/run/`) drives real `workshop` + LXD; host-only,
+  never in the dev workshop or CI.
 - `make test-race` forces `CGO_ENABLED=1` (needs a C compiler).
 
 ## Conventions

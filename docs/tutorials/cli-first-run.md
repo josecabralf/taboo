@@ -1,15 +1,15 @@
 # Run your first workflow with the CLI
 
-By the end of this tutorial you will have installed the `taboo` binary, scaffolded a taboo project into a git repository, set one credential, checked that your host is ready, and run the seeded `fix` workflow. The `taboo` CLI wraps the library: `init` scaffolds the project (`cmd/taboo/init.go`, `cmd/taboo/scaffold.go`), `doctor` checks the host (`cmd/taboo/doctor.go`), and `run` drives a workflow end-to-end on a fresh branch (`cmd/taboo/run.go`).
+By the end of this tutorial you will have installed the `taboo` binary, scaffolded a taboo project into a git repository, set one credential, checked that your host is ready, and run the seeded `fix` workflow. The `taboo` CLI wraps the library: `init` scaffolds the project (`cli/internal/app/init.go`, `cli/internal/app/scaffold.go`), `doctor` checks the host (`cli/internal/app/doctor.go`), and `run` drives a workflow end-to-end on a fresh branch (`cli/internal/app/run.go`).
 
 This tutorial uses the `opencode` agent. For why runs are isolated and commit in place, read [the isolation model](../explanation/isolation-model.md) afterwards.
 
 ## Install the CLI
 
-taboo is one Go module that holds both the library and the CLI. Install the CLI binary, named `taboo`:
+taboo's CLI is its own Go module (`github.com/josecabralf/taboo/cli`), separate from the yaml.v3-only library at `github.com/josecabralf/taboo/pkg`. Install the CLI binary, named `taboo`:
 
 ```sh
-go install github.com/josecabralf/taboo/cmd/taboo@latest
+go install github.com/josecabralf/taboo/cli@latest
 ```
 
 Confirm it is on your `PATH`:
