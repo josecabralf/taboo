@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -15,8 +16,11 @@ import (
 
 // Exec runs a command and returns its stdout. It is the single side-effecting
 // seam in ghio: production shells out via os/exec; tests substitute a fake.
+// RunInput is the same, but feeds stdin to the command — used to POST a JSON
+// request body to gh api.
 type Exec interface {
 	Run(ctx context.Context, name string, args ...string) (string, error)
+	RunInput(ctx context.Context, stdin, name string, args ...string) (string, error)
 }
 
 // execRunner is the production Exec: it shells out via os/exec.
@@ -27,9 +31,21 @@ type execRunner struct{}
 func NewExec() Exec { return execRunner{} }
 
 func (execRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	return run(ctx, nil, name, args...)
+}
+
+func (execRunner) RunInput(ctx context.Context, stdin, name string, args ...string) (string, error) {
+	return run(ctx, strings.NewReader(stdin), name, args...)
+}
+
+// run shells out, optionally feeding stdin, and returns stdout. A non-nil stdin
+// is wired to the child's standard input.
+func run(ctx context.Context, stdin io.Reader, name string, args ...string) (string, error) {
 	// The command and args originate from the orchestrator, not end users; gh and
 	// git inherit this process's environment by default.
-	out, err := exec.CommandContext(ctx, name, args...).Output() // #nosec G204
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204
+	cmd.Stdin = stdin
+	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -87,6 +103,56 @@ func (c *Client) CreateDraftPR(ctx context.Context, branch, title, body string) 
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// PRDiff returns the PR's unified diff via `gh pr diff`. It is the input the
+// review workflow reasons over and the source of the addressable positions a
+// review comment may target.
+func (c *Client) PRDiff(ctx context.Context, number int) (string, error) {
+	return c.exec.Run(ctx, "gh", "pr", "diff", strconv.Itoa(number))
+}
+
+// ReviewComment is one inline review comment, anchored to a path and new-side
+// line of the PR diff. Callers are responsible for ensuring the position is
+// addressable (see internal/diffmap); GitHub rejects out-of-diff positions.
+type ReviewComment struct {
+	Path string
+	Line int
+	Body string
+}
+
+// PostReview posts exactly one PR review via `gh api`: a single COMMENT review
+// whose top-level body is summary and whose inline comments are anchored to the
+// new (RIGHT) side of the diff. The JSON request body is fed on stdin. The
+// commit_id field is omitted, so GitHub anchors the review to the PR's latest
+// commit — the same commit `gh pr diff` rendered. Callers must avoid posting an
+// empty review (no body and no comments), which GitHub rejects with a 422.
+func (c *Client) PostReview(ctx context.Context, number int, summary string, comments []ReviewComment) error {
+	type apiComment struct {
+		Path string `json:"path"`
+		Line int    `json:"line"`
+		Side string `json:"side"`
+		Body string `json:"body"`
+	}
+	// A non-nil slice serializes as [] rather than null; GitHub rejects null.
+	apiComments := make([]apiComment, 0, len(comments))
+	for _, c := range comments {
+		apiComments = append(apiComments, apiComment{Path: c.Path, Line: c.Line, Side: "RIGHT", Body: c.Body})
+	}
+	payload := struct {
+		Event    string       `json:"event"`
+		Body     string       `json:"body"`
+		Comments []apiComment `json:"comments"`
+	}{Event: "COMMENT", Body: summary, Comments: apiComments}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal review payload: %w", err)
+	}
+
+	path := fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/reviews", number)
+	_, err = c.exec.RunInput(ctx, string(body), "gh", "api", "--method", "POST", path, "--input", "-")
+	return err
 }
 
 // AddLabel adds a label to a PR (or issue) referenced by URL or number.

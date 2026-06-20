@@ -1,27 +1,33 @@
 # afk — the taboo orchestrator
 
 `afk` runs taboo's AFK ("away from keyboard") agent loop: take a GitHub issue,
-have an agent implement it, push the branch, and open a draft PR. The
-orchestration is ordinary Go built on **`pkg`** (imported as
-`github.com/josecabralf/taboo/pkg`, package `taboo`) — unit-testable and
-runnable locally — and GitHub Actions only does checkout, setup, and token
-plumbing. Only the `implement` flow exists today; it replaced an earlier
-bash-around-`taboo run` workflow (PR #65). See
+have an agent implement it, push the branch, and open a draft PR; then, when the
+PR is labelled, review it. The orchestration is ordinary Go built on **`pkg`**
+(imported as `github.com/josecabralf/taboo/pkg`, package `taboo`) —
+unit-testable and runnable locally — and GitHub Actions only does checkout,
+setup, and token plumbing. Both the `implement` and `review` flows replaced
+earlier bash-around-`taboo run` workflows (PRs #65, #79). See
 [ADR 0010](../../docs/adr/0010-go-orchestrator-on-pkg-taboo.md).
 
 ## Layout
 
 - `main.go` — the `afk` binary; stdlib-`flag` dispatch and the `implement`
-  subcommand that wires the end-to-end flow. The run goes onto `pkg`
+  subcommand that wires the implement flow end-to-end. The run goes onto `pkg`
   through the bridge one-liner `taboo.RunWorkflow`, which discovers `taboo.yaml`,
   resolves the named workflow, and drives the run.
+- `review.go` — the `review` subcommand wiring the review flow end-to-end,
+  through the typed bridge `taboo.RunWorkflowAs[reviewResult]`.
 - `internal/ghio` — GitHub/git I/O (`gh issue view`, `git push`, draft-PR
-  create, label add) behind a fakeable single-method `Exec` seam.
+  create, label add, `gh pr diff`, and `gh api` PR-review POST) behind a fakeable
+  `Exec` seam.
+- `internal/diffmap` — parses a unified diff into the addressable `path:line`
+  positions a review comment may target (the new-side added/context lines).
 
 ## Usage
 
 ```
 afk implement --issue N
+afk review --pr N
 ```
 
 `implement` drives one issue end-to-end:
@@ -33,6 +39,17 @@ afk implement --issue N
 4. **Open a draft PR** whose body is the agent's plan (read from `.taboo-plan.md`
    in the worktree), prefixed with `Closes #N`.
 5. **Label** the PR `agent:review`, which triggers the review workflow.
+
+`review` reviews one PR and posts exactly one review:
+
+1. **Fetch** the PR's unified diff via `gh pr diff` (`internal/ghio`).
+2. **Run** the `review` workflow on `pkg`, asking for a `<result>` block of
+   `{summary, comments:[{path, line, body}]}`, decoded in-loop by the typed
+   bridge `taboo.RunWorkflowAs[reviewResult]`.
+3. **Drop** any inline comment whose `path:line` is not addressable in the diff
+   (`internal/diffmap`), logging a notice for each — never an error.
+4. **Post** one PR review via `gh api`; an empty review (no summary, no in-diff
+   comments) is skipped rather than posted, so GitHub never 422s.
 
 All GitHub I/O is in Go; none of it is workflow bash.
 

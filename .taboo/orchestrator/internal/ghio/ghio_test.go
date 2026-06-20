@@ -2,7 +2,9 @@ package ghio
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -12,6 +14,7 @@ import (
 type fakeExec struct {
 	name   string
 	args   []string
+	stdin  string
 	stdout string
 	err    error
 }
@@ -19,6 +22,13 @@ type fakeExec struct {
 func (f *fakeExec) Run(_ context.Context, name string, args ...string) (string, error) {
 	f.name = name
 	f.args = args
+	return f.stdout, f.err
+}
+
+func (f *fakeExec) RunInput(_ context.Context, stdin, name string, args ...string) (string, error) {
+	f.name = name
+	f.args = args
+	f.stdin = stdin
 	return f.stdout, f.err
 }
 
@@ -94,6 +104,101 @@ func TestCreateDraftPRBuildsArgvAndReturnsURL(t *testing.T) {
 	want := "https://github.com/o/r/pull/42"
 	if got != want {
 		t.Errorf("url = %q, want %q", got, want)
+	}
+}
+
+func TestPRDiffBuildsArgvAndReturnsDiff(t *testing.T) {
+	t.Parallel()
+
+	diff := "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n"
+	fe := &fakeExec{stdout: diff}
+	c := New(fe)
+
+	got, err := c.PRDiff(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("PRDiff returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"pr", "diff", "42"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+	if got != diff {
+		t.Errorf("diff = %q, want %q", got, diff)
+	}
+}
+
+func TestPostReviewBuildsArgvAndJSONPayload(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	comments := []ReviewComment{
+		{Path: "foo.go", Line: 12, Body: "nit: rename this"},
+		{Path: "bar.go", Line: 3, Body: "off by one"},
+	}
+	if err := c.PostReview(context.Background(), 42, "looks good overall", comments); err != nil {
+		t.Fatalf("PostReview returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{
+		"api", "--method", "POST",
+		"repos/{owner}/{repo}/pulls/42/reviews",
+		"--input", "-",
+	}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+
+	// The body is JSON on stdin: one COMMENT review carrying the summary as the
+	// top-level body and each comment anchored to the diff's RIGHT side.
+	var got struct {
+		Event    string `json:"event"`
+		Body     string `json:"body"`
+		Comments []struct {
+			Path string `json:"path"`
+			Line int    `json:"line"`
+			Side string `json:"side"`
+			Body string `json:"body"`
+		} `json:"comments"`
+	}
+	if err := json.Unmarshal([]byte(fe.stdin), &got); err != nil {
+		t.Fatalf("stdin is not valid JSON: %v\n%s", err, fe.stdin)
+	}
+	if got.Event != "COMMENT" {
+		t.Errorf("event = %q, want %q", got.Event, "COMMENT")
+	}
+	if got.Body != "looks good overall" {
+		t.Errorf("body = %q, want the summary", got.Body)
+	}
+	if len(got.Comments) != 2 {
+		t.Fatalf("comments = %d, want 2", len(got.Comments))
+	}
+	if c0 := got.Comments[0]; c0.Path != "foo.go" || c0.Line != 12 || c0.Side != "RIGHT" || c0.Body != "nit: rename this" {
+		t.Errorf("comment[0] = %+v, want foo.go:12 RIGHT", c0)
+	}
+}
+
+func TestPostReviewEmptyCommentsEmitsJSONArrayNotNull(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.PostReview(context.Background(), 1, "bodied review, no inline comments", nil); err != nil {
+		t.Fatalf("PostReview returned error: %v", err)
+	}
+
+	// GitHub rejects "comments": null; an empty review must serialize as [].
+	if !strings.Contains(fe.stdin, `"comments":[]`) {
+		t.Errorf("stdin = %s, want an empty comments array, not null", fe.stdin)
 	}
 }
 

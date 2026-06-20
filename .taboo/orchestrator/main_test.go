@@ -162,3 +162,17 @@ func TestRunImplementRequiresIssueBeforeIO(t *testing.T) {
 		t.Errorf("error = %q, want it to mention --issue is required", err.Error())
 	}
 }
+
+func TestRunReviewRequiresPRBeforeIO(t *testing.T) {
+	t.Parallel()
+
+	// With no --pr flag the function must fail validation before touching gh or
+	// taboo, mirroring runImplement's pre-I/O guard.
+	err := runReview(context.Background(), nil)
+	if err == nil {
+		t.Fatal("runReview with no --pr returned nil, want a required-flag error")
+	}
+	if !strings.Contains(err.Error(), "--pr is required") {
+		t.Errorf("error = %q, want it to mention --pr is required", err.Error())
+	}
+}

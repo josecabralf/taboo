@@ -1,19 +1,20 @@
 # Label-driven review workflow (issue #62 dogfooding loop).
 #
-# The `agent:review` label IS the authorization: only a maintainer with write
+# AUTHORIZATION: gated by the `agent:review` label. Only a maintainer with write
 # access can apply it, so applying it is the act of trusting these inputs. The
-# review agent's inputs (a maintainer-vetted issue + a diff produced by our own
-# trusted implement agent) are inside the trust boundary. This workflow uses
-# pull_request_target (it needs write tokens to post the review) and is
-# therefore NOT hardened against untrusted public-fork PRs — running it on a
-# fork PR would expose secrets. That trade-off is deliberate and documented in
-# docs/explanation/dogfooding.md.
+# review agent's inputs (a diff produced by our own trusted implement agent) are
+# inside the trust boundary. This workflow uses pull_request_target (it needs
+# write tokens to post the review) and is therefore NOT hardened against
+# untrusted public-fork PRs — running it on a fork PR would expose secrets. That
+# trade-off is deliberate and documented in docs/explanation/dogfooding.md.
 #
-# Flow: read the review agent's .taboo-review.json (or, if the agent emitted its
-# review as prose instead of writing the file, fall back to the run's .output as
-# a top-level-only review), drop any inline comment whose path:line isn't on the
-# RIGHT side of the PR diff (drop, never error), then post exactly ONE PR review
-# via `gh api`.
+# ENGINE: the orchestration is a Go application — the `afk` binary, a nested Go
+# module at .taboo/orchestrator built on pkg/taboo. `afk review --pr N` fetches
+# the PR diff, runs the review workflow for a structured <result>, drops any
+# inline comment whose path:line isn't on the RIGHT side of the diff (drop, never
+# error), and posts exactly ONE PR review. All GitHub I/O happens in Go
+# (internal/ghio), never in this workflow's bash. This layer keeps only
+# checkout/setup, token plumbing, and label bookkeeping.
 name: agent-review
 
 on:
@@ -57,144 +58,19 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-env
 
-      - name: Build taboo
-        run: |
-          set -euo pipefail
-          # The CLI is its own module now (github.com/josecabralf/taboo/cli) with
-          # no root go.mod, so it must be built from inside the module directory.
-          ( cd cli && go build -o "$RUNNER_TEMP/taboo" . )
-
-      - name: Build vars file
-        run: |
-          set -euo pipefail
-
-          PR_TITLE=$(gh pr view "$PR_NUMBER" --json title --jq .title)
-          gh pr diff "$PR_NUMBER" > "$RUNNER_TEMP/diff.txt"
-
-          # Best-effort: find the linked issue from a closing keyword in the PR body.
-          PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
-          ISSUE_REF=$(printf '%s' "$PR_BODY" | grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' | head -n1 || true)
-          ISSUE_NUMBER=$(printf '%s' "$ISSUE_REF" | grep -oE '[0-9]+' || true)
-
-          ISSUE_TITLE=""
-          ISSUE_BODY=""
-          if [ -n "$ISSUE_NUMBER" ]; then
-            ISSUE_TITLE=$(gh issue view "$ISSUE_NUMBER" --json title --jq .title || true)
-            ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json body --jq .body || true)
-          fi
-
-          jq -n \
-            --arg PR_NUMBER "$PR_NUMBER" \
-            --arg PR_TITLE "$PR_TITLE" \
-            --arg ISSUE_NUMBER "$ISSUE_NUMBER" \
-            --arg ISSUE_TITLE "$ISSUE_TITLE" \
-            --arg ISSUE_BODY "$ISSUE_BODY" \
-            --rawfile PR_DIFF "$RUNNER_TEMP/diff.txt" \
-            --arg REVIEW_OUTPUT_PATH ".taboo-review.json" \
-            '{
-              PR_NUMBER: $PR_NUMBER,
-              PR_TITLE: $PR_TITLE,
-              ISSUE_NUMBER: $ISSUE_NUMBER,
-              ISSUE_TITLE: $ISSUE_TITLE,
-              ISSUE_BODY: $ISSUE_BODY,
-              PR_DIFF: $PR_DIFF,
-              REVIEW_OUTPUT_PATH: $REVIEW_OUTPUT_PATH
-            }' > "$RUNNER_TEMP/vars.json"
-
-      - name: Check out the PR head as the review base
-        run: |
-          set -euo pipefail
-          # Move HEAD to the PR tip just before the run so the agent sees the
-          # actual changed tree. Tooling stays frozen (built from main above).
-          # pull/N/head works for both same-repo and fork PRs (see trust note).
-          git fetch --no-tags origin "pull/$PR_NUMBER/head"
-          git checkout --detach FETCH_HEAD
-
-      - name: Run review agent
+      - name: Run review orchestrator
+        # The afk orchestrator is a nested Go module (.taboo/orchestrator), so it
+        # cannot be `go run ./.taboo/orchestrator` from the parent module (Go
+        # excludes nested modules). Build it inside the module, then run the binary
+        # from the repo root so it finds .taboo/taboo.yaml and treats the checkout
+        # as the repository. It fetches the diff, runs the review agent, filters
+        # out-of-diff comments, and posts exactly one review — all in Go.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
-          # The review agent writes .taboo-review.json into its throwaway worktree
-          # (now based on the PR head) and makes no code change; we never push it.
-          "$RUNNER_TEMP/taboo" run review \
-            --vars-file "$RUNNER_TEMP/vars.json" \
-            --yes --json | tee "$RUNNER_TEMP/run.json"
-
-      - name: Filter inline comments and post review
-        if: success()
-        run: |
-          set -euo pipefail
-
-          worktree=$(jq -r .worktree "$RUNNER_TEMP/run.json")
-          review="$worktree/.taboo-review.json"
-          if [ ! -f "$review" ]; then
-            # Fallback: agent wrote prose instead of the JSON file. Post
-            # run.json's .output as a top-level comment; never fail the run.
-            echo "review agent did not write $review; falling back to run.json .output" >&2
-            review="$RUNNER_TEMP/fallback-review.json"
-            jq '{ topLevelComment: (.output // ""), inlineComments: [] }' "$RUNNER_TEMP/run.json" > "$review"
-          fi
-
-          # Build the set of valid "path:line" keys from the RIGHT side of the diff
-          # (added and context lines), tracking file and new-side line numbers.
-          awk '
-            /^diff --git / { file = ""; next }
-            /^\+\+\+ b\// { file = substr($0, 7); next }
-            /^\+\+\+ / { file = ""; next }
-            /^--- / { next }
-            /^@@ / {
-              # field $3 is "+c,d" (or "+c"); strip leading + and any ,d.
-              plus = $3
-              sub(/^\+/, "", plus)
-              sub(/,.*/, "", plus)
-              newline = plus + 0
-              next
-            }
-            file == "" { next }
-            /^\+/ { print file ":" newline; newline++; next }
-            /^-/ { next }
-            /^\\/ { next }
-            { print file ":" newline; newline++ }
-          ' "$RUNNER_TEMP/diff.txt" | sort -u > "$RUNNER_TEMP/valid.txt"
-
-          # Read valid keys into a jq-consumable JSON array.
-          jq -R -s 'split("\n") | map(select(length > 0))' "$RUNNER_TEMP/valid.txt" > "$RUNNER_TEMP/valid.json"
-
-          # Emit warnings for dropped comments.
-          jq -r --slurpfile valid "$RUNNER_TEMP/valid.json" '
-            ($valid[0]) as $v
-            | (.inlineComments // [])
-            | map(select((.path + ":" + (.line | tostring)) as $k | ($v | index($k)) == null))
-            | .[]
-            | "dropping out-of-diff inline comment: \(.path):\(.line)"
-          ' "$review" >&2 || true
-
-          head_sha=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
-
-          jq --slurpfile valid "$RUNNER_TEMP/valid.json" --arg commit "$head_sha" '
-            ($valid[0]) as $v
-            | {
-                commit_id: $commit,
-                event: "COMMENT",
-                body: (.topLevelComment // ""),
-                comments: (
-                  (.inlineComments // [])
-                  | map(select((.path + ":" + (.line | tostring)) as $k | ($v | index($k)) != null))
-                  | map({ path: .path, line: .line, side: "RIGHT", body: .body })
-                )
-              }
-          ' "$review" > "$RUNNER_TEMP/payload.json"
-
-          # GitHub rejects a COMMENT review with no body and no comments (422).
-          # Skip the post if the agent had nothing to say; never fail the run.
-          if [ "$(jq -r '((.body // "") == "") and ((.comments | length) == 0)' "$RUNNER_TEMP/payload.json")" = "true" ]; then
-            echo "review is clean (empty body, no in-diff comments); nothing to post"
-          else
-            gh api --method POST \
-              "repos/{owner}/{repo}/pulls/$PR_NUMBER/reviews" \
-              --input "$RUNNER_TEMP/payload.json"
-          fi
+          ( cd .taboo/orchestrator && go build -o "$RUNNER_TEMP/afk" . )
+          "$RUNNER_TEMP/afk" review --pr "$PR_NUMBER"
 
       - name: Mark blocked on failure
         if: failure()

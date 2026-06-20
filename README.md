@@ -219,20 +219,20 @@ make test-integration  # integration tests; requires workshop + LXD, build tag `
 
 ## taboo dogfoods itself
 
-taboo runs its own issue-to-review loop with nothing but `taboo run`, a pair of
-GitHub Actions, and some prompts and skills. There is no new GitHub or push
-machinery in taboo core; the loop is scaffolding layered around the existing
-single-run primitive.
+taboo runs its own issue-to-review loop with a small Go orchestrator (`afk`,
+built on `pkg`), a pair of GitHub Actions, and some prompts and skills. There is
+no new GitHub or push machinery in taboo core; the loop is scaffolding layered
+around the library's single-run primitive.
 
-Label an issue `agent:implement` and GitHub Actions runs `taboo run implement`
+Label an issue `agent:implement` and GitHub Actions runs `afk implement`
 (Claude Code / Opus) inside a workshop on the runner. The agent explores the
 repo, writes a plan, does test-driven development, validates against the
 project's own checks, and commits in place — it is push-denied, so it never
-touches GitHub. The workflow then pushes the branch,
+touches GitHub. The orchestrator then pushes the branch,
 opens a draft PR whose body is the agent's plan, and labels that PR
-`agent:review`. The label fires the second workflow, `taboo run review`
-(Claude Code / Sonnet), which reads the PR diff and posts inline plus top-level
-comments. Throughout, the labels form a small state machine
+`agent:review`. The label fires the second workflow (`agent-review.yml`), which
+runs `afk review` (Claude Code / Opus): it reads the PR diff and posts a single
+review with inline plus top-level comments. Throughout, the labels form a small state machine
 (`agent:implement` → `agent:in-progress` → `agent:review`, with `agent:blocked`
 on failure).
 
