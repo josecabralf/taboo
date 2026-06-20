@@ -4,7 +4,9 @@
 // branch, opens a draft PR carrying the agent's plan, and applies the
 // agent:review label. The "review" subcommand fetches a PR's diff, runs the
 // review workflow for a structured <result>, drops any comment outside the diff,
-// and posts exactly one PR review. All GitHub/git I/O funnels through
+// and posts exactly one PR review. The "plan" subcommand lists the open
+// ready-for-agent issues and runs the plan workflow to print a parallel-safe
+// batch of them as JSON. All GitHub/git I/O funnels through
 // internal/ghio; the taboo runs go through the taboo bridge one-liners
 // taboo.RunWorkflow / taboo.RunWorkflowAs (config discovery + resolution + run).
 // In CI it is built inside its own module and run from the repo root (it cannot
@@ -58,9 +60,9 @@ func main() {
 }
 
 // usage summarizes the orchestrator's subcommands.
-const usage = "usage: afk implement --issue <n> | afk review --pr <n>"
+const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan"
 
-// run dispatches to a subcommand: "implement" or "review".
+// run dispatches to a subcommand: "implement", "review" or "plan".
 func run(args []string) error {
 	if len(args) == 0 {
 		return errors.New(usage)
@@ -70,6 +72,8 @@ func run(args []string) error {
 		return runImplement(context.Background(), args[1:])
 	case "review":
 		return runReview(context.Background(), args[1:])
+	case "plan":
+		return runPlan(context.Background(), args[1:])
 	default:
 		return fmt.Errorf("unknown command %q (%s)", args[0], usage)
 	}
@@ -115,6 +119,21 @@ func runReview(ctx context.Context, args []string) error {
 	}
 
 	return review(ctx, startDir, *pr, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[reviewResult])
+}
+
+// runPlan parses the plan subcommand (it takes no flags) and wires the production
+// gh and taboo seams into plan. The typed bridge taboo.RunWorkflowAs[[]planItem]
+// decodes the agent's <result> JSON array into []planItem in-loop.
+func runPlan(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+	return plan(ctx, startDir, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[[]planItem])
 }
 
 // implement is the testable core of the implement subcommand: it fetches the
