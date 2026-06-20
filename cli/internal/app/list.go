@@ -86,17 +86,8 @@ func runList(ctx context.Context, env Env, asJSON bool) error {
 
 	result := jsonListResult{Workshops: workshops, Worktrees: worktrees, Branches: branches}
 	if asJSON {
-		// Coerce nil sections to empty slices so they marshal as the
-		// conventional machine shape [] rather than null.
-		if result.Workshops == nil {
-			result.Workshops = []jsonWorkshop{}
-		}
-		if result.Worktrees == nil {
-			result.Worktrees = []jsonWorktree{}
-		}
-		if result.Branches == nil {
-			result.Branches = []string{}
-		}
+		// The gather helpers return empty (never nil) slices, so each section
+		// marshals as the conventional machine shape [] rather than null.
 		enc := json.NewEncoder(env.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(result)
@@ -117,13 +108,19 @@ func renderListResult(env Env, r jsonListResult) {
 	}
 	renderSection(env.Stdout, "workshops:", workshops)
 
-	worktrees := make([]string, 0, len(r.Worktrees))
-	for _, w := range r.Worktrees {
-		worktrees = append(worktrees, w.Branch+"  "+w.Path)
-	}
-	renderSection(env.Stdout, "worktrees:", worktrees)
+	renderSection(env.Stdout, "worktrees:", worktreeLines(r.Worktrees))
 
 	renderSection(env.Stdout, "branches:", r.Branches)
+}
+
+// worktreeLines formats worktrees as "<branch>  <path>" section lines, shared by
+// the list view and clean's dry-run plan.
+func worktreeLines(wts []jsonWorktree) []string {
+	lines := make([]string, 0, len(wts))
+	for _, wt := range wts {
+		lines = append(lines, wt.Branch+"  "+wt.Path)
+	}
+	return lines
 }
 
 // renderSection writes one section of the human view: the header line, then the
@@ -143,7 +140,7 @@ func renderSection(w io.Writer, header string, lines []string) {
 // gatherWorkshops probes each project workshop's lifecycle state and returns one
 // entry per configured workshop.
 func gatherWorkshops(ctx context.Context, env Env, projectDir string, cfg *taboo.ProjectConfig) []jsonWorkshop {
-	var out []jsonWorkshop
+	out := []jsonWorkshop{}
 	for _, name := range projectWorkshops(cfg) {
 		out = append(out, jsonWorkshop{Name: name, Status: workshopState(ctx, env, projectDir, name)})
 	}
@@ -160,7 +157,7 @@ func gatherBranches(ctx context.Context, env Env, repo, prefix string) ([]string
 	if err != nil {
 		return nil, fmt.Errorf("list branches in %q: %w", repo, err)
 	}
-	var branches []string
+	branches := []string{}
 	for _, line := range strings.Split(out, "\n") {
 		name := strings.TrimSpace(line)
 		if name == "" || !strings.HasPrefix(name, prefix) {
@@ -181,7 +178,7 @@ func gatherWorktrees(ctx context.Context, env Env, projectDir, repo string) ([]j
 		return nil, fmt.Errorf("list worktrees in %q: %w", repo, err)
 	}
 	managedRoot := filepath.Join(projectDir, "worktrees")
-	var wts []jsonWorktree
+	wts := []jsonWorktree{}
 	for _, wt := range parseWorktrees(out) {
 		if !underDir(wt.Path, managedRoot) {
 			continue

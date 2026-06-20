@@ -1452,30 +1452,6 @@ func TestRun_FlagSet(t *testing.T) {
 	}
 }
 
-// TestRunNeedsConfirm covers the pure decision behind --yes: a real run pauses
-// for confirmation only at a TTY without --yes; --yes and any non-interactive
-// caller (a pipe, CI) proceed without prompting.
-func TestRunNeedsConfirm(t *testing.T) {
-	cases := []struct {
-		name        string
-		interactive bool
-		yes         bool
-		want        bool
-	}{
-		{"interactive without --yes confirms", true, false, true},
-		{"--yes skips confirm at a TTY", true, true, false},
-		{"non-interactive proceeds", false, false, false},
-		{"non-interactive with --yes proceeds", false, true, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := runNeedsConfirm(tc.interactive, &runOptions{yes: tc.yes}); got != tc.want {
-				t.Errorf("runNeedsConfirm(interactive=%v, yes=%v) = %v, want %v", tc.interactive, tc.yes, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestPromptConfirm covers the y/N read: only an explicit yes proceeds; a blank
 // line (the default), a no, EOF, or junk all decline, so an accidental Enter
 // never launches a run.

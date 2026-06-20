@@ -188,16 +188,11 @@ func planOverrides(env Env, opts *runOptions) taboo.PlanOverrides {
 // without prompting, keeping scripts and automation unblocked; --dry-run never
 // reaches here.
 func confirmRun(env Env, opts *runOptions, plan *taboo.Plan) (bool, error) {
-	if !runNeedsConfirm(isInteractive(env), opts) {
+	// Confirm only at a TTY without --yes; a pipe/CI caller or --yes proceeds unprompted.
+	if !isInteractive(env) || opts.yes {
 		return true, nil
 	}
 	return promptConfirm(env, plan)
-}
-
-// runNeedsConfirm reports whether a real run should pause for interactive
-// confirmation: only when attached to a TTY and --yes was not passed.
-func runNeedsConfirm(interactive bool, opts *runOptions) bool {
-	return interactive && !opts.yes
 }
 
 // promptConfirm prints a one-line run summary to stderr and reads a y/N answer

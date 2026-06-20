@@ -228,11 +228,7 @@ func planBranches(ctx context.Context, env Env, repo, prefix string, force bool)
 // kind, plus the branches skipped for being unmerged.
 func printCleanPlan(w io.Writer, plan cleanPlan) {
 	_, _ = fmt.Fprintln(w, "taboo clean (dry run) — would:")
-	worktrees := make([]string, 0, len(plan.worktrees))
-	for _, wt := range plan.worktrees {
-		worktrees = append(worktrees, wt.Branch+"  "+wt.Path)
-	}
-	renderSection(w, "remove worktrees:", worktrees)
+	renderSection(w, "remove worktrees:", worktreeLines(plan.worktrees))
 	renderSection(w, "tear down workshops:", plan.workshops)
 	renderSection(w, "remove SDK links:", plan.sdkLinks)
 	renderSection(w, "delete branches:", plan.branches)
