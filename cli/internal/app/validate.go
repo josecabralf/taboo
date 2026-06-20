@@ -124,8 +124,9 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 // The repoBase argument is the config-anchored repo directory (see
 // resolveRepoBase), resolved against the discovered config's directory rather
 // than the process CWD. A relative repo value (including the dot repo of a
-// dogfooded .taboo config) therefore lands on the same tracked
-// <root>/workshop.yaml whether validate runs from the repo root or from .taboo.
+// .taboo config, whose project root is the parent of .taboo) therefore lands on
+// the same tracked <root>/workshop.yaml whether validate runs from the repo root
+// or from .taboo.
 func deriveChecks(cfg taboo.ProjectConfig, repoBase string, statFile func(string) bool) []check {
 	if cfg.Repo == "" {
 		// Mirror doctor's workshopProjectChecks: without a configured repo there is
@@ -136,8 +137,8 @@ func deriveChecks(cfg taboo.ProjectConfig, repoBase string, statFile func(string
 	src := filepath.Join(repoBase, "workshop.yaml")
 	if !statFile(src) {
 		return []check{
-			fail("source-definition", "no workshop.yaml found in "+repoBase+": taboo derives the "+
-				"agent's workshop from the project's workshop.yaml; add a workshop.yaml, then re-run"),
+			fail("source-definition", "no workshop.yaml in "+repoBase+": taboo derives the "+
+				"agent's workshop from it; create one there, then re-run"),
 			fail("derive", "skipped: no source workshop.yaml to derive from (see source-definition above)"),
 		}
 	}
@@ -175,9 +176,9 @@ func deriveChecks(cfg taboo.ProjectConfig, repoBase string, statFile func(string
 func resolveRepoBase(configDir, repo string) string {
 	base := configDir
 	switch {
-	case filepath.Clean(repo) != ".":
-		// An absolute repo value stands on its own; a relative one anchors to the
-		// config dir (filepath.Join would otherwise nest an absolute path under it).
+	case repo != "" && filepath.Clean(repo) != ".":
+		// A relative repo anchors to the config dir; filepath.Join would otherwise
+		// nest an absolute repo under it.
 		base = repo
 		if !filepath.IsAbs(repo) {
 			base = filepath.Join(configDir, repo)
