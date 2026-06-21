@@ -55,8 +55,9 @@ type RunRequest struct {
 
 // runResultHandle is a RunResult's private capability to read a run's artifacts
 // without callers needing to know the worktree's on-disk layout. The repoPath
-// and cmd fields back future repo-backed reads (e.g. reading committed content
-// via git); Artifact only needs worktreePath today.
+// and cmd fields are unused today; they are here for upcoming repo-backed reads
+// via git (#119 moves the rev-parse capture here, #120 adds Dispose). Artifact
+// needs only worktreePath.
 type runResultHandle struct {
 	repoPath     string
 	worktreePath string
@@ -97,14 +98,14 @@ func (r RunResult) Artifact(relpath string) (string, error) {
 	if r.handle == nil {
 		return "", errors.New("artifact: result has no worktree handle")
 	}
-	// Artifact is public API: today's only caller passes a constant, but a future
-	// caller could pass untrusted input, so this guard keeps the worktree a real
-	// trust boundary — reject absolute paths and any ".." escape out of it.
-	clean := filepath.Clean(relpath)
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	// Artifact is public API. Today's only caller passes a constant, but a future
+	// caller could pass untrusted input, so confine reads to the worktree: reject
+	// absolute paths and any ".." escape. (Lexical only — a symlink inside the
+	// worktree could still point out; tighten to os.Root if that becomes a risk.)
+	if !filepath.IsLocal(relpath) {
 		return "", fmt.Errorf("artifact %q: path escapes worktree", relpath)
 	}
-	b, err := os.ReadFile(filepath.Join(r.handle.worktreePath, clean)) // #nosec G304
+	b, err := os.ReadFile(filepath.Join(r.handle.worktreePath, relpath)) // #nosec G304
 	if err != nil {
 		return "", fmt.Errorf("read artifact %q: %w", relpath, err)
 	}

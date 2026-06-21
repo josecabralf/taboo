@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// TestSetup_PopulatesHandle pins the tracer-bullet wiring: a successful Setup
-// hands the RunResult a private handle carrying the capability to read the run's
-// artifacts. The handle must back-reference the host repo, point at the same
+// TestSetup_PopulatesHandle pins that a successful Setup hands the RunResult a
+// private handle carrying the capability to read the run's artifacts. The handle
+// must back-reference the host repo, point at the same
 // worktree path the result reports, and carry a live commander for future
 // repo-backed reads.
 func TestSetup_PopulatesHandle(t *testing.T) {
@@ -83,7 +83,7 @@ func TestRunResult_Artifact_RejectsAbsolutePath(t *testing.T) {
 }
 
 // TestRunResult_Artifact_RejectsEscape confirms ".." escapes out of the
-// worktree are rejected, guarding the public API's trust boundary.
+// worktree are rejected, keeping reads confined to the worktree.
 func TestRunResult_Artifact_RejectsEscape(t *testing.T) {
 	res := RunResult{handle: &runResultHandle{worktreePath: t.TempDir()}}
 	malicious := []string{

@@ -300,8 +300,9 @@ func implement(ctx context.Context, startDir string, issue int, gh ghClient, run
 		return fmt.Errorf("push branch: %w", err)
 	}
 
-	// A missing or unreadable plan file is non-fatal: Artifact yields "" and
-	// prBody renders its no-plan fallback (preserving the old readPlan behavior).
+	// A missing or unreadable plan file is non-fatal: on any Artifact error we
+	// fall back to "" and prBody renders its no-plan body — the outcome readPlan
+	// gave for an absent file.
 	plan, err := res.Artifact(planFile)
 	if err != nil {
 		plan = ""
