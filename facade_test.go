@@ -110,10 +110,10 @@ func TestFacade_SentinelsMatchAcrossBoundary(t *testing.T) {
 	}
 }
 
-// fakeOutputCommander is a Commander declared OUTSIDE the taboo package. Storing
-// it in a taboo.Commander var only compiles if taboo.Commander / taboo.Cmd are
-// `=` aliases of the internal types, so this also exercises the alias-identity
-// invariant across the package boundary — here for the exec seam's Output wrapper.
+// fakeOutputCommander is a Commander declared OUTSIDE the taboo package, used to
+// smoke-test that taboo.Output actually forwards through to the exec seam across
+// the package boundary. (Assigning it to a taboo.Commander var also leans on the
+// Commander/Cmd `=` aliasing that externalAgent pins authoritatively above.)
 type fakeOutputCommander struct{ canned string }
 
 func (f fakeOutputCommander) Run(_ context.Context, c taboo.Cmd) error {

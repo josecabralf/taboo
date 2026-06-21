@@ -71,7 +71,9 @@ type Commander = exec.Commander
 // NewExecCommander returns a Commander that runs commands as real host processes.
 func NewExecCommander() Commander { return exec.NewExecCommander() }
 
-// Output runs cmd with a fresh stdout buffer and returns the raw captured stdout.
+// Output runs cmd with a fresh stdout buffer and returns the raw captured
+// stdout together with the run error. The string is untrimmed, and any Stdout
+// already set on cmd is overwritten.
 func Output(ctx context.Context, c Commander, cmd Cmd) (string, error) {
 	return exec.Output(ctx, c, cmd)
 }
