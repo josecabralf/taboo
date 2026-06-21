@@ -92,7 +92,7 @@ func (f *fakeGH) AddLabel(_ context.Context, prRef, label string) error {
 
 // fakeRunner records that the taboo run was invoked and returns a canned
 // OrchestratedResult (or an error). The worktree arg, when set, becomes the
-// result's WorktreePath so the test can stage a plan file there.
+// result's worktree path so the test can stage a plan file there.
 func fakeRunner(calls *[]string, worktree string, err error) workflowRunner {
 	return func(_ context.Context, _, _ string, _ map[string]string, _ taboo.PlanOverrides, _ taboo.Commander) (taboo.OrchestratedResult, error) {
 		*calls = append(*calls, "runTabo")

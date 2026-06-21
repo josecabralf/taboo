@@ -124,7 +124,7 @@ fmt.Printf("stopped after %d iteration(s): %s\n", res.Iterations, res.StopReason
 ## Read the result
 
 Both `RunWorkflow` and `Plan.Run` return an `OrchestratedResult`. It embeds
-`RunResult` (the final iteration's `Branch`, `WorktreePath`, `Commit`, `Output`)
+`RunResult` (the final iteration's `Branch`, `Commit`, `Output`)
 and adds three fields:
 
 - `Iterations` is how many times the agent ran.

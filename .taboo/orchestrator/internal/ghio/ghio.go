@@ -1,68 +1,38 @@
 // Package ghio performs the orchestrator's GitHub and git I/O by shelling out to
-// the gh and git CLIs. All side effects funnel through the Exec seam, so tests
-// substitute a fake instead of running real processes.
+// the gh and git CLIs. All side effects funnel through taboo's Commander seam
+// (via taboo.Output), so tests substitute a fake Commander instead of running
+// real processes.
 package ghio
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/josecabralf/taboo"
 )
-
-// Exec runs a command and returns its stdout. It is the single side-effecting
-// seam in ghio: production shells out via os/exec; tests substitute a fake.
-// RunInput is the same, but feeds stdin to the command — used to POST a JSON
-// request body to gh api.
-type Exec interface {
-	Run(ctx context.Context, name string, args ...string) (string, error)
-	RunInput(ctx context.Context, stdin, name string, args ...string) (string, error)
-}
-
-// execRunner is the production Exec: it shells out via os/exec.
-type execRunner struct{}
-
-// NewExec returns the production Exec that runs real host processes, inheriting
-// the current environment (so gh reads GH_REPO / GH_TOKEN from it).
-func NewExec() Exec { return execRunner{} }
-
-func (execRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
-	return run(ctx, nil, name, args...)
-}
-
-func (execRunner) RunInput(ctx context.Context, stdin, name string, args ...string) (string, error) {
-	return run(ctx, strings.NewReader(stdin), name, args...)
-}
-
-// run shells out, optionally feeding stdin, and returns stdout. A non-nil stdin
-// is wired to the child's standard input.
-func run(ctx context.Context, stdin io.Reader, name string, args ...string) (string, error) {
-	// The command and args originate from the orchestrator, not end users; gh and
-	// git inherit this process's environment by default.
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204
-	cmd.Stdin = stdin
-	out, err := cmd.Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return "", fmt.Errorf("%s %v: %w: %s", name, args, err, ee.Stderr)
-		}
-		return "", fmt.Errorf("%s %v: %w", name, args, err)
-	}
-	return string(out), nil
-}
 
 // Client performs the orchestrator's GitHub/git I/O through gh and git.
 type Client struct {
-	exec Exec
+	cmd taboo.Commander
 }
 
-// New returns a Client that drives gh/git through the given Exec.
-func New(exec Exec) *Client { return &Client{exec: exec} }
+// New returns a Client that drives gh/git through the given Commander seam.
+func New(cmd taboo.Commander) *Client { return &Client{cmd: cmd} }
+
+// run shells out via the Commander seam and returns stdout. On failure the
+// error carries the command's stderr (taboo.Output folds it in).
+func (c *Client) run(ctx context.Context, name string, args ...string) (string, error) {
+	return taboo.Output(ctx, c.cmd, taboo.Cmd{Name: name, Args: args})
+}
+
+// runInput is run with stdin fed to the child. The sole caller pipes a JSON
+// body to gh api.
+func (c *Client) runInput(ctx context.Context, stdin, name string, args ...string) (string, error) {
+	return taboo.Output(ctx, c.cmd, taboo.Cmd{Name: name, Args: args, Stdin: strings.NewReader(stdin)})
+}
 
 // Issue holds the issue fields the orchestrator passes to the agents — injected
 // into the implement prompt and marshaled into the plan prompt's candidate list.
@@ -77,7 +47,7 @@ type Issue struct {
 
 // IssueView fetches an issue's number, title and body via `gh issue view`.
 func (c *Client) IssueView(ctx context.Context, number int) (Issue, error) {
-	out, err := c.exec.Run(ctx, "gh", "issue", "view", strconv.Itoa(number), "--json", "number,title,body")
+	out, err := c.run(ctx, "gh", "issue", "view", strconv.Itoa(number), "--json", "number,title,body")
 	if err != nil {
 		return Issue{}, err
 	}
@@ -92,7 +62,7 @@ func (c *Client) IssueView(ctx context.Context, number int) (Issue, error) {
 // The plan subcommand uses it to tell whether a "Blocked by #N" dependency has
 // been resolved.
 func (c *Client) IssueState(ctx context.Context, number int) (string, error) {
-	out, err := c.exec.Run(ctx, "gh", "issue", "view", strconv.Itoa(number), "--json", "state")
+	out, err := c.run(ctx, "gh", "issue", "view", strconv.Itoa(number), "--json", "state")
 	if err != nil {
 		return "", err
 	}
@@ -108,7 +78,7 @@ func (c *Client) IssueState(ctx context.Context, number int) (string, error) {
 // ListOpenIssuesByLabel returns the open issues carrying the given label via
 // `gh issue list`, parsing each issue's number, title and body.
 func (c *Client) ListOpenIssuesByLabel(ctx context.Context, label string) ([]Issue, error) {
-	out, err := c.exec.Run(ctx, "gh", "issue", "list", "--label", label, "--state", "open", "--limit", "100", "--json", "number,title,body")
+	out, err := c.run(ctx, "gh", "issue", "list", "--label", label, "--state", "open", "--limit", "100", "--json", "number,title,body")
 	if err != nil {
 		return nil, err
 	}
@@ -122,14 +92,14 @@ func (c *Client) ListOpenIssuesByLabel(ctx context.Context, label string) ([]Iss
 // PushBranch force-pushes the run's branch to origin. The branch name is
 // deterministic per issue, so a retrigger overwrites the stale agent branch.
 func (c *Client) PushBranch(ctx context.Context, branch string) error {
-	_, err := c.exec.Run(ctx, "git", "push", "--force", "origin", branch)
+	_, err := c.run(ctx, "git", "push", "--force", "origin", branch)
 	return err
 }
 
 // CreateDraftPR opens a draft PR for the run's branch against main and returns
 // its URL.
 func (c *Client) CreateDraftPR(ctx context.Context, branch, title, body string) (string, error) {
-	out, err := c.exec.Run(ctx, "gh", "pr", "create", "--draft",
+	out, err := c.run(ctx, "gh", "pr", "create", "--draft",
 		"--base", "main",
 		"--head", branch,
 		"--title", title,
@@ -144,7 +114,7 @@ func (c *Client) CreateDraftPR(ctx context.Context, branch, title, body string) 
 // review workflow reasons over and the source of the addressable positions a
 // review comment may target.
 func (c *Client) PRDiff(ctx context.Context, number int) (string, error) {
-	return c.exec.Run(ctx, "gh", "pr", "diff", strconv.Itoa(number))
+	return c.run(ctx, "gh", "pr", "diff", strconv.Itoa(number))
 }
 
 // ReviewComment is one inline review comment, anchored to a path and new-side
@@ -186,34 +156,34 @@ func (c *Client) PostReview(ctx context.Context, number int, summary string, com
 	}
 
 	path := fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/reviews", number)
-	_, err = c.exec.RunInput(ctx, string(body), "gh", "api", "--method", "POST", path, "--input", "-")
+	_, err = c.runInput(ctx, string(body), "gh", "api", "--method", "POST", path, "--input", "-")
 	return err
 }
 
 // AddLabel adds a label to a PR (or issue) referenced by URL or number.
 func (c *Client) AddLabel(ctx context.Context, prRef, label string) error {
-	_, err := c.exec.Run(ctx, "gh", "pr", "edit", prRef, "--add-label", label)
+	_, err := c.run(ctx, "gh", "pr", "edit", prRef, "--add-label", label)
 	return err
 }
 
 // AddIssueLabel adds a label to the issue via `gh issue edit`. The loop
 // subcommand uses it to advance an issue through its label state machine.
 func (c *Client) AddIssueLabel(ctx context.Context, number int, label string) error {
-	_, err := c.exec.Run(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--add-label", label)
+	_, err := c.run(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--add-label", label)
 	return err
 }
 
 // RemoveIssueLabel removes a label from the issue via `gh issue edit`. The loop
 // subcommand uses it to clear a prior state as the issue advances.
 func (c *Client) RemoveIssueLabel(ctx context.Context, number int, label string) error {
-	_, err := c.exec.Run(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--remove-label", label)
+	_, err := c.run(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--remove-label", label)
 	return err
 }
 
 // CommentIssue posts a comment on the issue via `gh issue comment`. The loop
 // subcommand uses it to record state transitions in the issue thread.
 func (c *Client) CommentIssue(ctx context.Context, number int, body string) error {
-	_, err := c.exec.Run(ctx, "gh", "issue", "comment", strconv.Itoa(number), "--body", body)
+	_, err := c.run(ctx, "gh", "issue", "comment", strconv.Itoa(number), "--body", body)
 	return err
 }
 
@@ -221,7 +191,7 @@ func (c *Client) CommentIssue(ctx context.Context, number int, body string) erro
 // working tree via `git rev-parse --abbrev-ref HEAD`. The write-pr subcommand
 // uses it to default --branch to the run's own branch.
 func (c *Client) CurrentBranch(ctx context.Context) (string, error) {
-	out, err := c.exec.Run(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := c.run(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", err
 	}
@@ -233,7 +203,7 @@ func (c *Client) CurrentBranch(ctx context.Context) (string, error) {
 // diverged from main, the same set GitHub renders for a PR. It is the input the
 // write-pr workflow reasons over when composing the PR title and body.
 func (c *Client) BranchDiff(ctx context.Context, branch string) (string, error) {
-	return c.exec.Run(ctx, "git", "diff", "main..."+branch)
+	return c.run(ctx, "git", "diff", "main..."+branch)
 }
 
 // PR identifies an open pull request the orchestrator found for a branch: its
@@ -249,7 +219,7 @@ type PR struct {
 // branch (the JSON array is empty), so write-pr can choose between create and
 // update without treating "none" as an error.
 func (c *Client) PRForBranch(ctx context.Context, branch string) (PR, bool, error) {
-	out, err := c.exec.Run(ctx, "gh", "pr", "list", "--head", branch, "--state", "open", "--limit", "1", "--json", "number,url")
+	out, err := c.run(ctx, "gh", "pr", "list", "--head", branch, "--state", "open", "--limit", "1", "--json", "number,url")
 	if err != nil {
 		return PR{}, false, err
 	}
@@ -267,7 +237,7 @@ func (c *Client) PRForBranch(ctx context.Context, branch string) (PR, bool, erro
 // URL. Unlike CreateDraftPR (the implement flow's work-in-progress draft),
 // write-pr produces a finished PR from an agent-authored title and body.
 func (c *Client) CreatePR(ctx context.Context, branch, title, body string) (string, error) {
-	out, err := c.exec.Run(ctx, "gh", "pr", "create",
+	out, err := c.run(ctx, "gh", "pr", "create",
 		"--base", "main",
 		"--head", branch,
 		"--title", title,
@@ -287,7 +257,7 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 	for _, l := range labels {
 		args = append(args, "--label", l)
 	}
-	out, err := c.exec.Run(ctx, "gh", args...)
+	out, err := c.run(ctx, "gh", args...)
 	if err != nil {
 		return "", err
 	}
@@ -297,7 +267,7 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 // PRHeadBranch returns PR number's head branch name via `gh pr view`. The
 // update-branch subcommand uses it to resolve which branch to merge main into.
 func (c *Client) PRHeadBranch(ctx context.Context, number int) (string, error) {
-	out, err := c.exec.Run(ctx, "gh", "pr", "view", strconv.Itoa(number), "--json", "headRefName")
+	out, err := c.run(ctx, "gh", "pr", "view", strconv.Itoa(number), "--json", "headRefName")
 	if err != nil {
 		return "", err
 	}
@@ -314,7 +284,7 @@ func (c *Client) PRHeadBranch(ctx context.Context, number int) (string, error) {
 // origin/main and origin/<branch> are current before the update-branch run reads
 // or merges them.
 func (c *Client) Fetch(ctx context.Context) error {
-	_, err := c.exec.Run(ctx, "git", "fetch", "origin")
+	_, err := c.run(ctx, "git", "fetch", "origin")
 	return err
 }
 
@@ -327,11 +297,11 @@ func (c *Client) Fetch(ctx context.Context) error {
 // answer that run() would surface as an error. Call Fetch first so the refs are
 // current.
 func (c *Client) UpToDateWithMain(ctx context.Context, branch string) (bool, error) {
-	base, err := c.exec.Run(ctx, "git", "merge-base", "origin/main", "origin/"+branch)
+	base, err := c.run(ctx, "git", "merge-base", "origin/main", "origin/"+branch)
 	if err != nil {
 		return false, err
 	}
-	mainTip, err := c.exec.Run(ctx, "git", "rev-parse", "origin/main")
+	mainTip, err := c.run(ctx, "git", "rev-parse", "origin/main")
 	if err != nil {
 		return false, err
 	}
@@ -344,14 +314,14 @@ func (c *Client) UpToDateWithMain(ctx context.Context, branch string) (bool, err
 // clobbering) if the remote branch moved under us. This is deliberately distinct
 // from PushBranch, which force-pushes the per-issue agent branch implement owns.
 func (c *Client) Push(ctx context.Context, branch string) error {
-	_, err := c.exec.Run(ctx, "git", "push", "origin", branch)
+	_, err := c.run(ctx, "git", "push", "origin", branch)
 	return err
 }
 
 // CommentPR posts a comment on a PR via `gh pr comment`. The update-branch flow
 // uses it to record why a merge was blocked, alongside the agent:blocked label.
 func (c *Client) CommentPR(ctx context.Context, number int, body string) error {
-	_, err := c.exec.Run(ctx, "gh", "pr", "comment", strconv.Itoa(number), "--body", body)
+	_, err := c.run(ctx, "gh", "pr", "comment", strconv.Itoa(number), "--body", body)
 	return err
 }
 
@@ -361,7 +331,7 @@ func (c *Client) CommentPR(ctx context.Context, number int, body string) error {
 // already-ready PR is harmless: gh treats it as a no-op and exits 0. Any gh
 // failure is returned verbatim.
 func (c *Client) MarkPRReady(ctx context.Context, prRef string) error {
-	_, err := c.exec.Run(ctx, "gh", "pr", "ready", prRef)
+	_, err := c.run(ctx, "gh", "pr", "ready", prRef)
 	return err
 }
 
@@ -370,7 +340,7 @@ func (c *Client) MarkPRReady(ctx context.Context, prRef string) error {
 // PRForBranch returned). It is how a re-run refreshes a PR in place instead of
 // opening a duplicate.
 func (c *Client) EditPR(ctx context.Context, prRef, title, body string) error {
-	_, err := c.exec.Run(ctx, "gh", "pr", "edit", prRef,
+	_, err := c.run(ctx, "gh", "pr", "edit", prRef,
 		"--title", title,
 		"--body", body)
 	return err

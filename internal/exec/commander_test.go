@@ -8,10 +8,11 @@ import (
 	"testing"
 )
 
-// fakeCommander is a stand-in Commander: it writes a canned string to the
-// supplied Stdout and records the Cmd it was handed.
+// fakeCommander is a stand-in Commander: it writes canned strings to the
+// supplied Stdout/Stderr and records the Cmd it was handed.
 type fakeCommander struct {
 	stdout string
+	stderr string
 	err    error
 	gotCmd Cmd
 }
@@ -20,6 +21,9 @@ func (f *fakeCommander) Run(_ context.Context, c Cmd) error {
 	f.gotCmd = c
 	if f.stdout != "" {
 		_, _ = io.WriteString(c.Stdout, f.stdout)
+	}
+	if f.stderr != "" && c.Stderr != nil {
+		_, _ = io.WriteString(c.Stderr, f.stderr)
 	}
 	return f.err
 }
@@ -57,6 +61,50 @@ func TestOutput_ForwardsCmdNameAndArgs(t *testing.T) {
 	}
 	if strings.Join(f.gotCmd.Args, " ") != "status -s" {
 		t.Errorf("Args = %v, want [status -s]", f.gotCmd.Args)
+	}
+}
+
+func TestOutput_WrapsStderrIntoErrorOnFailure(t *testing.T) {
+	sentinel := errors.New("exit status 128")
+	f := &fakeCommander{stderr: "fatal: not a git repo\n", err: sentinel}
+	_, err := Output(context.Background(), f, Cmd{Name: "git", Args: []string{"rev-parse"}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "fatal: not a git repo") {
+		t.Errorf("err = %q, want it to surface stderr 'fatal: not a git repo'", err.Error())
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("err = %v, want it to wrap %v", err, sentinel)
+	}
+}
+
+func TestOutput_NoStderrNoExtraWrapOnFailure(t *testing.T) {
+	sentinel := errors.New("boom")
+	f := &fakeCommander{err: sentinel}
+	_, err := Output(context.Background(), f, Cmd{Name: "git"})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("err = %v, want %v", err, sentinel)
+	}
+	if err.Error() != sentinel.Error() {
+		t.Errorf("err = %q, want %q (no empty stderr suffix)", err.Error(), sentinel.Error())
+	}
+}
+
+func TestOutput_ForwardsStdin(t *testing.T) {
+	f := &fakeCommander{}
+	if _, err := Output(context.Background(), f, Cmd{Name: "git", Stdin: strings.NewReader("payload-123")}); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if f.gotCmd.Stdin == nil {
+		t.Fatal("Stdin = nil, want it forwarded unchanged")
+	}
+	got, err := io.ReadAll(f.gotCmd.Stdin)
+	if err != nil {
+		t.Fatalf("ReadAll(Stdin): %v", err)
+	}
+	if string(got) != "payload-123" {
+		t.Errorf("Stdin = %q, want %q", string(got), "payload-123")
 	}
 }
 

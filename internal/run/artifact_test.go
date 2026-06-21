@@ -28,8 +28,9 @@ func TestSetup_PopulatesHandle(t *testing.T) {
 	if res.handle.repoPath != cfg.RepoPath {
 		t.Errorf("handle.repoPath = %q, want %q", res.handle.repoPath, cfg.RepoPath)
 	}
-	if res.handle.worktreePath != res.WorktreePath {
-		t.Errorf("handle.worktreePath = %q, want %q", res.handle.worktreePath, res.WorktreePath)
+	wantWt := filepath.Join(cfg.ProjectDir, "worktrees", "agent-x")
+	if res.handle.worktreePath != wantWt {
+		t.Errorf("handle.worktreePath = %q, want %q", res.handle.worktreePath, wantWt)
 	}
 	if res.handle.cmd == nil {
 		t.Error("handle.cmd is nil; want the runner's commander")
@@ -113,8 +114,8 @@ func TestNewResultWithWorktree_Artifact(t *testing.T) {
 	}
 
 	res := NewResultWithWorktree(dir)
-	if res.WorktreePath != dir {
-		t.Errorf("WorktreePath = %q, want %q", res.WorktreePath, dir)
+	if res.handle.worktreePath != dir {
+		t.Errorf("handle.worktreePath = %q, want %q", res.handle.worktreePath, dir)
 	}
 	got, err := res.Artifact("plan.md")
 	if err != nil {

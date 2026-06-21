@@ -141,16 +141,16 @@ Agents with no native fork degrade to worktree-only isolation.
 
 ```go
 type RunResult struct {
-    Branch       string
-    WorktreePath string
-    Commit       string // HEAD of the branch after the agent ran
-    Output       string // captured agent exec stdout (stderr is not retained)
-    Err          error  // populated by Pool per run; nil from the single-run path
+    Branch string
+    Commit string // HEAD of the branch after the agent ran
+    Output string // captured agent exec stdout (stderr is not retained)
+    Err    error  // populated by Pool per run; nil from the single-run path
 }
 ```
 
 `RunResult` reports the outcome of a run. `Err` is populated by `Pool` when
-fanning out so one failed run does not abort the batch.
+fanning out so one failed run does not abort the batch. The run's worktree is
+not exposed as a path; read files from it with `res.Artifact(relpath)`.
 
 ### OrchestratedRequest
 

@@ -65,8 +65,8 @@ type ghClient interface {
 
 // workflowRunner runs a named taboo workflow discovered at or above startDir and
 // returns the run's result. The taboo.RunWorkflow bridge satisfies it; tests
-// substitute a fake that returns a canned OrchestratedResult (pointing
-// WorktreePath at a temp dir) without provisioning a workshop.
+// substitute a fake that returns a canned OrchestratedResult (rooted at a
+// temp worktree dir) without provisioning a workshop.
 type workflowRunner func(ctx context.Context, startDir, workflow string, vars map[string]string, ov taboo.PlanOverrides, cmd taboo.Commander) (taboo.OrchestratedResult, error)
 
 func main() {
@@ -123,7 +123,7 @@ func runImplement(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	return implement(ctx, startDir, *issue, ghio.New(ghio.NewExec()), taboo.RunWorkflow)
+	return implement(ctx, startDir, *issue, ghio.New(taboo.NewExecCommander()), taboo.RunWorkflow)
 }
 
 // runReview parses the review subcommand's flags, enforces --pr before any I/O,
@@ -144,7 +144,7 @@ func runReview(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	return review(ctx, startDir, *pr, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[reviewResult])
+	return review(ctx, startDir, *pr, ghio.New(taboo.NewExecCommander()), taboo.RunWorkflowAs[reviewResult])
 }
 
 // runPlan parses the plan subcommand (it takes no flags) and wires the production
@@ -159,7 +159,7 @@ func runPlan(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
-	return plan(ctx, startDir, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[[]planItem])
+	return plan(ctx, startDir, os.Stdout, ghio.New(taboo.NewExecCommander()), taboo.RunWorkflowAs[[]planItem])
 }
 
 // runWritePR parses the write-pr subcommand's flags (--branch defaults to the
@@ -178,7 +178,7 @@ func runWritePR(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
-	return writePR(ctx, startDir, *branch, *ready, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[prContent])
+	return writePR(ctx, startDir, *branch, *ready, os.Stdout, ghio.New(taboo.NewExecCommander()), taboo.RunWorkflowAs[prContent])
 }
 
 // runToIssues parses the to-issues subcommand's flags, enforces --issue before
@@ -198,7 +198,7 @@ func runToIssues(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
-	return toIssues(ctx, startDir, *issue, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[[]childIssue])
+	return toIssues(ctx, startDir, *issue, os.Stdout, ghio.New(taboo.NewExecCommander()), taboo.RunWorkflowAs[[]childIssue])
 }
 
 // runUpdateBranch parses the update-branch subcommand's flags, enforces --pr
@@ -220,7 +220,7 @@ func runUpdateBranch(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	return updateBranch(ctx, startDir, *pr, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[updateBranchResult])
+	return updateBranch(ctx, startDir, *pr, os.Stdout, ghio.New(taboo.NewExecCommander()), taboo.RunWorkflowAs[updateBranchResult])
 }
 
 // runLoop parses the loop subcommand's flags and wires the production gh, plan,
@@ -241,7 +241,7 @@ func runLoop(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	gh := ghio.New(ghio.NewExec())
+	gh := ghio.New(taboo.NewExecCommander())
 	planBatch := func(ctx context.Context, dir string) ([]planItem, error) {
 		return selectBatch(ctx, dir, gh, taboo.RunWorkflowAs[[]planItem])
 	}

@@ -20,8 +20,7 @@ func TestRunResult_Dispose_RemovesWorktree(t *testing.T) {
 	dir := t.TempDir()
 	fc := &fakeCommander{}
 	res := RunResult{
-		WorktreePath: dir,
-		handle:       &runResultHandle{repoPath: "/repo", worktreePath: dir, cmd: fc},
+		handle: &runResultHandle{repoPath: "/repo", worktreePath: dir, cmd: fc},
 	}
 
 	if err := res.Dispose(); err != nil {
