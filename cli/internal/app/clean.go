@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // cleanOptions are the parsed flags for the clean subcommand: which lifecycle

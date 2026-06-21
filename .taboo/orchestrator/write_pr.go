@@ -9,7 +9,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // prContent is the structured output the write-pr agent emits in its <result>

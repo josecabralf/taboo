@@ -34,10 +34,10 @@ the host owns integration. The library is the primary contract; a thin CLI
 
 ## Install
 
-Library (package `taboo`, import path `github.com/josecabralf/taboo/pkg`):
+Library (package `taboo`, import path `github.com/josecabralf/taboo`):
 
 ```sh
-go get github.com/josecabralf/taboo/pkg
+go get github.com/josecabralf/taboo
 ```
 
 CLI (binary `taboo`):
@@ -47,7 +47,7 @@ go install github.com/josecabralf/taboo/cli@latest
 ```
 
 The library and the CLI are separate Go modules in this monorepo —
-`github.com/josecabralf/taboo/pkg` (yaml.v3-only) and
+`github.com/josecabralf/taboo` (yaml.v3-only) and
 `github.com/josecabralf/taboo/cli` — so depending on the library does not pull in
 the CLI's cobra/huh stack.
 
@@ -66,7 +66,7 @@ import (
 	"fmt"
 	"log"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 func main() {
@@ -115,7 +115,7 @@ step needs a workshop host. See
 ## Entry points
 
 The library has three entry patterns and a set of building blocks, all reached
-through the single `github.com/josecabralf/taboo/pkg` import. Full signatures are
+through the single `github.com/josecabralf/taboo` import. Full signatures are
 in [docs/reference/library-api.md](docs/reference/library-api.md).
 
 `RunWorkflow` / `RunWorkflowAs[T]` is the one-call bridge from a `taboo.yaml`. It
@@ -137,8 +137,9 @@ return in input order; a per-run failure is recorded on `results[i].Err` without
 aborting the batch. See [docs/guides/fan-out-runs.md](docs/guides/fan-out-runs.md).
 
 `AgentProfile` is the agent contract: `Name`, `BuildCommand`, `CredentialEnvKeys`,
-`Sessions`. Build one with `NewProfile(name, model)` for `opencode`, `claude-code`,
-or `copilot`; it returns a wrapped `ErrUnknownAgent` for an unknown name. See
+`Sessions`. Build one with `NewProfile(taboo.OpenCode, model)`,
+`NewProfile(taboo.ClaudeCode, model)`, or `NewProfile(taboo.GitHubCopilot, model)`;
+it returns a wrapped `ErrUnknownAgent` for an unknown name. See
 [docs/reference/agents.md](docs/reference/agents.md).
 
 `ResultExtractor` decodes a typed result from agent output. `JSONResult[T]()`
@@ -248,7 +249,7 @@ taboo core stays frozen.
 
 The library is feature-complete and tested. A run produces a named, isolated
 branch per worktree, driven by `RunWorkflow`, a resolved `Plan`, or `Pool`. Three
-agents are supported: `opencode`, `claude-code`, and `copilot`. The CLI covers `init`,
+agents are supported: `opencode`, `claude-code`, and `github-copilot`. The CLI covers `init`,
 `run`, `validate`, `doctor`, `list`, and `clean`; its `run` drives the iteration
 loop through `--iterations` and `--signal`. Fan-out, typed structured output,
 and lifecycle hooks are available through the Go API only. The module is

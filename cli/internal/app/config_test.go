@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // writeTabooProject lays out <root>/.taboo/taboo.yaml with body and returns the
@@ -174,9 +174,9 @@ func TestConfigChecks_MultiKeyCredentials(t *testing.T) {
 			env: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "tok"}, want: ""},
 		{name: "claude-code no keys warns", agent: "claude-code", check: "credentials/claude-code",
 			env: nil, want: "warn"},
-		{name: "copilot third key only", agent: "copilot", check: "credentials/copilot",
+		{name: "github-copilot third key only", agent: "github-copilot", check: "credentials/github-copilot",
 			env: map[string]string{"GITHUB_TOKEN": "ghp"}, want: ""},
-		{name: "copilot no keys warns", agent: "copilot", check: "credentials/copilot",
+		{name: "github-copilot no keys warns", agent: "github-copilot", check: "credentials/github-copilot",
 			env: nil, want: "warn"},
 	}
 	for _, tt := range tests {

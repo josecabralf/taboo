@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -13,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // errValidateFailed is the sentinel validate returns when any check is an error.
@@ -147,7 +148,7 @@ func deriveChecks(cfg taboo.ProjectConfig, repoBase string, statFile func(string
 		return nil // unknown agent: agentChecks already flags it, don't double-report.
 	}
 	runnerCfg := taboo.Config{
-		Workshop: workshopName(cfg.Workshop, profile.Name()),
+		Workshop: workshopName(cfg.Workshop, string(profile.Name())),
 		Agent:    profile,
 		RepoPath: repoBase,
 	}
@@ -167,7 +168,7 @@ func deriveChecks(cfg taboo.ProjectConfig, repoBase string, statFile func(string
 
 // resolveRepoBase resolves the project repo directory the same way a real run
 // does, anchored to the config's directory rather than the process CWD. It
-// mirrors the runtime resolver pkg/internal/config.resolveRepoPath (which the CLI
+// mirrors the runtime resolver internal/config.resolveRepoPath (which the CLI
 // cannot import because it is internal). An absolute repo value stands on its
 // own; a relative one anchors to configDir; a dot repo in a .taboo config
 // resolves to the parent (the repo root). The result is best-effort absolute,
@@ -219,32 +220,21 @@ func decodeValidate(data []byte) (taboo.ProjectConfig, error) {
 	return cfg, nil
 }
 
-// orElse returns override when non-empty, otherwise fallback — the
-// workflow-then-top-level precedence taboo applies to agent and model. It mirrors
-// the unexported helper in pkg/taboo (config.go), duplicated here because the CLI
-// cannot import it.
-func orElse(override, fallback string) string {
-	if override == "" {
-		return fallback
-	}
-	return override
-}
-
 // referencedAgents returns the distinct, non-empty, sorted set of agent names the
 // config refers to: the top-level agent plus each workflow's effective agent (its
 // own, falling back to the top level).
-func referencedAgents(cfg taboo.ProjectConfig) []string {
-	seen := map[string]struct{}{}
-	add := func(name string) {
+func referencedAgents(cfg taboo.ProjectConfig) []taboo.AgentName {
+	seen := map[taboo.AgentName]struct{}{}
+	add := func(name taboo.AgentName) {
 		if name != "" {
 			seen[name] = struct{}{}
 		}
 	}
 	add(cfg.Agent)
 	for _, wf := range cfg.Workflows {
-		add(orElse(wf.Agent, cfg.Agent))
+		add(cmp.Or(wf.Agent, cfg.Agent))
 	}
-	out := make([]string, 0, len(seen))
+	out := make([]taboo.AgentName, 0, len(seen))
 	for name := range seen {
 		out = append(out, name)
 	}
@@ -265,21 +255,28 @@ func agentChecks(cfg taboo.ProjectConfig) []check {
 	var checks []check
 	allKnown := true
 	for _, name := range names {
-		if slices.Contains(known, name) {
+		if slices.Contains(known, string(name)) {
 			continue
 		}
 		allKnown = false
-		msg, _ := unknownAgentMessage(name, known)
-		checks = append(checks, fail("agent/"+name, msg))
+		msg, _ := unknownAgentMessage(string(name), known)
+		checks = append(checks, fail("agent/"+string(name), msg))
 	}
 	if allKnown {
-		checks = append(checks, ok("agent", "all referenced agents are registered ("+strings.Join(names, ", ")+")"))
+		strs := make([]string, len(names))
+		for i, n := range names {
+			strs[i] = string(n)
+		}
+		checks = append(checks, ok("agent", "all referenced agents are registered ("+strings.Join(strs, ", ")+")"))
 	}
 	return checks
 }
 
 // agentModel is one effective (agent, model) binding the config produces.
-type agentModel struct{ agent, model string }
+type agentModel struct {
+	agent taboo.AgentName
+	model string
+}
 
 // referencedModels returns the distinct, sorted set of effective (agent, model)
 // bindings the config produces: the top-level pair plus each workflow's effective
@@ -289,7 +286,7 @@ type agentModel struct{ agent, model string }
 func referencedModels(cfg taboo.ProjectConfig) []agentModel {
 	seen := map[agentModel]struct{}{}
 	var out []agentModel
-	add := func(agent, model string) {
+	add := func(agent taboo.AgentName, model string) {
 		if agent == "" {
 			return
 		}
@@ -302,10 +299,10 @@ func referencedModels(cfg taboo.ProjectConfig) []agentModel {
 	}
 	add(cfg.Agent, cfg.Model)
 	for _, wf := range cfg.Workflows {
-		add(orElse(wf.Agent, cfg.Agent), orElse(wf.Model, cfg.Model))
+		add(cmp.Or(wf.Agent, cfg.Agent), cmp.Or(wf.Model, cfg.Model))
 	}
 	slices.SortFunc(out, func(a, b agentModel) int {
-		if c := strings.Compare(a.agent, b.agent); c != 0 {
+		if c := strings.Compare(string(a.agent), string(b.agent)); c != 0 {
 			return c
 		}
 		return strings.Compare(a.model, b.model)
@@ -328,13 +325,13 @@ func modelChecks(cfg taboo.ProjectConfig) []check {
 	var checks []check
 	for _, am := range referencedModels(cfg) {
 		if strings.TrimSpace(am.model) == "" {
-			checks = append(checks, fail("model/"+am.agent,
-				"agent \""+am.agent+"\" has no model configured (model is required)"))
+			checks = append(checks, fail("model/"+string(am.agent),
+				"agent \""+string(am.agent)+"\" has no model configured (model is required)"))
 			continue
 		}
 		if ok, expected := taboo.MatchModelFormat(am.agent, am.model); !ok {
-			checks = append(checks, warn("model/"+am.agent+"/"+am.model,
-				"model \""+am.model+"\" does not look like a model for "+am.agent+" (expected "+
+			checks = append(checks, warn("model/"+string(am.agent)+"/"+am.model,
+				"model \""+am.model+"\" does not look like a model for "+string(am.agent)+" (expected "+
 					expected+"); set it intentionally to silence this"))
 		}
 	}

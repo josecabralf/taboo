@@ -15,7 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // errRunFailed is the sentinel run returns when its preflight finds an error
@@ -173,7 +173,7 @@ func mapPlanError(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions, 
 // result on stdout stays clean.
 func planOverrides(env Env, opts *runOptions) taboo.PlanOverrides {
 	return taboo.PlanOverrides{
-		Agent: opts.agent, Model: opts.model,
+		Agent: taboo.AgentName(opts.agent), Model: opts.model,
 		Timeout: opts.timeout, MaxIterations: opts.iterations,
 		CompletionSignal: opts.signal, Branch: opts.branch, From: opts.from,
 		Prompt: opts.prompt, PromptFile: opts.promptFile,
@@ -340,7 +340,13 @@ func loadProjectConfig(env Env) (string, *taboo.ProjectConfig, error) {
 // bridge rejected. Sharing it keeps the ad-hoc gate and that message aligned with
 // the bridge's own agent precedence.
 func effectiveAgent(cfg *taboo.ProjectConfig, wf taboo.Workflow, opts *runOptions) string {
-	return orElse(opts.agent, orElse(wf.Agent, cfg.Agent))
+	if opts.agent != "" {
+		return opts.agent
+	}
+	if wf.Agent != "" {
+		return string(wf.Agent)
+	}
+	return string(cfg.Agent)
 }
 
 // unknownAgentError turns NewProfile's wrapped ErrUnknownAgent into a CLI message

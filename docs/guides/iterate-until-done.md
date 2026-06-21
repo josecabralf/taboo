@@ -54,7 +54,7 @@ import (
 	"fmt"
 	"log"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 func main() {

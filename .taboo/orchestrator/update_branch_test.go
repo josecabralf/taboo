@@ -10,7 +10,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // fakeUpdateBranchGH records the order and arguments of the gh/git calls

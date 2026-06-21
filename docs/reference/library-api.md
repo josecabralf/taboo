@@ -1,13 +1,13 @@
 # Library API reference
 
-The exported surface of `package taboo` (`github.com/josecabralf/taboo/pkg`).
-Import path: `taboo "github.com/josecabralf/taboo/pkg"`.
+The exported surface of `package taboo` (`github.com/josecabralf/taboo`).
+Import path: `"github.com/josecabralf/taboo"`.
 
 Signatures below are copied from the package's public surface. The package
 decomposes into `internal/` packages behind a facade, so the implementations live
 out of sight; everything documented here is reachable through the single import
 path above. The generated godoc is the rendered source of truth:
-<https://pkg.go.dev/github.com/josecabralf/taboo/pkg>.
+<https://pkg.go.dev/github.com/josecabralf/taboo>.
 
 The library has three entry patterns, from highest-level to lowest:
 
@@ -68,7 +68,8 @@ Use this path when you want to see or tweak the resolved run before it happens;
 
 ```go
 type PlanOverrides struct {
-    Agent, Model       string
+    Agent              AgentName
+    Model              string
     Timeout            time.Duration
     MaxIterations      int
     CompletionSignal   string
@@ -194,11 +195,25 @@ the loop stopped early.
 
 ```go
 type AgentProfile interface {
-    Name() string
+    Name() AgentName
     BuildCommand(CommandOptions) AgentCommand
     CredentialEnvKeys() []string
     Sessions() (SessionSpec, bool)
 }
+
+// Named agent constants
+type AgentName string
+
+const (
+    OpenCode      AgentName = "opencode"
+    ClaudeCode    AgentName = "claude-code"
+    GitHubCopilot AgentName = "github-copilot"
+)
+
+// Agent registry helpers
+func NewProfile(name AgentName, model string) (AgentProfile, error)
+func AgentNames() []string
+func MatchModelFormat(agentName AgentName, model string) (ok bool, expected string)
 ```
 
 `AgentProfile` is taboo's per-agent abstraction: it names the agent's SDK
@@ -352,7 +367,7 @@ type ProjectConfig struct {
     Workshop         string              `yaml:"workshop"`
     Base             string              `yaml:"base"`
     Repo             string              `yaml:"repo"`
-    Agent            string              `yaml:"agent"`
+    Agent            AgentName           `yaml:"agent"`
     Model            string              `yaml:"model"`
     Strategy         string              `yaml:"strategy,omitempty"`
     SourceDefinition string              `yaml:"source-definition,omitempty"`
@@ -398,7 +413,7 @@ type Workflow struct {
     Prompt        string       `yaml:"prompt,omitempty"`
     PromptFile    string       `yaml:"prompt-file,omitempty"`
     Model         string       `yaml:"model,omitempty"`
-    Agent         string       `yaml:"agent,omitempty"`
+    Agent         AgentName    `yaml:"agent,omitempty"`
     MaxIterations int          `yaml:"max-iterations,omitempty"`
     Timeout       string       `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
     Profile       AgentProfile `yaml:"-"`
@@ -431,9 +446,9 @@ rendered workshop definition and is passed to every `workshop --project` call.
 ## Agent registry and CLI-support facet
 
 ```go
-func NewProfile(name, model string) (AgentProfile, error)
+func NewProfile(name AgentName, model string) (AgentProfile, error)
 func AgentNames() []string
-func MatchModelFormat(agentName, model string) (ok bool, expected string)
+func MatchModelFormat(agentName AgentName, model string) (ok bool, expected string)
 
 func DryRunDerive(cfg Config, source []byte) (projectNames []string, err error)
 func SourceDefinitions(repoPath string) ([]string, error)

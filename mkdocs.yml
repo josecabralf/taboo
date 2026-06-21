@@ -127,7 +127,7 @@ nav:
           - reference/agents.md
           - reference/taboo-yaml.md
           - Run variables: run-vars.md
-          - "Go API ↗ (pkg.go.dev)": https://pkg.go.dev/github.com/josecabralf/taboo/pkg
+          - "Go API ↗ (pkg.go.dev)": https://pkg.go.dev/github.com/josecabralf/taboo
       - Explanation:
           - explanation/design.md
           - explanation/isolation-model.md

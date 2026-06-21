@@ -28,8 +28,8 @@ The registry is **keyed by `New("").Name()`** — the key *is* the profile's own
 the existing invariant that an agent's `Name()` is one identity with the workshop
 SDK qualifier (see CONTEXT.md, ADR 0001); `Name()` is model-independent, so
 constructing with `""` purely to read the key is safe. Public surface:
-`NewProfile(name, model string) (AgentProfile, error)` returning a wrapped
-sentinel `ErrUnknownAgent` on a miss, and `AgentNames() []string` (sorted) for
+`NewProfile(name AgentName, model string) (AgentProfile, error)` returning a wrapped
+sentinel `ErrUnknownAgent` on a miss, and `AgentNames() []AgentName` (sorted) for
 the CLI's candidate set.
 
 The **model-format hint is registry-table metadata, sourced from a value defined

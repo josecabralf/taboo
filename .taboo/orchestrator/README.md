@@ -2,8 +2,8 @@
 
 `afk` runs taboo's AFK ("away from keyboard") agent loop: take a GitHub issue,
 have an agent implement it, push the branch, and open a draft PR; then, when the
-PR is labelled, review it. The orchestration is ordinary Go built on **`pkg`**
-(imported as `github.com/josecabralf/taboo/pkg`, package `taboo`) —
+PR is labelled, review it. The orchestration is ordinary Go built on **`taboo`**
+(imported as `github.com/josecabralf/taboo`, package `taboo`) —
 unit-testable and runnable locally — and GitHub Actions only does checkout,
 setup, and token plumbing. Both the `implement` and `review` flows replaced
 earlier bash-around-`taboo run` workflows (PRs #65, #79). See
@@ -12,7 +12,7 @@ earlier bash-around-`taboo run` workflows (PRs #65, #79). See
 ## Layout
 
 - `main.go` — the `afk` binary; stdlib-`flag` dispatch and the `implement`
-  subcommand that wires the implement flow end-to-end. The run goes onto `pkg`
+  subcommand that wires the implement flow end-to-end. The run goes onto `taboo`
   through the bridge one-liner `taboo.RunWorkflow`, which discovers `taboo.yaml`,
   resolves the named workflow, and drives the run.
 - `review.go` — the `review` subcommand wiring the review flow end-to-end,
@@ -44,7 +44,7 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 `implement` drives one issue end-to-end:
 
 1. **Fetch** the issue title/body via `gh` (`internal/ghio`).
-2. **Run** the `implement` workflow on `pkg`: the agent runs inside a
+2. **Run** the `implement` workflow on `taboo`: the agent runs inside a
    taboo-provisioned workshop and **commits in place** — it is git-**push-denied**.
 3. **Push** the run's branch to origin.
 4. **Open a draft PR** whose body is the agent's plan (read from `.taboo-plan.md`
@@ -54,7 +54,7 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 `review` reviews one PR and posts exactly one review:
 
 1. **Fetch** the PR's unified diff via `gh pr diff` (`internal/ghio`).
-2. **Run** the `review` workflow on `pkg`, asking for a `<result>` block of
+2. **Run** the `review` workflow on `taboo`, asking for a `<result>` block of
    `{summary, comments:[{path, line, body}]}`, decoded in-loop by the typed
    bridge `taboo.RunWorkflowAs[reviewResult]`.
 3. **Drop** any inline comment whose `path:line` is not addressable in the diff
@@ -67,7 +67,7 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 
 1. **Resolve** the branch (`--branch`, default the current one) and compute its
    diff against `main` (`git diff main...<branch>`).
-2. **Run** the `write-pr` workflow on `pkg`, asking for a `<result>` block of
+2. **Run** the `write-pr` workflow on `taboo`, asking for a `<result>` block of
    `{title, body}`, decoded in-loop by `taboo.RunWorkflowAs[prContent]`. An empty
    diff or empty title is an error before any PR is touched.
 3. **Update in place**: `PRForBranch` → `EditPR` refreshes the branch's existing
@@ -86,7 +86,7 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
    `origin/main` and `origin/<branch>` are current (`internal/ghio`).
 2. **No-op gate**: if `origin/main` is already contained in the branch, do nothing
    — no workshop, no commit, no push — and exit 0.
-3. **Run** the `update-branch` workflow on `pkg` with the run's worktree started at
+3. **Run** the `update-branch` workflow on `taboo` with the run's worktree started at
    the PR branch's current remote tip (`origin/<branch>`, via the `BaseRef`
    capability): the agent merges `origin/main`, resolves conflicts, and validates
    the merged tree in-workshop (`make lint test build`), reporting an
@@ -129,8 +129,8 @@ All GitHub I/O is in Go; none of it is workflow bash.
 
 ## Nested module
 
-The module is `module afk` with `replace github.com/josecabralf/taboo/pkg => ../../pkg`
-pinning it to the in-tree taboo library module. It is nested under the dot-directory `.taboo/`
+The module is `module afk` with `replace github.com/josecabralf/taboo => ../..`
+pinning it to the in-tree taboo library module (the repo root). It is nested under the dot-directory `.taboo/`
 on purpose: Go tooling ignores directories beginning with `.`, so packages here
 are invisible to the root module's `./...` (and therefore to `make build/test`).
 Nesting isolates the example as its own module while `replace` keeps it building

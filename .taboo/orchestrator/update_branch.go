@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // updateBranchResult is the structured output the update-branch agent emits in its

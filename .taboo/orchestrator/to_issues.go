@@ -10,7 +10,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // childIssue is one vertical-slice child the to-issues agent emits in its

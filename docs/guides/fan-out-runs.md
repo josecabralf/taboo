@@ -24,11 +24,11 @@ import (
 	"fmt"
 	"log"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 func main() {
-	agent, err := taboo.NewProfile("opencode", "openrouter/qwen/qwen3-coder-plus")
+	agent, err := taboo.NewProfile(taboo.OpenCode, "openrouter/qwen/qwen3-coder-plus")
 	if err != nil {
 		log.Fatal(err)
 	}

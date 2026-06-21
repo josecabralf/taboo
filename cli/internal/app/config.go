@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // findConfig ascends from start looking for a taboo.yaml: either start itself is
@@ -107,9 +107,10 @@ func credentialChecks(env Env, cfg *taboo.ProjectConfig) []check {
 		if anyEnvSet(env, keys) {
 			continue
 		}
+		name := string(p.Name())
 		checks = append(checks, warn(
-			"credentials/"+p.Name(),
-			"missing credentials for agent "+p.Name()+" (set one of: "+strings.Join(keys, ", ")+")",
+			"credentials/"+name,
+			"missing credentials for agent "+name+" (set one of: "+strings.Join(keys, ", ")+")",
 		))
 	}
 	return checks
@@ -119,7 +120,7 @@ func credentialChecks(env Env, cfg *taboo.ProjectConfig) []check {
 // Name() in sorted name order: the top-level profile plus every workflow
 // profile that is non-nil.
 func distinctProfiles(cfg *taboo.ProjectConfig) []taboo.AgentProfile {
-	seen := map[string]taboo.AgentProfile{}
+	seen := map[taboo.AgentName]taboo.AgentProfile{}
 	if cfg.Profile != nil {
 		seen[cfg.Profile.Name()] = cfg.Profile
 	}
@@ -133,7 +134,7 @@ func distinctProfiles(cfg *taboo.ProjectConfig) []taboo.AgentProfile {
 		out = append(out, p)
 	}
 	slices.SortFunc(out, func(a, b taboo.AgentProfile) int {
-		return strings.Compare(a.Name(), b.Name())
+		return strings.Compare(string(a.Name()), string(b.Name()))
 	})
 	return out
 }

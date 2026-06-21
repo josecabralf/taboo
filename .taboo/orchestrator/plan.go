@@ -12,7 +12,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // readyLabel is the label an issue carries once it is ready for an agent to pick

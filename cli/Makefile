@@ -3,7 +3,7 @@
 .DEFAULT_GOAL := help
 
 # The taboo CLI module (github.com/josecabralf/taboo/cli). It depends on the
-# cobra/huh/charmbracelet stack and on the library via `replace ../pkg`; the thin
+# cobra/huh/charmbracelet stack and on the library via `replace ..`; the thin
 # main.go delegates to cli/internal/app.
 
 help: ## List available targets

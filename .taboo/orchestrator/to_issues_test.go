@@ -12,7 +12,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // fakeToIssuesGH records the order and arguments of the gh calls toIssues makes

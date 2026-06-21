@@ -1,6 +1,6 @@
 # taboo documentation
 
-taboo is a Go library that orchestrates AI coding agents inside Canonical workshop environments. The library (package `taboo`, import path `github.com/josecabralf/taboo/pkg`) is the primary contract; the `taboo` CLI wraps the common paths.
+taboo is a Go library that orchestrates AI coding agents inside Canonical workshop environments. The library (package `taboo`, import path `github.com/josecabralf/taboo`) is the primary contract; the `taboo` CLI wraps the common paths.
 
 New here? Start with one of the two tutorials below: [the library first run](tutorials/library-first-run.md) drives an agent from Go, and [the CLI first run](tutorials/cli-first-run.md) drives one from `taboo run`.
 

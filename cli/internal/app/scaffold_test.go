@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // newScaffoldInputs builds scaffoldInputs for agent/model with a resolved
 // profile, failing the test if the agent is unknown.
 func newScaffoldInputs(t *testing.T, agent, model string) scaffoldInputs {
 	t.Helper()
-	profile, err := taboo.NewProfile(agent, model)
+	profile, err := taboo.NewProfile(taboo.AgentName(agent), model)
 	if err != nil {
 		t.Fatalf("NewProfile(%q, %q): %v", agent, model, err)
 	}
@@ -24,7 +24,7 @@ func newScaffoldInputs(t *testing.T, agent, model string) scaffoldInputs {
 		Workshop: "demo",
 		Base:     "ubuntu@24.04",
 		Repo:     "/home/me/demo",
-		Agent:    agent,
+		Agent:    taboo.AgentName(agent),
 		Model:    model,
 		Profile:  profile,
 	}
@@ -109,7 +109,7 @@ func TestPlan_TemplateSingle(t *testing.T) {
 		t.Errorf("main.go does not parse: %v", perr)
 	}
 	main := string(byPath["main.go"])
-	if !strings.Contains(main, "github.com/josecabralf/taboo/pkg") {
+	if !strings.Contains(main, "github.com/josecabralf/taboo") {
 		t.Errorf("main.go missing taboo import\nfull:\n%s", main)
 	}
 	if !strings.Contains(main, "RunWorkflow") {
@@ -135,7 +135,7 @@ func TestPlan_TemplateSingle(t *testing.T) {
 	}
 	// The reproducibility contract: the require line pins the exact libraryVersion
 	// — no @-pinned pseudo-version, no @latest, no replace override.
-	wantRequire := "require github.com/josecabralf/taboo/pkg " + libraryVersion + "\n"
+	wantRequire := "require github.com/josecabralf/taboo " + libraryVersion + "\n"
 	if !strings.Contains(mod, wantRequire) {
 		t.Errorf("go.mod must pin the exact library version %q\nfull:\n%s", libraryVersion, mod)
 	}

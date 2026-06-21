@@ -1,22 +1,22 @@
 # Agents reference
 
-taboo supports three agents: `opencode`, `claude-code`, and `copilot`. Each is
-one `AgentProfile` implementation (`pkg/internal/agent/agent.go`); construct one
+taboo supports three agents: `opencode`, `claude-code`, and `github-copilot`. Each is
+one `AgentProfile` implementation (`internal/agent/agent.go`); construct one
 through the public `NewProfile(name, model)`. The profiles live in
-`pkg/internal/agent/agent_opencode.go`, `agent_claudecode.go`, and
-`agent_copilot.go`; the declarative roster that ties names to constructors is in
-`pkg/internal/agent/registry.go`.
+`internal/agent/agent_opencode.go`, `agent_claudecode.go`, and
+`agent_githubcopilot.go`; the declarative roster that ties names to constructors is in
+`internal/agent/registry.go`.
 
 The generated godoc is the rendered source of truth:
-<https://pkg.go.dev/github.com/josecabralf/taboo/pkg>.
+<https://pkg.go.dev/github.com/josecabralf/taboo>.
 
 ## Summary
 
 | Agent | `Name()` | Construct with | Credential env keys | Prompt delivery | Sessions `DirEnv` / `Subdir` | Model-hint `expected` | Fork |
-|---|---|---|---|---|---|---|---|
-| OpenCode | `opencode` | `NewProfile("opencode", model)` | `OPENROUTER_API_KEY` | argv | `XDG_DATA_HOME` / `opencode` | `<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus` | native (`--fork`) |
-| Claude Code | `claude-code` | `NewProfile("claude-code", model)` | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | stdin | `CLAUDE_CONFIG_DIR` / `projects` | `a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet` | native (`--fork-session`) |
-| Copilot | `copilot` | `NewProfile("copilot", model)` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | argv (value of `-p`) | `COPILOT_HOME` / `session-state` | none (never warns) | ignored |
+|---|---|---|---|---|---|---|---|---|
+| OpenCode | `opencode` | `NewProfile(taboo.OpenCode, model)` | `OPENROUTER_API_KEY` | argv | `XDG_DATA_HOME` / `opencode` | `<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus` | native (`--fork`) |
+| Claude Code | `claude-code` | `NewProfile(taboo.ClaudeCode, model)` | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | stdin | `CLAUDE_CONFIG_DIR` / `projects` | `a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet` | native (`--fork-session`) |
+| GitHub Copilot | `github-copilot` | `NewProfile(taboo.GitHubCopilot, model)` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | argv (value of `-p`) | `COPILOT_HOME` / `session-state` | none (never warns) | ignored |
 
 All three deny `git push` from inside the workshop. Credential env keys reach the
 agent via `workshop exec --env NAME`, which silently drops any key that is unset
@@ -24,9 +24,9 @@ on the host, so a user forwards only the credential they hold.
 
 ## OpenCode
 
-Source: `pkg/internal/agent/agent_opencode.go`.
+Source: `internal/agent/agent_opencode.go`.
 
-`Name()` returns `opencode`. Construct it with `NewProfile("opencode", model)`.
+`Name()` returns `opencode`. Construct it with `NewProfile(taboo.OpenCode, model)`.
 
 Credential env keys (`CredentialEnvKeys()`): `OPENROUTER_API_KEY`. OpenCode
 authenticates from this key in the environment.
@@ -51,9 +51,9 @@ the workshop is the security boundary.
 
 ## Claude Code
 
-Source: `pkg/internal/agent/agent_claudecode.go`.
+Source: `internal/agent/agent_claudecode.go`.
 
-`Name()` returns `claude-code`. Construct it with `NewProfile("claude-code", model)`.
+`Name()` returns `claude-code`. Construct it with `NewProfile(taboo.ClaudeCode, model)`.
 
 Credential env keys (`CredentialEnvKeys()`): `ANTHROPIC_API_KEY` and
 `CLAUDE_CODE_OAUTH_TOKEN`, in that order. `ANTHROPIC_API_KEY` is for API users;
@@ -84,11 +84,11 @@ Push deny: yes, via `--disallowedTools "Bash(git push *)"`. A deny outranks
 `--permission-mode auto`. The single `*` spans all arguments, so bare
 `git push`, `git push origin main`, and `--force` in any position are blocked.
 
-## Copilot
+## GitHub Copilot
 
-Source: `pkg/internal/agent/agent_copilot.go`.
+Source: `internal/agent/agent_githubcopilot.go`.
 
-`Name()` returns `copilot`. Construct it with `NewProfile("copilot", model)`.
+`Name()` returns `github-copilot`. Construct it with `NewProfile(taboo.GitHubCopilot, model)`.
 
 Credential env keys (`CredentialEnvKeys()`): `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`,
 and `GITHUB_TOKEN`, in Copilot's own documented precedence order. `workshop exec
@@ -108,7 +108,7 @@ transcripts land under `session-state/`.
 
 Model hint: none. `copilotHint` is the no-opinion hint (nil pattern), because
 Copilot proxies models from many providers. `taboo validate` never warns on a
-Copilot model, and `MatchModelFormat("copilot", ...)` returns `expected` as `""`.
+Copilot model, and `MatchModelFormat(taboo.GitHubCopilot, ...)` returns `expected` as `""`.
 
 Fork: ignored. Copilot has no native headless fork, so `CommandOptions.Fork` is
 not consulted in `BuildCommand`. A run that sets `Fork` degrades to worktree-only
@@ -128,46 +128,49 @@ integration. The agent never needs to push. See
 
 ## Agent resolution
 
-Source: `pkg/internal/agent/registry.go`.
+Source: `internal/agent/registry.go`.
 
 ```go
-func NewProfile(name, model string) (AgentProfile, error)
-func AgentNames() []string
-func MatchModelFormat(agent, model string) (ok bool, expected string)
+func NewProfile(name AgentName, model string) (AgentProfile, error)
+func AgentNames() []AgentName
+func MatchModelFormat(agent AgentName, model string) (ok bool, expected string)
 ```
 
 The roster in `registry.go` is a slice of registrations, one line per supported
-agent, keyed by each profile's own `Name()`:
+agent (internal constructor names `NewOpenCode`, `NewClaudeCode`, `NewGitHubCopilot`).
+The public constants live in `internal/agent` and are re-exported from the
+facade as `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`:
 
 ```go
 var agents = []registration{
-    {New: OpenCode, Hint: openCodeHint},
-    {New: ClaudeCode, Hint: claudeCodeHint},
-    {New: Copilot, Hint: copilotHint},
+    {New: NewOpenCode, Hint: openCodeHint},
+    {New: NewClaudeCode, Hint: claudeCodeHint},
+    {New: NewGitHubCopilot, Hint: copilotHint},
 }
 ```
 
-`NewProfile(name, model)` scans the roster for a registration whose `Name()`
+`NewProfile(name AgentName, model)` scans the roster for a registration whose `Name()`
 equals `name` and returns `New(model)`. An unmatched name returns a wrapped
 `ErrUnknownAgent` (`taboo: unknown agent`); match it with `errors.Is`.
 `NewProfile` validates the name only, not the model.
 
-`AgentNames()` returns the registered names sorted: `claude-code`, `copilot`,
-`opencode`.
+`AgentNames()` returns the registered names sorted: `claude-code`, `github-copilot`,
+`opencode`. Use the `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`
+constants with `NewProfile` or `Workflow.Agent`.
 
-`MatchModelFormat(agent, model)` reads the registration's `Hint` and reports
+`MatchModelFormat(agent AgentName, model)` reads the registration's `Hint` and reports
 whether `model` looks well-formed, plus the `expected` format string. It is
 advisory: `taboo validate` turns a non-match into a warning, never a failure.
 
-`LoadConfig` (`pkg/internal/config/config.go`) resolves the top-level `agent` and `model`, and each
+`LoadConfig` (`internal/config/config.go`) resolves the top-level `agent` and `model`, and each
 workflow's, to an `AgentProfile` through `NewProfile`, storing them on
 `ProjectConfig.Profile` and `Workflow.Profile`.
 
 ## Unsupported agents
 
 `codex` and `pi` are not supported. They exist only as SDK stub directories under
-`pkg/internal/workshop/sdk/`. They have no Go profile in `agent_*.go` and no registration in
-`registry.go`, so `NewProfile("codex", ...)` and `NewProfile("pi", ...)` return
+`internal/workshop/sdk/`. They have no Go profile in `agent_*.go` and no registration in
+`registry.go`, so `NewProfile(taboo.AgentName("codex"), ...)` and `NewProfile(taboo.AgentName("pi"), ...)` return
 `ErrUnknownAgent`, and `AgentNames()` does not list them.
 
 ## See also

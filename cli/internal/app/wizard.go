@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // runWizard collects and confirms agent, model, base, and repo through an
@@ -15,10 +15,14 @@ import (
 // one part of init that needs a real TTY, so it stays thin and is exercised
 // manually rather than in unit tests.
 func runWizard(env Env, opts *initOptions) error {
+	agentOptions := make([]huh.Option[string], len(taboo.AgentNames()))
+	for i, n := range taboo.AgentNames() {
+		agentOptions[i] = huh.NewOption(n, n)
+	}
 	fields := []huh.Field{
 		huh.NewSelect[string]().
 			Title("Agent").
-			Options(huh.NewOptions(taboo.AgentNames()...)...).
+			Options(agentOptions...).
 			Value(&opts.agent),
 		huh.NewInput().
 			Title("Model").

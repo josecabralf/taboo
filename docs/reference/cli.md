@@ -29,7 +29,7 @@ Positional arguments: none (`cobra.NoArgs`).
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--agent` | `""` | Agent to scaffold for (`opencode`, `claude-code`, `copilot`). Required non-interactively. |
+| `--agent` | `""` | Agent to scaffold for (`opencode`, `claude-code`, `github-copilot`). Required non-interactively. |
 | `--model` | `""` | Model passed to the chosen agent. Required non-interactively. |
 | `--base` | `ubuntu@24.04` | Workshop base image (`defaultBase` in `cmd/taboo/init.go`). |
 | `--repo` | current directory | Host repository path to scaffold into; resolved to an absolute path. |
@@ -48,7 +48,7 @@ interactively)`. A fully flagged invocation skips the wizard even at a TTY.
 `init` refuses to overwrite an existing `.taboo` directory unless `--force` is
 set: `.taboo already exists at PATH; pass --force to regenerate its scaffold
 files` (`ensureWritable`). An unknown agent is reported with the valid set:
-`unknown agent "X"; valid agents: claude-code, copilot, opencode`.
+`unknown agent "X"; valid agents: claude-code, github-copilot, opencode`.
 
 Output routing: progress, the scaffold confirmation, and next steps go to
 stdout (`printNextSteps`); errors go to stderr prefixed with `Error:`. A

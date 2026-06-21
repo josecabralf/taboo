@@ -13,20 +13,20 @@ A workshop is an LXD-backed development environment defined declaratively and
 provisioned by the `workshop` snap. taboo does not import workshop's Go client or
 speak its REST socket; it shells out to the `workshop` binary, driving everything
 through `Cmd{Name: "workshop", ...}` over the `Commander` seam in
-`pkg/internal/exec/commander.go`. The verbs it uses are `launch`, `stop`, `start`,
-`info`, `remount`, and `exec`, assembled in `pkg/internal/workshop/workshop.go`.
+`internal/exec/commander.go`. The verbs it uses are `launch`, `stop`, `start`,
+`info`, `remount`, and `exec`, assembled in `internal/workshop/workshop.go`.
 
 A workshop is expensive to stand up. The LXD container has to be created and the
 agent CLI installed into its rootfs, which takes minutes. That cost shapes the
 rest of the model: taboo provisions a workshop once and reuses it across many
 runs rather than creating one per run. `Runner.ensureWorkshop` in
-`pkg/internal/run/runner.go` probes with `workshop info` and only launches when the
+`internal/run/runner.go` probes with `workshop info` and only launches when the
 probe fails, so the second run onward reuses the existing workshop.
 
 ## Why two mounts, not one
 
 The agent works inside a fresh git worktree, one per run, created with
-`git worktree add -b <branch>` (`Runner.Setup` in `pkg/internal/run/runner.go`). A
+`git worktree add -b <branch>` (`Runner.Setup` in `internal/run/runner.go`). A
 linked worktree is not self-contained. Its `.git` entry is a pointer file of the
 form `gitdir: <repo>/.git/worktrees/<name>`, and its objects and refs live in the
 main repository's `.git`. Mounting only the worktree's working directory into the
@@ -36,12 +36,12 @@ reports `fatal: not a git repository`.
 So taboo bind-mounts two things into the workshop:
 
 1. the run's worktree, at the fixed target `/taboo/workspace` (the `WorkspaceTarget`
-   constant in `pkg/internal/workshop/template.go`);
+   constant in `internal/workshop/template.go`);
 2. the repository's main `.git`, the git common directory, at its identical host
    absolute path inside the workshop.
 
 The second mount is the load-bearing one. `GitCommonTarget` in
-`pkg/internal/workshop/template.go` returns `filepath.Join(repoPath, ".git")`,
+`internal/workshop/template.go` returns `filepath.Join(repoPath, ".git")`,
 and that value is used both as the mount target baked into the workshop
 definition and as the remount source, so the host `.git` path and the
 in-workshop `.git` path are the same string.
@@ -105,20 +105,20 @@ than installed at runtime. A `stop` reprovisions the rootfs from the declared SD
 so anything installed ad hoc into the rootfs by a previous `exec` is wiped before
 the next run. Only the bind-mounts survive. taboo therefore ships the agent CLI
 as a workshop SDK embedded with `//go:embed sdk` in
-`pkg/internal/workshop/materialize.go` and seeds it into the project on first run,
+`internal/workshop/materialize.go` and seeds it into the project on first run,
 so the agent is present in the rootfs every time the workshop starts.
 
 ## One workshop per agent, one workshop per slot
 
 A single workshop is pinned to one agent and, through the git-common mount, to one
-repository. `WorkshopName(base, agent)` in `pkg/internal/workshop/workshop.go`
+repository. `WorkshopName(base, agent)` in `internal/workshop/workshop.go`
 derives the name as `base + "-" + agent`, so each distinct agent gets its own
 reused workshop. The repository pinning is structural: the git-common target
 equals `<repoPath>/.git`, and `remount` repoints a mount's source but cannot move
 its target after launch, so a workshop launched for one repository cannot serve
 another at a different absolute path without breaking the identical-path invariant.
 
-Fan-out follows the same logic at the slot level. `Pool` in `pkg/internal/run/pool.go`
+Fan-out follows the same logic at the slot level. `Pool` in `internal/run/pool.go`
 gives each concurrency slot a distinct workshop named `"<Workshop>-<slot>"` under
 its own project directory `"<ProjectDir>/slot-<slot>"`, so slots never collide on
 definitions, worktrees, or session stores. Isolation is at the workshop level: each
