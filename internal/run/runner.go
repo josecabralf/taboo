@@ -53,6 +53,17 @@ type RunRequest struct {
 	Fork bool
 }
 
+// runResultHandle is a RunResult's private capability to read a run's artifacts
+// without callers needing to know the worktree's on-disk layout. The repoPath
+// and cmd fields are unused today; they are here for upcoming repo-backed reads
+// via git (#119 moves the rev-parse capture here, #120 adds Dispose). Artifact
+// needs only worktreePath.
+type runResultHandle struct {
+	repoPath     string
+	worktreePath string
+	cmd          exec.Commander
+}
+
 // RunResult reports the outcome of a run.
 type RunResult struct {
 	Branch       string
@@ -64,6 +75,41 @@ type RunResult struct {
 	// primitives (Runner.Run/Setup/Exec) return their error separately and leave
 	// Err nil.
 	Err error
+	// handle is the run's private capability to read its artifacts; nil until
+	// Setup populates it.
+	handle *runResultHandle
+}
+
+// NewResultWithWorktree returns a RunResult whose Artifact reads files from an
+// existing worktree directory. Runner.Setup is the normal source of a result's
+// worktree handle; this lets a caller that already has a worktree on disk (or a
+// consumer test) attach one to a hand-built result so the Artifact API works
+// without a full run.
+func NewResultWithWorktree(worktree string) RunResult {
+	return RunResult{
+		WorktreePath: worktree,
+		handle:       &runResultHandle{worktreePath: worktree},
+	}
+}
+
+// Artifact reads the file at relpath within the run's worktree and returns its
+// contents.
+func (r RunResult) Artifact(relpath string) (string, error) {
+	if r.handle == nil {
+		return "", errors.New("artifact: result has no worktree handle")
+	}
+	// Artifact is public API. Today's only caller passes a constant, but a future
+	// caller could pass untrusted input, so confine reads to the worktree: reject
+	// absolute paths and any ".." escape. (Lexical only — a symlink inside the
+	// worktree could still point out; tighten to os.Root if that becomes a risk.)
+	if !filepath.IsLocal(relpath) {
+		return "", fmt.Errorf("artifact %q: path escapes worktree", relpath)
+	}
+	b, err := os.ReadFile(filepath.Join(r.handle.worktreePath, relpath)) // #nosec G304
+	if err != nil {
+		return "", fmt.Errorf("read artifact %q: %w", relpath, err)
+	}
+	return string(b), nil
 }
 
 // Runner orchestrates agent runs in a taboo-managed workshop.
@@ -184,6 +230,7 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	wt := r.worktreePath(req.Branch)
 	res.WorktreePath = wt
+	res.handle = &runResultHandle{repoPath: r.cfg.RepoPath, worktreePath: wt, cmd: r.cmd}
 	if req.BaseRef != "" {
 		// Update remote-tracking refs so BaseRef (and origin/main, which the agent
 		// may merge offline) are current, then start the worktree branch FROM

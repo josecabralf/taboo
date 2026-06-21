@@ -63,7 +63,7 @@ func (f *fakeGH) AddLabel(_ context.Context, prRef, label string) error {
 func fakeRunner(calls *[]string, worktree string, err error) workflowRunner {
 	return func(_ context.Context, _, _ string, _ map[string]string, _ taboo.PlanOverrides, _ taboo.Commander) (taboo.OrchestratedResult, error) {
 		*calls = append(*calls, "runTabo")
-		return taboo.OrchestratedResult{RunResult: taboo.RunResult{WorktreePath: worktree}}, err
+		return taboo.OrchestratedResult{RunResult: taboo.NewResultWithWorktree(worktree)}, err
 	}
 }
 

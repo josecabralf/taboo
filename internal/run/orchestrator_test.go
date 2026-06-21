@@ -3,6 +3,8 @@ package run
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/josecabralf/taboo/internal/exec"
@@ -303,5 +305,60 @@ func TestOrchestrator_ForkSingleIterationAndResumeLoopAllowed(t *testing.T) {
 	}
 	if got := fcResume.countVerb("exec"); got != 3 {
 		t.Errorf("resume loop exec count = %d, want 3 (one per iteration)", got)
+	}
+}
+
+// The artifact-reading capability flows through the OrchestratedResult embed:
+// Setup populates RunResult.handle, the orchestrator copies that RunResult into
+// OrchestratedResult, so the final result carries a non-nil handle rooted at the
+// run's worktree. This guards against a future refactor that constructs the
+// result without carrying the handle through.
+func TestOrchestrator_ResultCarriesHandle(t *testing.T) {
+	fc := &fakeCommander{} // info succeeds -> workshop present, Setup completes
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest: RunRequest{Branch: "agent/x", Prompt: "go"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.handle == nil {
+		t.Fatal("res.handle = nil, want a non-nil worktree handle propagated from Setup")
+	}
+	if res.handle.worktreePath != res.WorktreePath {
+		t.Errorf("res.handle.worktreePath = %q, want %q (handle must point at the run's worktree)",
+			res.handle.worktreePath, res.WorktreePath)
+	}
+}
+
+// End-to-end: the embedded Artifact method is reachable on an OrchestratedResult
+// and reads from the run's worktree root. The fake's `git worktree add` is a
+// no-op, so the test materializes the worktree dir + file at res.WorktreePath
+// itself, then reads it back through res.Artifact.
+func TestOrchestrator_ArtifactReadsThroughEmbed(t *testing.T) {
+	fc := &fakeCommander{}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest: RunRequest{Branch: "agent/x", Prompt: "go"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := os.MkdirAll(res.WorktreePath, 0o750); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	want := "hello from the worktree\n"
+	if err := os.WriteFile(filepath.Join(res.WorktreePath, "out.txt"), []byte(want), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	got, err := res.Artifact("out.txt")
+	if err != nil {
+		t.Fatalf("Artifact: %v", err)
+	}
+	if got != want {
+		t.Errorf("Artifact = %q, want %q", got, want)
 	}
 }
