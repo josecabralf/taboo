@@ -61,8 +61,9 @@ func main() {
 }
 ```
 
-This program needs a workshop host: `pool.Run` launches workshops and execs
-agents. The rest of the page describes its behaviour.
+!!! note "This program needs a workshop host"
+    `pool.Run` launches workshops and execs agents, so a configured LXD-backed
+    workshop host is required. The rest of the page describes its behaviour.
 
 ## Results come back in input order
 

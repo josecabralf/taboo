@@ -1,5 +1,8 @@
 # Drive one agent run from Go
 
+!!! abstract "What you'll build"
+    A small Go program that calls `taboo.RunWorkflow` once to run an AI coding agent inside a workshop, ending with the agent's commit on a fresh branch in your repo. Every step is concrete and runs in order.
+
 By the end of this tutorial you will have written a small Go program that runs one AI coding agent inside a workshop, and you will see the commit it made on a fresh host branch. taboo runs the agent in an isolated workshop with your git worktree bind-mounted in, so the agent commits in place and its commit lands directly on the branch. No extraction or sync step. For why that works, read [the isolation model](../explanation/isolation-model.md) after you finish here.
 
 This tutorial uses the `opencode` agent. The Go program calls one function, `taboo.RunWorkflow`, the library's one-call bridge: it locates a `taboo.yaml`, resolves a workflow into a run, and executes it.
@@ -33,6 +36,16 @@ You also need a git repository on persistent storage. Do not put it under `/tmp`
 mkdir -p "$HOME/demo-repo"
 git -C "$HOME/demo-repo" init
 git -C "$HOME/demo-repo" commit --allow-empty -m "initial commit"
+```
+
+The repository must be a *workshop project*: it needs a `workshop.yaml` at its root naming the workshop and its base toolchain, because taboo derives the agent's workshop from that definition. `taboo init` refuses a repo without one. Write a minimal one:
+
+```yaml title="$HOME/demo-repo/workshop.yaml"
+name: demo-repo
+base: ubuntu@24.04
+sdks:
+    - name: go
+      channel: 1.26/stable
 ```
 
 Finally, the agent needs a credential. OpenCode reads `OPENROUTER_API_KEY` from the environment (see [the agents reference](../reference/agents.md)). Export it in the shell you will run the program from:
@@ -116,7 +129,8 @@ The `Branch` and `Prompt` overrides name this run's branch and instruction; the 
 
 ## Run it
 
-This step launches a real workshop and runs the agent. It is untested here, verify on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it.
+!!! warning "This step launches a real workshop"
+    `RunWorkflow` starts a workshop and runs the agent for real, so it is not exercised in this repo's tests — run it on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it.
 
 ```sh
 go run .
@@ -141,7 +155,9 @@ git -C "$HOME/demo-repo" log --oneline taboo/first-run
 
 The top entry is the commit your program printed. The branch is named `taboo/first-run`, the value you passed as `PlanOverrides.Branch`. Nothing was pushed: taboo denies `git push` from inside the workshop, so integration is yours to do from the host.
 
-## Where to go next
+## Next steps
+
+[Library API reference](../reference/library-api.md){ .md-button .md-button--primary } [Iterate until done](../guides/iterate-until-done.md){ .md-button }
 
 - To re-run the agent until it signals it is done, read [iterate until done](../guides/iterate-until-done.md).
 - To run many prompts in parallel, read [fan out runs](../guides/fan-out-runs.md).

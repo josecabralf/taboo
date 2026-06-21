@@ -55,12 +55,15 @@ comment; re-adding the trigger label retries.
 
 The chain from implement to review — and CI on the resulting PR — is automatic,
 but only because the implement flow applies the `agent:review` label with a
-personal access token rather than the default `GITHUB_TOKEN`. An event created
-with `GITHUB_TOKEN` does not trigger another workflow — GitHub suppresses that to
-prevent recursive runs. So the cascade depends on `secrets.AGENT_PAT`; without it
-the PR is opened and labelled but nothing downstream fires — neither the PR's CI
-nor the review workflow wakes up. This is the single non-obvious wiring fact in
-the whole loop, and the one-time setup below calls it out.
+personal access token rather than the default `GITHUB_TOKEN`.
+
+!!! warning "The single non-obvious wiring fact in the whole loop"
+
+    An event created with `GITHUB_TOKEN` does not trigger another workflow —
+    GitHub suppresses that to prevent recursive runs. So the cascade depends on
+    `secrets.AGENT_PAT`; without it the PR is opened and labelled but nothing
+    downstream fires — neither the PR's CI nor the review workflow wakes up. The
+    [one-time setup](#human-one-time-setup) below calls it out.
 
 `afk loop` is the same machine run autonomously. Where `implement` drives one
 issue, `loop` drains the whole `ready-for-agent` backlog wave by wave: each wave
@@ -192,14 +195,16 @@ our own implement agent on a branch we control. The review workflow consumes the
 with write-scoped tokens because it has to post a review, and it does so trusting
 that a maintainer's label vouched for them.
 
-This is **not hardened for untrusted public forks.** The review and finalize
-workflows use `pull_request_target`, which runs with the base repository's
-secrets even for a fork's PR. On a repository that accepts drive-by fork PRs, a
-labeller could be tricked into running agent code with access to the agent
-credential (`CLAUDE_CODE_OAUTH_TOKEN`) those jobs expose — the classic
-`pull_request_target` secret-exfiltration footgun. The loop assumes a
-trusted-contributor repository where everyone who can label is already trusted
-with secrets. Hardening it for open public contribution (forks,
+!!! danger "Not hardened for untrusted public forks"
+
+    The review and finalize workflows use `pull_request_target`, which runs with
+    the base repository's secrets even for a fork's PR. On a repository that
+    accepts drive-by fork PRs, a labeller could be tricked into running agent
+    code with access to the agent credential (`CLAUDE_CODE_OAUTH_TOKEN`) those
+    jobs expose — the classic `pull_request_target` secret-exfiltration footgun.
+
+The loop assumes a trusted-contributor repository where everyone who can label is
+already trusted with secrets. Hardening it for open public contribution (forks,
 sandboxed review of untrusted diffs, scoped-down tokens) is a separate project,
 not part of this loop.
 

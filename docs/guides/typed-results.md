@@ -17,9 +17,8 @@ I checked the code and fixed two issues.
 <result>{"passed": true, "issues": 2}</result>
 ```
 
-`JSONResult[T]` (`pkg/taboo/result.go`) finds that block, decodes the JSON into
-`T`, and returns it. Your struct is the schema: the JSON keys map to fields by
-their `json` tags.
+`taboo.JSONResult[T]` finds that block, decodes the JSON into `T`, and returns
+it. Your struct is the schema: the JSON keys map to fields by their `json` tags.
 
 ## Decode a block
 
@@ -61,21 +60,55 @@ func main() {
 This program runs without a workshop host. `Extract` is a pure function over the
 output string.
 
-## Attach the extractor to an orchestrated run
+## Attach the extractor to a real run
 
-Set the extractor on an `OrchestratedRequest` and the orchestrator runs it over
-the final iteration's output, exposing the value on `OrchestratedResult.Result`:
+When you run a workflow, the orchestrator runs the extractor over the final
+iteration's output and exposes the value on `OrchestratedResult.Result`. There
+are two public ways to wire it in.
 
-```go
-res, err := orch.Run(ctx, taboo.OrchestratedRequest{
-	RunRequest:      taboo.RunRequest{Branch: "taboo/review", Prompt: prompt},
-	ResultExtractor: taboo.JSONResult[review](),
-})
-if err != nil {
-	return err
-}
-r := res.Result.(review)
-```
+=== "Inspect, then run"
+
+    Resolve a `Plan`, set the extractor on `Plan.Request.ResultExtractor`, then
+    `Plan.Run`. The decoded value lands on `OrchestratedResult.Result` as `any`,
+    so you type-assert it:
+
+    ```go
+    plan, err := cfg.Plan(dir, "review", vars, taboo.PlanOverrides{Branch: "taboo/review"})
+    if err != nil {
+    	return err
+    }
+    plan.Request.ResultExtractor = taboo.JSONResult[review]() // (1)!
+    res, err := plan.Run(ctx, taboo.NewExecCommander())
+    if err != nil {
+    	return err
+    }
+    r := res.Result.(review) // (2)!
+    ```
+
+    1. `Plan.Request` is an `OrchestratedRequest`; `ResultExtractor` is the seam
+       the orchestrator reads after the loop.
+    2. `Result` is `any`. Type-assert it to the same `T` you decoded into.
+
+=== "One typed call"
+
+    `RunWorkflowAs[T]` does the locate-load-plan-run pipeline and threads a
+    `JSONResult[T]` extractor in for you, so it returns a statically typed `T`
+    with no assertion:
+
+    ```go
+    r, res, err := taboo.RunWorkflowAs[review](
+    	ctx, dir, "review", vars,
+    	taboo.PlanOverrides{Branch: "taboo/review"},
+    	taboo.NewExecCommander(),
+    )
+    if err != nil {
+    	return err
+    }
+    // r is already a review; res.Result carries the same value as any.
+    ```
+
+`RunWorkflowAs[T]` accepts no extractor options, so reach for the inspect-then-run
+path when you need `WithStrictFields`, `WithDelimiters`, or a custom extractor.
 
 See [Iterate until the agent signals done](iterate-until-done.md) for the loop
 that drives this.

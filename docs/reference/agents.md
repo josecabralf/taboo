@@ -13,7 +13,7 @@ The generated godoc is the rendered source of truth:
 ## Summary
 
 | Agent | `Name()` | Construct with | Credential env keys | Prompt delivery | Sessions `DirEnv` / `Subdir` | Model-hint `expected` | Fork |
-|---|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|
 | OpenCode | `opencode` | `NewProfile(taboo.OpenCode, model)` | `OPENROUTER_API_KEY` | argv | `XDG_DATA_HOME` / `opencode` | `<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus` | native (`--fork`) |
 | Claude Code | `claude-code` | `NewProfile(taboo.ClaudeCode, model)` | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | stdin | `CLAUDE_CONFIG_DIR` / `projects` | `a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet` | native (`--fork-session`) |
 | GitHub Copilot | `github-copilot` | `NewProfile(taboo.GitHubCopilot, model)` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | argv (value of `-p`) | `COPILOT_HOME` / `session-state` | none (never warns) | ignored |
@@ -132,8 +132,8 @@ Source: `internal/agent/registry.go`.
 
 ```go
 func NewProfile(name AgentName, model string) (AgentProfile, error)
-func AgentNames() []AgentName
-func MatchModelFormat(agent AgentName, model string) (ok bool, expected string)
+func AgentNames() []string
+func MatchModelFormat(agentName AgentName, model string) (ok bool, expected string)
 ```
 
 The roster in `registry.go` is a slice of registrations, one line per supported
@@ -154,11 +154,13 @@ equals `name` and returns `New(model)`. An unmatched name returns a wrapped
 `ErrUnknownAgent` (`taboo: unknown agent`); match it with `errors.Is`.
 `NewProfile` validates the name only, not the model.
 
-`AgentNames()` returns the registered names sorted: `claude-code`, `github-copilot`,
-`opencode`. Use the `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`
-constants with `NewProfile` or `Workflow.Agent`.
+`AgentNames()` returns the registered names as a sorted `[]string`: `claude-code`,
+`github-copilot`, `opencode`. It feeds the CLI's fuzzy-suggestion path on an
+unknown name; the matching itself lives in the CLI, not here. To name an agent in
+code, use the `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`
+constants (`AgentName`) with `NewProfile` or `Workflow.Agent`.
 
-`MatchModelFormat(agent AgentName, model)` reads the registration's `Hint` and reports
+`MatchModelFormat(agentName AgentName, model)` reads the registration's `Hint` and reports
 whether `model` looks well-formed, plus the `expected` format string. It is
 advisory: `taboo validate` turns a non-match into a warning, never a failure.
 
@@ -177,5 +179,5 @@ workflow's, to an `AgentProfile` through `NewProfile`, storing them on
 
 - [Library API reference](library-api.md) for `AgentProfile` and the registry
   functions.
-- [taboo.yaml reference](../reference/taboo-yaml.md) for setting `agent` and
+- [taboo.yaml reference](taboo-yaml.md) for setting `agent` and
   `model`.

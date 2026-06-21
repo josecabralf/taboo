@@ -16,7 +16,7 @@ environment it needs.
 
 `afk` dispatches on its first argument (stdlib `flag`, no cobra):
 
-```
+```text
 afk implement --issue <n>
 afk review --pr <n>
 afk plan
@@ -30,7 +30,7 @@ afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run]
 repo root ([why](../explanation/dogfooding.md#why-afk-is-a-nested-module-under-taboo)).
 Run it one of two ways:
 
-```
+```bash
 # from inside the module
 cd .taboo/orchestrator && go run . implement --issue 85
 
@@ -80,7 +80,7 @@ second place to keep loop settings.
 Drives one issue end-to-end: fetch it, have the agent implement it, push the
 branch, open a draft PR, and hand off to review.
 
-```
+```text
 afk implement --issue <n>
 ```
 
@@ -104,7 +104,7 @@ afk implement --issue <n>
 
 Reviews one PR and posts exactly one review.
 
-```
+```text
 afk review --pr <n>
 ```
 
@@ -127,7 +127,7 @@ afk review --pr <n>
 Lists the open `ready-for-agent` issues and prints the next parallel-safe batch
 of them as JSON. Read-only — it claims nothing and touches no labels.
 
-```
+```text
 afk plan
 ```
 
@@ -139,7 +139,7 @@ below); `plan` is the preview of that selection. Output goes to stdout.
 Composes a PR description from a branch's realized diff, and is the **finalize**
 stage when run with `--ready`.
 
-```
+```text
 afk write-pr [--branch <branch>] [--ready]
 ```
 
@@ -168,7 +168,7 @@ afk write-pr [--branch <branch>] [--ready]
 Brings a PR's branch up to date with `main`, merging and validating inside a
 workshop before any push.
 
-```
+```text
 afk update-branch --pr <n>
 ```
 
@@ -202,7 +202,7 @@ re-running.
 
 Decomposes a PRD-style parent issue into vertical-slice child issues.
 
-```
+```text
 afk to-issues --issue <n>
 ```
 
@@ -228,7 +228,7 @@ The master orchestrator. Where `implement` drives one issue, `loop` drains the
 whole `ready-for-agent` backlog wave by wave, fanning the implement flow out
 bounded-parallel through `taboo.Pool`.
 
-```
+```text
 afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run]
 ```
 

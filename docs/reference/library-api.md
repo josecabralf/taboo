@@ -74,6 +74,7 @@ type PlanOverrides struct {
     MaxIterations      int
     CompletionSignal   string
     Branch             string
+    BaseRef            string
     From               string
     Prompt, PromptFile string
     Stdout, Stderr     io.Writer
@@ -83,8 +84,13 @@ type PlanOverrides struct {
 `PlanOverrides` is the per-call override layer applied on top of the config when
 resolving a `Plan`. A field's zero value means "unset": fall through to the
 workflow, then the top-level `defaults` layer. Numeric knobs gate on `>0`; strings
-gate on non-empty. `Stdout`/`Stderr` are output sinks (nil = discard), not part of
-the precedence chain.
+gate on non-empty.
+
+`BaseRef` is threaded straight onto `RunRequest.BaseRef` — a per-call concern
+with no config or workflow layer (see [RunRequest](#runrequest)). `From` selects
+the workshop source-definition for this run, overriding the config's
+`source-definition`. `Stdout`/`Stderr` are output sinks (nil = discard), not part
+of the precedence chain.
 
 ### Pool: fan out
 
@@ -114,6 +120,7 @@ calls. See [Run many prompts in parallel](../guides/fan-out-runs.md).
 ```go
 type RunRequest struct {
     Branch        string        // new branch created for this run's worktree
+    BaseRef       string        // start the worktree branch from this ref (empty = off HEAD, no fetch)
     Prompt        string        // agent instruction
     Timeout       time.Duration // bounds the agent exec (zero = no timeout)
     Stdout        io.Writer     // live agent stdout (nil = discard)
@@ -124,9 +131,11 @@ type RunRequest struct {
 }
 ```
 
-`RunRequest` describes a single agent run. `Fork` without `ResumeSession` is
-meaningless and ignored. Agents with no native fork degrade to worktree-only
-isolation.
+`RunRequest` describes a single agent run. When `BaseRef` is set (e.g.
+`"origin/feature-x"`), setup fetches `origin` and starts the run's branch from
+that ref instead of the host repo's `HEAD`; empty starts a fresh branch off
+`HEAD` with no fetch. `Fork` without `ResumeSession` is meaningless and ignored.
+Agents with no native fork degrade to worktree-only isolation.
 
 ### RunResult
 
@@ -393,18 +402,19 @@ locate step `RunWorkflow` runs for you. The full key reference is in
 
 ```go
 type RunDefaults struct {
-    BranchPrefix     string `yaml:"branch-prefix,omitempty"`
-    Prompt           string `yaml:"prompt,omitempty"`
-    PromptFile       string `yaml:"prompt-file,omitempty"`
-    Timeout          string `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
-    MaxIterations    int    `yaml:"max-iterations,omitempty"`
-    CompletionSignal string `yaml:"completion-signal,omitempty"`
+    BranchPrefix     string   `yaml:"branch-prefix,omitempty"`
+    Prompt           string   `yaml:"prompt,omitempty"`
+    PromptFile       string   `yaml:"prompt-file,omitempty"`
+    Timeout          Duration `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
+    MaxIterations    int      `yaml:"max-iterations,omitempty"`
+    CompletionSignal string   `yaml:"completion-signal,omitempty"`
 }
 ```
 
 `RunDefaults` are scalar-only run settings applied when a workflow or flag does
-not override them. `Timeout` is a YAML duration string such as `30m` or `1h30m`,
-parsed internally; callers set it in `taboo.yaml`, not as a Go value.
+not override them. `Timeout` is a `Duration` (a named `time.Duration`) written in
+`taboo.yaml` as a duration string such as `30m` or `1h30m`. The type lives in the
+internal config package, so callers set it through the YAML, not as a Go value.
 
 ### Workflow
 
@@ -415,7 +425,7 @@ type Workflow struct {
     Model         string       `yaml:"model,omitempty"`
     Agent         AgentName    `yaml:"agent,omitempty"`
     MaxIterations int          `yaml:"max-iterations,omitempty"`
-    Timeout       string       `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
+    Timeout       Duration     `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
     Profile       AgentProfile `yaml:"-"`
 }
 ```
@@ -429,11 +439,12 @@ leaves `Profile` nil.
 
 ```go
 type Config struct {
-    Workshop   string       // workshop name (the definition's `name:`)
-    Base       string       // base image, e.g. "ubuntu@24.04"
-    Agent      AgentProfile // the agent profile run inside the workshop
-    RepoPath   string       // absolute path to the host git repository
-    ProjectDir string       // host directory taboo owns (.workshop/, worktrees/)
+    Workshop         string       // workshop name (the definition's `name:`)
+    Base             string       // base image, e.g. "ubuntu@24.04"
+    Agent            AgentProfile // the agent profile run inside the workshop
+    RepoPath         string       // absolute path to the host git repository
+    ProjectDir       string       // host directory taboo owns (.workshop/, worktrees/)
+    SourceDefinition string       // selected source-definition name (empty = auto-resolve)
 }
 ```
 
@@ -442,6 +453,8 @@ is the runner input carried by `Plan.Config` and consumed by `NewPool`.
 `RepoPath` is the absolute path to the host git repository whose worktrees the
 agent operates on. `ProjectDir` is the host directory taboo owns: it holds the
 rendered workshop definition and is passed to every `workshop --project` call.
+`SourceDefinition` names the workshop definition to derive from when the repo
+carries several; empty auto-resolves the project's single definition.
 
 ## Agent registry and CLI-support facet
 

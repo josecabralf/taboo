@@ -1,14 +1,17 @@
 # taboo.yaml reference
 
 `taboo.yaml` is the parsed project config read by both the CLI and Go callers
-that drive runs through `pkg`. The schema is defined by `ProjectConfig`
+that drive runs through the `taboo` library
+(`github.com/josecabralf/taboo`). The schema is defined by `ProjectConfig`
 in `internal/config/config.go`. `taboo.LoadConfig(path)` reads it, decodes it
 strictly, and resolves the agent and model of the top level and of every
 workflow into an `AgentProfile`.
 
-The CLI discovers the file by ascending from the working directory: either the
-directory holds `taboo.yaml`, or an ancestor holds `.taboo/taboo.yaml`
-(`cmd/taboo/config.go`, `findConfig`). `taboo init` writes it under `.taboo/`.
+The CLI discovers the file by ascending from the working directory: at each
+directory it probes `taboo.yaml` first, then `.taboo/taboo.yaml`, returning the
+first hit (`taboo.FindConfig`, `internal/config/plan.go`; the CLI's own
+`findConfig` in `cli/internal/app/config.go` mirrors it). `taboo init` writes it
+under `.taboo/`.
 
 For the commands that read this file, see [cli.md](cli.md). For agent names and
 the model each expects, see [agents.md](agents.md).
@@ -26,6 +29,7 @@ row.
 | `agent` | string | none | Default agent name, resolved against the registry. |
 | `model` | string | none | Default model passed to the resolved agent. |
 | `strategy` | string | `branch` | Branch-strategy seam; accepts any value for forward compatibility. |
+| `source-definition` | string | `""` | Names the workshop definition to derive from when the repo carries several named `.workshop/*.yaml` definitions; empty selects the sole definition. |
 | `defaults` | mapping (`RunDefaults`) | omitted (nil) | Scalar run settings applied when a workflow or flag does not override them. |
 | `workflows` | mapping (`Workflow`) | omitted | Named, reusable task types keyed by workflow name. |
 | `default-workflow` | string | `""` | Workflow run when the CLI selects none. |
@@ -37,6 +41,10 @@ Enforcing a required agent is the `validate` command's job, not the loader's.
 
 `Profile` (the resolved top-level profile) is not serialized (`yaml:"-"`). It is
 populated by `LoadConfig`, not read from the file.
+
+`source-definition` is only meaningful when the project's repo holds several
+named `.workshop/*.yaml` definitions; a single definition needs no selection.
+`taboo run --from` and `taboo init --source-definition` override it.
 
 ## defaults
 
@@ -87,33 +95,47 @@ nil (`resolveProfiles`). Like the top level, `Profile` is not serialized
 ## default-workflow
 
 `default-workflow` (string) names the workflow `taboo run` selects when given no
-positional workflow and no prompt flag (`cmd/taboo/run.go`, `selectRun`). When
-it names a workflow that is not defined, `run` errors. When it is empty and no
-workflow is named, a bare `run` errors listing the available workflows.
+positional workflow and no prompt flag (`cli/internal/app/run.go`, `selectRun`).
+When it names a workflow that is not defined, `run` errors. When it is empty and
+no workflow is named, a bare `run` errors listing the available workflows.
 
 ## Precedence chain
 
-For a run, each scalar parameter resolves through three layers, highest first
-(`cmd/taboo/run.go`, the `resolve*` helpers):
+The CLI does not resolve run parameters itself; it packs its flags into a
+`PlanOverrides` and hands them to `(*ProjectConfig).Plan`, which resolves every
+scalar (`internal/config/plan.go`). For most parameters resolution is a
+`cmp.Or` over three layers, first non-zero wins, highest first:
 
-1. The CLI flag (`--prompt`, `--model`, `--agent`, `--timeout`, `--iterations`,
-   `--signal`, `--branch`).
+1. The CLI flag, carried as a `PlanOverrides` field (`--model`, `--agent`,
+   `--timeout`, `--iterations`).
 2. The selected workflow block.
 3. The top-level config and the `defaults:` block.
 
-Two parameters resolve through fewer layers because they have no workflow field:
+So `model` is `cmp.Or(ov.Model, wf.Model, c.Model)`, `agent` is
+`cmp.Or(ov.Agent, wf.Agent, c.Agent)`, `timeout` is
+`cmp.Or(ov.Timeout, wf.Timeout, defaults.Timeout)`, and `max-iterations` is
+`cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)`.
 
-- `completion-signal` resolves flag-then-defaults only (`resolveSignal`).
+Some parameters resolve through fewer or different layers:
+
+- `completion-signal` has no workflow field, so it is `cmp.Or(ov.CompletionSignal, defaults.CompletionSignal)` — flag then defaults only.
 - `branch-prefix` lives only in `defaults` and feeds the auto-generated branch
   name (`resolveBranch`); `--branch` overrides the whole name verbatim.
+- `source-definition` is `cmp.Or(ov.From, c.SourceDefinition)` — the `--from`
+  flag then the top-level config.
 
 The prompt resolves through six layers, first non-empty wins: flag inline, flag
 file, workflow inline, workflow file, defaults inline, defaults file
 (`resolvePrompt`). A prompt-file path is read relative to the config file's
-directory unless it is absolute.
+directory unless it is absolute. When `--var`/`--vars-file` supply template
+variables, `Plan` then substitutes `{{VAR}}` placeholders in the resolved
+prompt.
 
-Agent and model also apply this chain when resolving the run's profile: flag,
-then workflow, then top level (`effectiveAgent`, `resolveModel`, via `orElse`).
+!!! note "Where the layers come from"
+    The flag layer is the `runOptions` parsed in `cli/internal/app/run.go`,
+    packed into `PlanOverrides` by `planOverrides`. A Go caller fills the same
+    `PlanOverrides` directly (see [library-api.md](library-api.md)). The
+    resolution itself is identical for both — it lives entirely in `Plan`.
 
 ## Strict decode
 
@@ -131,12 +153,12 @@ then workflow, then top level (`effectiveAgent`, `resolveModel`, via `orElse`).
 An empty document decodes to the zero config without error through
 `LoadConfig`. The `validate` command decodes the same struct itself and instead
 treats an empty document as an error (`config is empty`, `decodeValidate` in
-`cmd/taboo/validate.go`).
+`cli/internal/app/validate.go`).
 
 ## Seeded example
 
 `taboo init` writes this `taboo.yaml` when seeding the example workflows
-(`cmd/taboo/scaffold.go`, `renderTabooYAML`). The `workshop`, `repo`, and
+(`cli/internal/app/scaffold.go`, `renderTabooYAML`). The `workshop`, `repo`, and
 `model` values are filled from the flags or wizard answers.
 
 ```yaml
@@ -159,10 +181,10 @@ default-workflow: fix
 ```
 
 `taboo init` marshals this through `yaml.v3`, which indents nested mappings by
-four spaces. The seeded `.taboo/.gitignore` lists `worktrees/`, `.workshop/`, `.env`, and
-`logs/` (`renderGitignore`). The `.env.example` header names the chosen agent
-and lists one `KEY=` line per credential env key the agent reads
-(`renderEnvExample`).
+four spaces. The seeded `.taboo/.gitignore` lists six entries — `worktrees/`,
+`.workshop/`, `/workshop.yaml`, `/workshop.fingerprint`, `.env`, and `logs/`
+(`renderGitignore`). The `.env.example` header names the chosen agent and lists
+one `KEY=` line per credential env key the agent reads (`renderEnvExample`).
 
 ## Minimal example
 

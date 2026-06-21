@@ -7,6 +7,13 @@ Use hooks when the agent needs a prepared environment: dependencies fetched, a
 tool installed, a fixture in place. The hook runs in the same worktree the agent
 sees, so its effects are visible to the agent.
 
+!!! note "Before you start"
+    This guide uses the inspect-then-run path, so it assumes you can already
+    drive a run from Go. If you have not yet, work through
+    [the library first run](../tutorials/library-first-run.md). You also need a
+    `taboo.yaml` in the target repository and a workshop host installed
+    (`plan.Run` launches a workshop).
+
 ## Attach a hook to a run
 
 Hooks live on `RunRequest.Hooks`. The one hook point is `OnWorkshopReady`, a
@@ -56,37 +63,56 @@ func main() {
 }
 ```
 
-This program needs a workshop host: `plan.Run` launches a workshop and runs the
-hook inside it.
+Here `InWorkshop: true` means `plan.Run` runs `go mod download` inside the
+launched workshop, against the worktree it just mounted.
 
 ## When and how often hooks run
 
-`OnWorkshopReady` hooks run after the workshop starts with the run's worktree
-mounted, and before the agent execs. They run on every run, not once per
-workshop, because the worktree is swapped in per run. Keep them idempotent and
-cheap. A hook like `go mod download` is safe to repeat; do not model expensive
-one-time provisioning here.
+`OnWorkshopReady` hooks run at the end of `Setup`: after the workshop is started
+with the run's worktree mounted, and before the agent first execs. Setup prepares
+the worktree once, so the hooks fire **once per worktree**, not once per agent
+iteration. A looped run (`MaxIterations > 1`) reuses the same worktree across
+iterations and does not re-run the hooks between them.
+
+The long-lived workshop is reused across separate runs, but each run mounts a
+fresh worktree through Setup, so the hooks run again every time. Keep them
+idempotent and cheap.
+
+!!! warning "Hooks are not one-time provisioning"
+    Because Setup runs on every fresh run, treat `OnWorkshopReady` as per-run
+    preparation, not one-time setup. A hook like `go mod download` is safe to
+    repeat; do not model expensive one-time provisioning here.
 
 Hooks run in order. A hook failure stops the sequence and fails the run before
-the agent execs, with an error naming the offending hook (`hook <i> <command>`).
-A `Hook` with an empty `Command` is skipped.
+the agent execs; `Setup` returns an error of the form
+`on-workshop-ready hook: hook <i> [<command>]: ...`, naming the offending hook by
+its index and command (for example `hook 0 [go mod download]`). A `Hook` with an
+empty `Command` is skipped.
 
 Hook output (stdout and stderr) goes to the run's `Stderr` writer, so set
-`RunRequest.Stderr` to see what a hook printed when it fails.
+`Stderr` on the run — through `PlanOverrides{Stderr: ...}` when resolving the
+plan, as the example does — to see what a hook printed when it fails.
 
 ## Host hooks versus in-workshop hooks
 
 `InWorkshop` decides where the command runs:
 
+| Aspect | `InWorkshop: false` (default) | `InWorkshop: true` |
+| --- | --- | --- |
+| Where it runs | On the host | Inside the workshop via `workshop exec` |
+| Working directory | The run's worktree | `/taboo/workspace` |
+| Credential env keys | No | Yes (the agent's) |
+| Session-dir redirect | No | Yes |
+
 - `InWorkshop: false` (the default) runs the command on the host, in the run's
   worktree directory. Use this for host-side preparation that writes into the
   worktree before it is handed to the agent.
 - `InWorkshop: true` runs the command inside the workshop through
-  `workshop exec`, with the working directory `/taboo/workspace`. The in-workshop hook
-  sees the same mounts and the agent's credential env keys, so it runs with the
-  agent's environment. Use this for commands that need the workshop's toolchain,
-  for example fetching dependencies into the in-workshop module cache the agent
-  will use.
+  `workshop exec`, with the working directory `/taboo/workspace`. The in-workshop
+  hook sees the same mounts and the agent's credential env keys, so it runs with
+  the agent's environment. Use this for commands that need the workshop's
+  toolchain, for example fetching dependencies into the in-workshop module cache
+  the agent will use.
 
 A host hook does not get the credential env keys or the session-dir redirect,
 because those are workshop paths. Pick `InWorkshop: true` when the command must

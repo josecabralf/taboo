@@ -10,8 +10,9 @@ themselves live under [docs/adr/](https://github.com/josecabralf/taboo/tree/main
 
 ## The library is the primary contract
 
-CONTEXT.md states the stance directly: "The primary deliverable is a Go module
-(`pkg/taboo`)." It continues: "A CLI may follow but is not the primary contract."
+CONTEXT.md states the stance directly: "The primary deliverable is a Go module."
+It continues: the CLI "is a thin consumer of the library, not the primary
+contract."
 
 The audience is engineers building agent pipelines in Go who want to express
 fan-out, review loops, and custom orchestration in code, not through flags. So the
@@ -80,7 +81,7 @@ canonical names so it can suggest a correction on a typo. ADR 0005
 that `internal/agent/registry.go` holds an explicit slice of registrations rather than
 self-registering agents through `init()`. The public surface is
 `NewProfile(name AgentName, model string) (AgentProfile, error)`, which returns the wrapped
-`ErrUnknownAgent` sentinel on a miss, and `AgentNames() []AgentName`, sorted, for the
+`ErrUnknownAgent` sentinel on a miss, and `AgentNames() []string`, sorted, for the
 candidate set.
 
 The registry is keyed by each profile's own `Name()`, so there is no second name
@@ -91,7 +92,9 @@ edit to add an agent, which is the point. The fuzzy "did you mean" match lives i
 the CLI, not the registry; the registry only supplies the candidate set. The
 model-format hint lives beside each agent rather than as a method on the four-method
 `AgentProfile` interface, so `validate` can read it from a name alone, before
-anything is constructed. ADR 0008 covers the hint and the fuzzy match.
+anything is constructed. ADR 0008
+([the model-format hint and fuzzy match](https://github.com/josecabralf/taboo/blob/main/docs/adr/0008-model-format-hint-and-fuzzy-agent-match.md))
+covers the hint and the fuzzy match.
 
 ## Structured output is the caller's struct
 

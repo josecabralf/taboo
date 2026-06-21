@@ -1,5 +1,8 @@
 # Run your first workflow with the CLI
 
+!!! abstract "What you'll build"
+    A real taboo project in a git repository, scaffolded and validated, ending in one agent run that commits to a fresh branch in your repo. Every step is concrete and runs in order.
+
 By the end of this tutorial you will have installed the `taboo` binary, scaffolded a taboo project into a git repository, set one credential, checked that your host is ready, and run the seeded `fix` workflow. The `taboo` CLI wraps the library: `init` scaffolds the project (`cli/internal/app/init.go`, `cli/internal/app/scaffold.go`), `doctor` checks the host (`cli/internal/app/doctor.go`), and `run` drives a workflow end-to-end on a fresh branch (`cli/internal/app/run.go`).
 
 This tutorial uses the `opencode` agent. For why runs are isolated and commit in place, read [the isolation model](../explanation/isolation-model.md) afterwards.
@@ -29,6 +32,19 @@ git -C "$HOME/demo-repo" commit --allow-empty -m "initial commit"
 cd "$HOME/demo-repo"
 ```
 
+The repository must also be a *workshop project*: it needs a `workshop.yaml` that names the workshop and its base toolchain. taboo derives each agent's workshop from this definition, so `init` (and `doctor`) refuse a repo without one (`cli/internal/app/init.go`, `requireWorkshopProject`). Write a minimal one at the repo root:
+
+```yaml title="workshop.yaml"
+name: demo-repo
+base: ubuntu@24.04
+sdks:
+    - name: go
+      channel: 1.26/stable
+```
+
+!!! note
+    This `workshop.yaml` is the project's own toolchain definition, distinct from the `.taboo/taboo.yaml` that `init` writes next. taboo seeds the agent's SDK on top of it; you do not author the agent definition yourself.
+
 ## Scaffold the project
 
 Run `taboo init`. Passing `--agent` and `--model` scaffolds without prompting. (Run `taboo init` with neither flag in a terminal and it walks you through an interactive wizard instead.)
@@ -40,7 +56,7 @@ taboo init --agent opencode --model openrouter/qwen/qwen3-coder-plus
 This writes a `.taboo/` directory into the repository. With no `--workflows none` flag it seeds the example `fix` and `refactor` workflows and their prompt files. It writes:
 
 - `.taboo/taboo.yaml` — the project config (shown below).
-- `.taboo/.gitignore` — ignores `worktrees/`, `.workshop/`, `.env`, and `logs/`.
+- `.taboo/.gitignore` — ignores the runtime state taboo writes: `worktrees/`, `.workshop/`, the derived `/workshop.yaml` and `/workshop.fingerprint`, `.env`, and `logs/`.
 - `.taboo/.env.example` — one `KEY=` line per credential the chosen agent reads.
 - `.taboo/prompts/fix.md` and `.taboo/prompts/refactor.md` — the seeded workflow prompts.
 
@@ -71,7 +87,7 @@ default-workflow: fix
 
 ## Set the one credential
 
-`init` writes `.env.example` but not `.env`. Copy it and fill in the credential the agent uses. For `opencode` that is `OPENROUTER_API_KEY` (`pkg/taboo/agent_opencode.go`):
+`init` writes `.env.example` but not `.env`. Copy it and fill in the credential the agent uses. For `opencode` that is `OPENROUTER_API_KEY` (`internal/agent/agent_opencode.go`):
 
 ```sh
 cp .taboo/.env.example .taboo/.env
@@ -99,7 +115,7 @@ Run `doctor` from inside the project so it checks both the host tooling and the 
 taboo doctor
 ```
 
-`doctor` reports an error if the `workshop` snap is missing or older than `0.9.1` (the floor `minWorkshopVersion` in `cmd/taboo/version.go`), if LXD is missing or unreachable, or if `git` is absent. Inside a `.taboo/` project it also checks that the config loads, the `repo` path exists and is a git repository. It warns (without failing) when the Go toolchain is missing or the agent's credentials are not set. Install anything it flags as an error:
+`doctor` reports an error if the `workshop` snap is missing or older than `0.9.1` (the floor `minWorkshopVersion` in `cli/internal/app/version.go`), if LXD is missing or unreachable, or if `git` is absent. Inside a `.taboo/` project it also checks that the config loads, the `repo` path is on persistent storage and is a git repository, and that the repo is a workshop project (has a `workshop.yaml`). It warns (without failing) when the Go toolchain is missing or the agent's credentials are not set. Install anything it flags as an error:
 
 ```sh
 sudo snap install workshop
@@ -110,7 +126,8 @@ Re-run `taboo doctor` until it reports no errors.
 
 ## Run the fix workflow
 
-This step launches a real workshop and runs the agent, so it is untested here, verify on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it.
+!!! warning "This step launches a real workshop"
+    `taboo run` starts a workshop and runs the agent for real, so it is not exercised in this repo's tests — run it on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it. At a terminal `run` prints a one-line summary and asks for confirmation before it starts; pass `--yes` to skip the prompt.
 
 ```sh
 taboo run fix
@@ -131,7 +148,9 @@ git log --oneline <branch-name>
 
 A bare `taboo run` runs `default-workflow` (here, `fix`). To run the other seeded workflow, name it: `taboo run refactor`.
 
-## Where to go next
+## Next steps
+
+[CLI reference](../reference/cli.md){ .md-button .md-button--primary } [taboo.yaml reference](../reference/taboo-yaml.md){ .md-button }
 
 - For every command, flag, and output shape, see the [CLI reference](../reference/cli.md).
 - For every config key and the precedence rules, see the [taboo.yaml reference](../reference/taboo-yaml.md).

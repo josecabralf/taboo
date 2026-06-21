@@ -8,6 +8,11 @@ second look at the test output, a refactor that converges over a few passes.
 taboo prepares the worktree once and re-execs the agent into it, so each pass
 continues from the previous pass's commit.
 
+!!! abstract "What you'll do"
+    Set `max-iterations` and a `completion-signal` in `taboo.yaml`, run the loop
+    from Go, then read `StopReason` and `Iterations` off the result to learn
+    whether the agent signalled done or the loop hit its cap.
+
 ## How the loop works
 
 A run loops when its resolved plan has a `MaxIterations` above 1. taboo prepares
@@ -17,18 +22,19 @@ continues from the previous pass's commit.
 
 The loop stops on the first of two conditions:
 
-- The agent's stdout contains the completion signal. The loop stops early and
-  `StopReason` is `StopSignal` (the string `"signal"`).
-- The loop has run `MaxIterations` times. `StopReason` is `StopMaxIterations`
-  (the string `"max-iterations"`).
+| Condition | `StopReason` | String value |
+| --- | --- | --- |
+| The agent's stdout contains the completion signal | `StopSignal` | `"signal"` |
+| The loop has run `MaxIterations` times | `StopMaxIterations` | `"max-iterations"` |
 
 `MaxIterations` below 1 means a single run. An empty completion signal disables
 the early stop, so the loop always runs the full `MaxIterations`.
 
 ## Configure the loop in taboo.yaml
 
-The loop knobs live on the workflow (or in `defaults`) of your `taboo.yaml`, so
-the one-call bridge picks them up without extra Go code:
+The loop knobs live in your `taboo.yaml`, so the one-call bridge picks them up
+without extra Go code. `max-iterations` can sit on a workflow or in `defaults`;
+`completion-signal` is a `defaults`-only key:
 
 ```yaml
 workshop: demo
@@ -36,12 +42,18 @@ base: ubuntu@24.04
 repo: /home/me/repos/demo
 agent: opencode
 model: openrouter/qwen/qwen3-coder-plus
+defaults:
+  completion-signal: DONE
 workflows:
   iterate:
     prompt: "Fix the failing tests. Print DONE when all tests pass."
     max-iterations: 5
-    completion-signal: DONE
 ```
+
+!!! warning "`completion-signal` is `defaults`-only"
+    `taboo.yaml` is parsed with unknown keys rejected. A workflow has no
+    `completion-signal` field, so putting it under `workflows.iterate` makes
+    `LoadConfig` fail with `ErrConfigParse`. Set it under `defaults`.
 
 `RunWorkflow` locates this config above the start directory, resolves the
 `iterate` workflow into a plan, and runs the loop over a `Commander`:
@@ -74,8 +86,9 @@ func main() {
 }
 ```
 
-This program needs a workshop host: `RunWorkflow` launches a workshop and execs
-the agent. The rest of the page describes the values it returns.
+!!! note "Prerequisite"
+    This program needs a workshop host: `RunWorkflow` launches a workshop and
+    execs the agent. The rest of the page describes the values it returns.
 
 `PlanOverrides` is the per-call override layer: a non-zero field wins over the
 config. To raise the iteration count for one call without touching `taboo.yaml`,
@@ -172,9 +185,12 @@ To set an extractor on the inspect-then-run path instead, assign one to
 
 `RunRequest` has a `Fork` field that forks a resumed session. A looped run
 re-execs the same request every iteration, so a fork would re-fork the source
-session on every pass rather than continuing one fork. taboo rejects this before
-any setup: a plan whose `Fork` is set and `MaxIterations` is greater than 1
-returns `ErrForkLoop` before any workshop is launched.
+session on every pass rather than continuing one fork.
+
+!!! warning "Fork plus a loop is rejected"
+    A plan whose `Fork` is set and `MaxIterations` is greater than 1 returns
+    `ErrForkLoop` before any setup runs — taboo rejects the combination up
+    front, so no workshop or worktree is provisioned.
 
 A single-iteration fork (`MaxIterations` at or below 1) is allowed, and a
 multi-iteration plain resume (`ResumeSession` set, `Fork` false) is allowed.

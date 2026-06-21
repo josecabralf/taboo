@@ -13,8 +13,9 @@ A workshop is an LXD-backed development environment defined declaratively and
 provisioned by the `workshop` snap. taboo does not import workshop's Go client or
 speak its REST socket; it shells out to the `workshop` binary, driving everything
 through `Cmd{Name: "workshop", ...}` over the `Commander` seam in
-`internal/exec/commander.go`. The verbs it uses are `launch`, `stop`, `start`,
-`info`, `remount`, and `exec`, assembled in `internal/workshop/workshop.go`.
+`internal/exec/commander.go`. On the run path the verbs it uses are `info`,
+`launch`, `refresh`, `stop`, `remount`, `start`, and `exec`, assembled in
+`internal/workshop/workshop.go`; `clean` adds `remove`.
 
 A workshop is expensive to stand up. The LXD container has to be created and the
 agent CLI installed into its rootfs, which takes minutes. That cost shapes the
@@ -91,8 +92,8 @@ A `remount` is only atomic when the new source is empty and on the same filesyst
 as the current one. A worktree is a non-empty directory, so the swap cannot be
 live. `Runner.Setup` does it as `stop`, then `remount` for `workspace` and
 `gitcommon` (and `sessions` for a session-capable agent), then `start`. The
-ordering is visible in the code: `verbArgs(proj, "stop", ws)`, the `remountArgs`
-calls, then `verbArgs(proj, "start", ws)`.
+ordering is visible in the code: `workshop.VerbArgs(proj, "stop", ws)`, the
+`workshop.RemountArgs` calls, then `workshop.VerbArgs(proj, "start", ws)`.
 
 This stop, remount, start, exec cycle takes seconds. The expensive work, creating
 the container and installing the agent CLI, already happened at launch and is not
@@ -145,7 +146,11 @@ justify it.
 A run's worktree path is derived by `Runner.worktreePath` as
 `<ProjectDir>/worktrees/<branch>`, with slashes in the branch name replaced by
 hyphens. The CLI sets `ProjectDir` to `<repo>/.taboo`, so worktrees nest at
-`<repo>/.taboo/worktrees/<branch>`, inside the repository and git-ignored.
+`<repo>/.taboo/worktrees/<branch>`, inside the repository and git-ignored. Under
+`Pool`, each slot gets its own `ProjectDir` (`<ProjectDir>/slot-<N>`), so a
+fan-out run's worktree lands one level deeper, at
+`<ProjectDir>/slot-<N>/worktrees/<branch>`. The layout is deterministic and
+private; it is the same knowledge `clean` uses to find what to tear down.
 
 Nesting a worktree under the same repository whose `.git` is the second mount looks
 risky, but it changes only the host path of the `/taboo/workspace` source. The two mounts
@@ -157,14 +162,45 @@ on workshop 0.9.1 and LXD 6.8, and that the out-of-repo layout remains a sound
 fallback. The only host-side cost the nested layout inherits is the
 repo-not-under-`/tmp` constraint, which already existed for the git-common mount.
 
+## Teardown is not on the run path
+
+Setup creates a worktree; nothing on the run path removes it. `Runner.Run`,
+`Setup`, `Exec`, the orchestrator loop, and `Pool.Run` all leave the worktree on
+disk after they return, and `RunResult.WorktreePath` keeps pointing at it. This is
+deliberate: the commit lives in the shared `.git`, so a finished run has nothing
+left to extract from the working directory, but the directory itself is not
+reaped. A long-running session, a daemon, or a `Pool` that fans many runs out
+therefore accumulates worktrees until something clears them.
+
+That something is the `clean` command. It probes the host for the project's
+taboo-managed artifacts and tears them down: `git worktree remove` for each
+worktree, `workshop remove` for each workshop, and `git branch -D` for the run
+branches under the configured prefix when asked. It is the only teardown path, and
+it is interactive by design — `--dry-run` prints the plan and a confirmation
+prompt gates the mutation. See the [CLI reference](../reference/cli.md) for the
+flag matrix.
+
+!!! warning "The library has no programmatic teardown"
+    `clean` lives in the CLI, not the facade. A Go program embedding taboo gets
+    no `Dispose()` or equivalent; it must remove worktrees itself, with the layout
+    knowledge above, or shell out to `git worktree remove`. The orchestrator
+    sidesteps this because CI hands it a fresh, ephemeral checkout per run and
+    throws the whole tree away afterward. A client on a persistent checkout — a
+    web service, a daemon, a `loop` — inherits the disk leak with no built-in
+    escape. Closing that gap (result-side read operations plus a `defer`-able
+    `Dispose` handle that reuses the safe teardown `clean` already encodes) is an
+    open design question, not yet a shipped API.
+
 ## Push is denied; the host owns integration
 
-Agents run headless, with no interactive approver, and commit autonomously. Every
-supported profile denies `git push` from inside the workshop by default (Claude
-Code via `--disallowedTools "Bash(git push *)"`, Copilot via
-`--deny-tool=shell(git push)`; see [agents.md](../reference/agents.md)). The deny is
-deliberate. A linked worktree shares the host repository's object store and refs, so
-a push from inside the workshop, forced or not, could mutate host branches directly.
+Agents run headless, with no interactive approver, and commit autonomously. The
+two profiles that expose a tool-permission flag wire in a hard `git push` deny by
+default — Claude Code via `--disallowedTools "Bash(git push *)"`, Copilot via
+`--deny-tool=shell(git push)` — while OpenCode runs its tools freely and leans on
+the workshop itself as the boundary (see [agents.md](../reference/agents.md)). The
+deny is deliberate. A linked worktree shares the host repository's object store and
+refs, so a push from inside the workshop, forced or not, could mutate host branches
+directly.
 
 taboo's contract is to commit in place and let the host own integration. The agent
 never needs to push, because its commits are already on the host branch the moment
