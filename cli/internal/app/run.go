@@ -467,7 +467,6 @@ func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) err
 type jsonRunResult struct {
 	Branch     string `json:"branch"`
 	Commit     string `json:"commit"`
-	Worktree   string `json:"worktree"`
 	Output     string `json:"output"`
 	Iterations int    `json:"iterations"`
 	StopReason string `json:"stopReason"`
@@ -487,7 +486,6 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 		return enc.Encode(jsonRunResult{
 			Branch:     res.Branch,
 			Commit:     res.Commit,
-			Worktree:   res.WorktreePath,
 			Output:     res.Output,
 			Iterations: res.Iterations,
 			StopReason: string(res.StopReason),

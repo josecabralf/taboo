@@ -683,8 +683,8 @@ func TestRun_NoConfig(t *testing.T) {
 }
 
 // TestRun_JSONResult asserts --json emits a parseable object carrying the run's
-// branch, commit, a non-empty worktree, at least one iteration, and a stop
-// reason.
+// branch, commit, at least one iteration, and a stop reason — and that it does
+// not expose a worktree path (the worktree layout is taboo-private).
 func TestRun_JSONResult(t *testing.T) {
 	root := t.TempDir()
 	writeTabooProject(t, root, runProjectBody)
@@ -705,8 +705,12 @@ func TestRun_JSONResult(t *testing.T) {
 	if res.Commit != "deadbeefcafe" {
 		t.Errorf("commit = %q, want %q", res.Commit, "deadbeefcafe")
 	}
-	if res.Worktree == "" {
-		t.Errorf("worktree = %q, want non-empty", res.Worktree)
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	if _, ok := m["worktree"]; ok {
+		t.Errorf("--json output must not expose a worktree key; got: %s", stdout)
 	}
 	if res.Iterations != 1 {
 		t.Errorf("iterations = %d, want 1", res.Iterations)

@@ -88,9 +88,9 @@ func main() {
 
 `RunWorkflow` prepares the workshop, adds a fresh worktree on the override branch,
 and runs the agent. The agent commits in place, so `res.Commit` is the branch HEAD
-on the host after the run. `res.Branch` and `res.WorktreePath` describe the
-worktree; `res.Output` holds the captured agent stdout. The run itself needs a
-workshop host (workshop + LXD).
+on the host after the run. `res.Branch` names the worktree's branch and
+`res.Output` holds the captured agent stdout; read files the agent left behind
+with `res.Artifact(relpath)`. The run itself needs a workshop host (workshop + LXD).
 
 `RunWorkflowAs[T]` is the typed variant: it decodes the agent's structured output
 into a `T` with no caller assertion. For a fuller walkthrough, see

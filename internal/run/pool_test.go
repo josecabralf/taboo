@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -156,24 +157,25 @@ func TestPool_FansOutDistinctWorkshopsAndWorktrees(t *testing.T) {
 	// is the source of exactly one worktree-add and one workspace remount — never
 	// shared with another run.
 	for _, res := range results {
-		if res.WorktreePath == "" {
+		if res.handle == nil || res.handle.worktreePath == "" {
 			t.Fatalf("result for %q has empty worktree path", res.Branch)
 		}
+		wt := res.handle.worktreePath
 		adds, mounts := 0, 0
 		for _, c := range fc.snapshot() {
-			if _, ok := worktreeAddBranch(c); ok && slices.Contains(c.Args, res.WorktreePath) {
+			if _, ok := worktreeAddBranch(c); ok && slices.Contains(c.Args, wt) {
 				adds++
 			}
 			if verbOf(c) == "remount" && strings.HasSuffix(argAfter(c.Args, "remount"), ":workspace") &&
-				slices.Contains(c.Args, res.WorktreePath) {
+				slices.Contains(c.Args, wt) {
 				mounts++
 			}
 		}
 		if adds != 1 {
-			t.Errorf("worktree %q added %d times, want exactly 1", res.WorktreePath, adds)
+			t.Errorf("worktree %q added %d times, want exactly 1", wt, adds)
 		}
 		if mounts != 1 {
-			t.Errorf("worktree %q workspace-remounted %d times, want exactly 1", res.WorktreePath, mounts)
+			t.Errorf("worktree %q workspace-remounted %d times, want exactly 1", wt, mounts)
 		}
 	}
 }
@@ -198,8 +200,9 @@ func TestPool_ResultsCarryHandle(t *testing.T) {
 			t.Errorf("results[%d].handle = nil, want a non-nil worktree handle on every element", i)
 			continue
 		}
-		if res.handle.worktreePath != res.WorktreePath {
-			t.Errorf("results[%d].handle.worktreePath = %q, want %q", i, res.handle.worktreePath, res.WorktreePath)
+		wantSuffix := filepath.Join("worktrees", fmt.Sprintf("agent-%d", i))
+		if !strings.HasSuffix(res.handle.worktreePath, wantSuffix) {
+			t.Errorf("results[%d].handle.worktreePath = %q, want suffix %q", i, res.handle.worktreePath, wantSuffix)
 		}
 	}
 }
@@ -528,8 +531,8 @@ func TestPool_CancelMidFlightSkipsQueuedRuns(t *testing.T) {
 		if !errors.Is(results[i].Err, context.Canceled) {
 			t.Errorf("results[%d].Err = %v, want context.Canceled (queued run skipped)", i, results[i].Err)
 		}
-		if results[i].WorktreePath != "" {
-			t.Errorf("results[%d].WorktreePath = %q, want empty (no setup for a skipped run)", i, results[i].WorktreePath)
+		if results[i].handle != nil {
+			t.Errorf("results[%d].handle = %+v, want nil (no setup for a skipped run)", i, results[i].handle)
 		}
 	}
 	// Only run 0 ever reached exec; no commands were issued for the skipped runs.

@@ -159,7 +159,7 @@ git commit -qm "agent: add TABOO.md"`
 	}
 
 	// The agent's file landed on the host worktree, committed on its branch.
-	agentFile := filepath.Join(res.WorktreePath, "TABOO.md")
+	agentFile := filepath.Join(res.handle.worktreePath, "TABOO.md")
 	info, err := os.Stat(agentFile)
 	if err != nil {
 		t.Fatalf("agent file not on host worktree: %v", err)
@@ -169,14 +169,14 @@ git commit -qm "agent: add TABOO.md"`
 		t.Errorf("unexpected file mode %v", info.Mode())
 	}
 
-	logOut, err := osexec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
+	logOut, err := osexec.Command("git", "-C", res.handle.worktreePath, "log", "--oneline").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log: %v\n%s", err, logOut)
 	}
 	if !strings.Contains(string(logOut), "add TABOO.md") {
 		t.Errorf("commit not on branch; log:\n%s", logOut)
 	}
-	t.Logf("workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.WorktreePath)
+	t.Logf("workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.handle.worktreePath)
 }
 
 // TestIntegration_NestedWorktreeArrangement is the risk gate for issue #35: it
@@ -228,8 +228,8 @@ git commit -qm "agent: add NESTED.md"`
 
 	// The worktree is actually nested inside the repo, under .taboo/worktrees.
 	nestedPrefix := filepath.Join(repo, ".taboo", "worktrees") + string(os.PathSeparator)
-	if !strings.HasPrefix(res.WorktreePath, nestedPrefix) {
-		t.Fatalf("worktree not nested under the repo: got %q, want prefix %q", res.WorktreePath, nestedPrefix)
+	if !strings.HasPrefix(res.handle.worktreePath, nestedPrefix) {
+		t.Fatalf("worktree not nested under the repo: got %q, want prefix %q", res.handle.worktreePath, nestedPrefix)
 	}
 
 	// The agent's commit landed on the host branch (the in-place commit succeeded
@@ -237,11 +237,11 @@ git commit -qm "agent: add NESTED.md"`
 	if res.Commit == "" {
 		t.Fatal("RunResult.Commit is empty")
 	}
-	agentFile := filepath.Join(res.WorktreePath, "NESTED.md")
+	agentFile := filepath.Join(res.handle.worktreePath, "NESTED.md")
 	if _, err := os.Stat(agentFile); err != nil {
 		t.Fatalf("agent file not on host worktree: %v", err)
 	}
-	logOut, err := osexec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
+	logOut, err := osexec.Command("git", "-C", res.handle.worktreePath, "log", "--oneline").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log: %v\n%s", err, logOut)
 	}
@@ -251,14 +251,14 @@ git commit -qm "agent: add NESTED.md"`
 
 	// The worktree's .git pointer resolves on the host too: host-side git sees a
 	// valid checkout on the run's branch (no pointer rewriting broke either side).
-	branchOut, err := osexec.Command("git", "-C", res.WorktreePath, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	branchOut, err := osexec.Command("git", "-C", res.handle.worktreePath, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
 	if err != nil {
 		t.Fatalf("host-side git in nested worktree failed (pointer did not resolve): %v\n%s", err, branchOut)
 	}
 	if got := strings.TrimSpace(string(branchOut)); got != "agent/nested" {
 		t.Errorf("host worktree on wrong branch: got %q, want %q", got, "agent/nested")
 	}
-	t.Logf("nested arrangement OK: workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.WorktreePath)
+	t.Logf("nested arrangement OK: workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.handle.worktreePath)
 }
 
 // runLiveAgentCommitTest is the shared body of the three live-agent integration
@@ -302,7 +302,7 @@ func runLiveAgentCommitTest(t *testing.T, profile agent.AgentProfile, branch str
 	t.Logf("captured agent output (%d bytes):\n%s", len(res.Output), res.Output)
 
 	// The agent should have produced at least one commit beyond the seed.
-	out, err := osexec.Command("git", "-C", res.WorktreePath, "log", "--oneline").CombinedOutput()
+	out, err := osexec.Command("git", "-C", res.handle.worktreePath, "log", "--oneline").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log: %v\n%s", err, out)
 	}
@@ -504,7 +504,7 @@ func TestIntegration_OpenCodeResumeFork(t *testing.T) {
 
 	// Continuity: the resumed agent recalled the codeword a fresh session could not
 	// have known.
-	if got := readWorktreeFile(t, res2.WorktreePath, "RESUME.md"); !strings.Contains(strings.ToUpper(got), codeword) {
+	if got := readWorktreeFile(t, res2.handle.worktreePath, "RESUME.md"); !strings.Contains(strings.ToUpper(got), codeword) {
 		t.Errorf("resumed session did not continue the prior conversation: RESUME.md = %q, want it to contain the codeword %q", got, codeword)
 	}
 	// Resume targeted the source session in place — it reused the same id, not a fork.
@@ -535,11 +535,11 @@ func TestIntegration_OpenCodeResumeFork(t *testing.T) {
 	// Branch isolation: the fork's commit landed on its own branch/worktree, not
 	// the source's. (Filesystem isolation is taboo's unconditional half of fork —
 	// a fresh branch is always a fresh worktree; see ADR 0003.)
-	if _, err := os.Stat(filepath.Join(res3.WorktreePath, "FORK.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(res3.handle.worktreePath, "FORK.md")); err != nil {
 		t.Errorf("FORK.md not on the fork worktree: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(res2.WorktreePath, "FORK.md")); !os.IsNotExist(err) {
-		t.Errorf("FORK.md leaked onto the source worktree %s (err=%v); fork is not isolated", res2.WorktreePath, err)
+	if _, err := os.Stat(filepath.Join(res2.handle.worktreePath, "FORK.md")); !os.IsNotExist(err) {
+		t.Errorf("FORK.md leaked onto the source worktree %s (err=%v); fork is not isolated", res2.handle.worktreePath, err)
 	}
 
 	// Run 4: resume the *source* session again, after the fork. It must still
@@ -561,7 +561,7 @@ func TestIntegration_OpenCodeResumeFork(t *testing.T) {
 	if id4 := parseSessionID(t, res4.Output); id4 != sourceID {
 		t.Errorf("source session not resumable after fork: run 4 session id = %q, want %q", id4, sourceID)
 	}
-	srcCheck := strings.ToUpper(readWorktreeFile(t, res4.WorktreePath, "SRCCHECK.md"))
+	srcCheck := strings.ToUpper(readWorktreeFile(t, res4.handle.worktreePath, "SRCCHECK.md"))
 	if !strings.Contains(srcCheck, codeword) {
 		t.Errorf("source session lost its history after the fork: SRCCHECK.md = %q, want the codeword %q", srcCheck, codeword)
 	}

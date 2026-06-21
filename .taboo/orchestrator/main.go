@@ -65,8 +65,8 @@ type ghClient interface {
 
 // workflowRunner runs a named taboo workflow discovered at or above startDir and
 // returns the run's result. The taboo.RunWorkflow bridge satisfies it; tests
-// substitute a fake that returns a canned OrchestratedResult (pointing
-// WorktreePath at a temp dir) without provisioning a workshop.
+// substitute a fake that returns a canned OrchestratedResult (rooted at a
+// temp worktree dir) without provisioning a workshop.
 type workflowRunner func(ctx context.Context, startDir, workflow string, vars map[string]string, ov taboo.PlanOverrides, cmd taboo.Commander) (taboo.OrchestratedResult, error)
 
 func main() {

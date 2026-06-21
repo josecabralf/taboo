@@ -54,10 +54,10 @@ type RunRequest struct {
 }
 
 // runResultHandle is a RunResult's private capability to read a run's artifacts
-// without callers needing to know the worktree's on-disk layout. The repoPath
-// and cmd fields are unused today; they are here for upcoming repo-backed reads
-// via git (#119 moves the rev-parse capture here, #120 adds Dispose). Artifact
-// needs only worktreePath.
+// without callers needing to know the worktree's on-disk layout. Exec's rev-parse
+// capture and Artifact both read worktreePath through the handle. The repoPath and
+// cmd fields are unused today; they are here for upcoming repo-backed reads via git
+// (#120 adds Dispose).
 type runResultHandle struct {
 	repoPath     string
 	worktreePath string
@@ -66,10 +66,9 @@ type runResultHandle struct {
 
 // RunResult reports the outcome of a run.
 type RunResult struct {
-	Branch       string
-	WorktreePath string
-	Commit       string // HEAD of the branch after the agent ran
-	Output       string // captured agent exec stdout (stderr is not retained)
+	Branch string
+	Commit string // HEAD of the branch after the agent ran
+	Output string // captured agent exec stdout (stderr is not retained)
 	// Err is this run's failure, populated by Pool when fanning out so that one
 	// failed run does not abort the whole batch (see Pool.Run). The single-run
 	// primitives (Runner.Run/Setup/Exec) return their error separately and leave
@@ -86,10 +85,7 @@ type RunResult struct {
 // consumer test) attach one to a hand-built result so the Artifact API works
 // without a full run.
 func NewResultWithWorktree(worktree string) RunResult {
-	return RunResult{
-		WorktreePath: worktree,
-		handle:       &runResultHandle{worktreePath: worktree},
-	}
+	return RunResult{handle: &runResultHandle{worktreePath: worktree}}
 }
 
 // Artifact reads the file at relpath within the run's worktree and returns its
@@ -215,8 +211,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 
 // Setup ensures the workshop exists, creates a fresh worktree on req.Branch, and
 // swaps it (and the repo's .git) into the workshop via stop/remount/start. It
-// runs once per worktree; the returned RunResult carries Branch + WorktreePath
-// for the subsequent Exec call(s).
+// runs once per worktree; the returned RunResult carries Branch + a worktree
+// handle for the subsequent Exec call(s).
 func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	res := RunResult{Branch: req.Branch}
 
@@ -229,7 +225,6 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 
 	wt := r.worktreePath(req.Branch)
-	res.WorktreePath = wt
 	res.handle = &runResultHandle{repoPath: r.cfg.RepoPath, worktreePath: wt, cmd: r.cmd}
 	if req.BaseRef != "" {
 		// Update remote-tracking refs so BaseRef (and origin/main, which the agent
@@ -286,11 +281,12 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	return res, nil
 }
 
-// Exec runs the agent once in the worktree Setup prepared (res.WorktreePath),
-// then records the agent's stdout and the resulting branch HEAD on the returned
-// result. Calling it more than once re-runs the agent in place; because the
+// Exec runs the agent once in the worktree Setup prepared (read from the result's
+// handle), then records the agent's stdout and the resulting branch HEAD on the
+// returned result. Calling it more than once re-runs the agent in place; because the
 // agent commits through the bind-mount, each Exec continues from the prior
-// iteration's commit. The base argument supplies Branch + WorktreePath from Setup.
+// iteration's commit. The base argument supplies Branch + the worktree handle from
+// Setup.
 func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunResult, error) {
 	res := base
 	proj, ws := r.cfg.ProjectDir, r.cfg.Workshop
@@ -330,8 +326,12 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 	res.Output = captured.String()
 
 	// The agent committed in place through the bind-mount; capture the branch
-	// HEAD from the host worktree.
-	commit, err := r.gitCapture(ctx, []string{"-C", res.WorktreePath, "rev-parse", "HEAD"})
+	// HEAD from the host worktree. The path comes from the handle, which Setup
+	// always populates; guard hand-built results that lack one.
+	if res.handle == nil {
+		return res, fmt.Errorf("exec: result has no worktree handle")
+	}
+	commit, err := r.gitCapture(ctx, []string{"-C", res.handle.worktreePath, "rev-parse", "HEAD"})
 	if err != nil {
 		return res, fmt.Errorf("rev-parse HEAD: %w", err)
 	}
