@@ -1,0 +1,1522 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Orchestrate AI coding agents from Go — an agent's commits land on your host branch.">
+      
+      
+      
+        <link rel="canonical" href="https://josecabralf.github.io/taboo/explanation/isolation-model/">
+      
+      
+        <link rel="prev" href="../design/">
+      
+      
+        <link rel="next" href="../dogfooding/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>The isolation model - taboo</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Ubuntu:300,300i,400,400i,700,700i%7CUbuntu+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Ubuntu";--md-code-font:"Ubuntu Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+      <link rel="stylesheet" href="../../assets/landing.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#the-isolation-model" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="taboo" class="md-header__button md-logo" aria-label="taboo" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            taboo
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              The isolation model
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/josecabralf/taboo" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    josecabralf/taboo
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="taboo" class="md-nav__button md-logo" aria-label="taboo" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    taboo
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/josecabralf/taboo" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    josecabralf/taboo
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Documentation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1_1" id="__nav_1_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/library-first-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Drive one agent run from Go
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/cli-first-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run your first workflow with the CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_1_2" id="__nav_1_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How-to guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    How-to guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/fan-out-runs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run many prompts in parallel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/iterate-until-done/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Iterate until the agent signals done
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/prepare-the-workspace-with-hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prepare the workspace with hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/typed-results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get a typed result out of a run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_1_3" id="__nav_1_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/library-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    taboo CLI reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/taboo-yaml/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    taboo.yaml reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../run-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Go API ↗ (pkg.go.dev)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_1_4" id="__nav_1_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Explanation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_1_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Explanation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why the API is shaped this way
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The isolation model
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The isolation model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-workshop-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a workshop is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-two-mounts-not-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why two mounts, not one
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-identical-path-git-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why identical-path .git matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-tmp-trap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The /tmp trap
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-the-per-run-swap-is-cheap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the per-run swap is cheap
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-workshop-per-agent-one-workshop-per-slot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One workshop per agent, one workshop per slot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-worktrees-live" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where worktrees live
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#push-is-denied-the-host-owns-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Push is denied; the host owns integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dogfooding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dogfooding the agent loop
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-workshop-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a workshop is
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-two-mounts-not-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why two mounts, not one
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-identical-path-git-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why identical-path .git matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-tmp-trap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The /tmp trap
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-the-per-run-swap-is-cheap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the per-run swap is cheap
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-workshop-per-agent-one-workshop-per-slot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One workshop per agent, one workshop per slot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-worktrees-live" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where worktrees live
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#push-is-denied-the-host-owns-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Push is denied; the host owns integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="the-isolation-model">The isolation model<a class="headerlink" href="#the-isolation-model" title="Permanent link">&para;</a></h1>
+<p>taboo runs an AI coding agent inside a Canonical workshop and lets it commit
+straight onto a host git branch, with no copy-out or sync step afterward. That
+property comes from a specific arrangement of git worktrees and bind-mounts. This
+page explains why the arrangement is shaped the way it is. For the steps to drive
+a run, see the <a href="../../tutorials/library-first-run/">library</a> and
+<a href="../../tutorials/cli-first-run/">CLI</a> tutorials.</p>
+<h2 id="what-a-workshop-is">What a workshop is<a class="headerlink" href="#what-a-workshop-is" title="Permanent link">&para;</a></h2>
+<p>A workshop is an LXD-backed development environment defined declaratively and
+provisioned by the <code>workshop</code> snap. taboo does not import workshop's Go client or
+speak its REST socket; it shells out to the <code>workshop</code> binary, driving everything
+through <code>Cmd{Name: "workshop", ...}</code> over the <code>Commander</code> seam in
+<code>pkg/internal/exec/commander.go</code>. The verbs it uses are <code>launch</code>, <code>stop</code>, <code>start</code>,
+<code>info</code>, <code>remount</code>, and <code>exec</code>, assembled in <code>pkg/internal/workshop/workshop.go</code>.</p>
+<p>A workshop is expensive to stand up. The LXD container has to be created and the
+agent CLI installed into its rootfs, which takes minutes. That cost shapes the
+rest of the model: taboo provisions a workshop once and reuses it across many
+runs rather than creating one per run. <code>Runner.ensureWorkshop</code> in
+<code>pkg/internal/run/runner.go</code> probes with <code>workshop info</code> and only launches when the
+probe fails, so the second run onward reuses the existing workshop.</p>
+<h2 id="why-two-mounts-not-one">Why two mounts, not one<a class="headerlink" href="#why-two-mounts-not-one" title="Permanent link">&para;</a></h2>
+<p>The agent works inside a fresh git worktree, one per run, created with
+<code>git worktree add -b &lt;branch&gt;</code> (<code>Runner.Setup</code> in <code>pkg/internal/run/runner.go</code>). A
+linked worktree is not self-contained. Its <code>.git</code> entry is a pointer file of the
+form <code>gitdir: &lt;repo&gt;/.git/worktrees/&lt;name&gt;</code>, and its objects and refs live in the
+main repository's <code>.git</code>. Mounting only the worktree's working directory into the
+workshop gives the agent a directory whose <code>.git</code> pointer dangles, and git
+reports <code>fatal: not a git repository</code>.</p>
+<p>So taboo bind-mounts two things into the workshop:</p>
+<ol>
+<li>the run's worktree, at the fixed target <code>/taboo/workspace</code> (the <code>WorkspaceTarget</code>
+   constant in <code>pkg/internal/workshop/template.go</code>);</li>
+<li>the repository's main <code>.git</code>, the git common directory, at its identical host
+   absolute path inside the workshop.</li>
+</ol>
+<p>The second mount is the load-bearing one. <code>GitCommonTarget</code> in
+<code>pkg/internal/workshop/template.go</code> returns <code>filepath.Join(repoPath, ".git")</code>,
+and that value is used both as the mount target baked into the workshop
+definition and as the remount source, so the host <code>.git</code> path and the
+in-workshop <code>.git</code> path are the same string.</p>
+<h2 id="why-identical-path-git-matters">Why identical-path <code>.git</code> matters<a class="headerlink" href="#why-identical-path-git-matters" title="Permanent link">&para;</a></h2>
+<p>Because the common directory is mounted at the same absolute path on both sides,
+the worktree's <code>.git</code> pointer resolves to the same place whether git reads it from
+the host or from inside the workshop. The agent commits in place, the commit's
+objects and the branch ref land in the shared <code>.git</code>, and the branch HEAD is
+visible to host-side git immediately. <code>Runner.Exec</code> reads it back with
+<code>git -C &lt;worktree&gt; rev-parse HEAD</code> and records it on <code>RunResult.Commit</code>.</p>
+<p>The alternative is to rewrite the worktree's <code>.git</code> pointer to a fixed in-workshop
+path such as <code>/gitcommon</code>. That also lets the in-workshop commit succeed, but it
+breaks the worktree for host-side git, because the host would then read a pointer
+aimed at a path that does not exist outside the container. Keeping the path
+identical avoids any rewriting and keeps the worktree valid on both sides at once.
+ADR 0007 (<a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0007-nested-worktree-placement.md">nested worktree placement</a>)
+records the integration test that confirmed the commit lands on the host branch
+and the worktree's <code>.git</code> pointer still resolves for host-side git afterward.</p>
+<h2 id="the-tmp-trap">The <code>/tmp</code> trap<a class="headerlink" href="#the-tmp-trap" title="Permanent link">&para;</a></h2>
+<p>The identical-path rule has a consequence that surprises people: the managed
+repository cannot live under <code>/tmp</code> or <code>/run</code>. A mount target that resolves to one
+of those paths lands on volatile tmpfs inside the workshop, and the mount silently
+fails. Because the git-common target equals the host <code>.git</code> path, a repository at,
+say, <code>/tmp/work/repo</code> would try to mount <code>.git</code> at <code>/tmp/work/repo/.git</code> inside the
+container, hit tmpfs, and leave the worktree's <code>.git</code> pointer unresolvable
+(<code>fatal: not a git repository</code> again).</p>
+<p>The fix is to keep the repository on persistent storage, for example under <code>$HOME</code>.
+This is not a soft recommendation; <code>validate</code> and <code>doctor</code> enforce it and refuse a
+repository under <code>/tmp</code> rather than letting a run fail opaquely later. The
+constraint is a property of the git-common mount, not of where the worktree sits,
+so it holds for every layout.</p>
+<h2 id="why-the-per-run-swap-is-cheap">Why the per-run swap is cheap<a class="headerlink" href="#why-the-per-run-swap-is-cheap" title="Permanent link">&para;</a></h2>
+<p>Each run needs a different worktree mounted at <code>/taboo/workspace</code>, but the workshop is
+long-lived and was launched once. So taboo repoints the existing mount rather than
+relaunching. The mechanism is <code>workshop remount</code>, which points an existing mount
+plug at a new host source.</p>
+<p>A <code>remount</code> is only atomic when the new source is empty and on the same filesystem
+as the current one. A worktree is a non-empty directory, so the swap cannot be
+live. <code>Runner.Setup</code> does it as <code>stop</code>, then <code>remount</code> for <code>workspace</code> and
+<code>gitcommon</code> (and <code>sessions</code> for a session-capable agent), then <code>start</code>. The
+ordering is visible in the code: <code>verbArgs(proj, "stop", ws)</code>, the <code>remountArgs</code>
+calls, then <code>verbArgs(proj, "start", ws)</code>.</p>
+<p>This stop, remount, start, exec cycle takes seconds. The expensive work, creating
+the container and installing the agent CLI, already happened at launch and is not
+repeated. That is the whole point of reusing the workshop: the minutes-long launch
+is paid once and amortized across every run that follows, while each run pays only
+the seconds-long swap.</p>
+<p>The swap has a second effect that explains why the agent must be baked in rather
+than installed at runtime. A <code>stop</code> reprovisions the rootfs from the declared SDKs,
+so anything installed ad hoc into the rootfs by a previous <code>exec</code> is wiped before
+the next run. Only the bind-mounts survive. taboo therefore ships the agent CLI
+as a workshop SDK embedded with <code>//go:embed sdk</code> in
+<code>pkg/internal/workshop/materialize.go</code> and seeds it into the project on first run,
+so the agent is present in the rootfs every time the workshop starts.</p>
+<h2 id="one-workshop-per-agent-one-workshop-per-slot">One workshop per agent, one workshop per slot<a class="headerlink" href="#one-workshop-per-agent-one-workshop-per-slot" title="Permanent link">&para;</a></h2>
+<p>A single workshop is pinned to one agent and, through the git-common mount, to one
+repository. <code>WorkshopName(base, agent)</code> in <code>pkg/internal/workshop/workshop.go</code>
+derives the name as <code>base + "-" + agent</code>, so each distinct agent gets its own
+reused workshop. The repository pinning is structural: the git-common target
+equals <code>&lt;repoPath&gt;/.git</code>, and <code>remount</code> repoints a mount's source but cannot move
+its target after launch, so a workshop launched for one repository cannot serve
+another at a different absolute path without breaking the identical-path invariant.</p>
+<p>Fan-out follows the same logic at the slot level. <code>Pool</code> in <code>pkg/internal/run/pool.go</code>
+gives each concurrency slot a distinct workshop named <code>"&lt;Workshop&gt;-&lt;slot&gt;"</code> under
+its own project directory <code>"&lt;ProjectDir&gt;/slot-&lt;slot&gt;"</code>, so slots never collide on
+definitions, worktrees, or session stores. Isolation is at the workshop level: each
+slot reuses its own workshop across waves, and every request still gets its own
+branch and worktree. Because all slots share the base repository, <code>Pool</code> serializes
+<code>git worktree add</code> across them (worktree creation mutates the shared <code>.git</code>), while
+the workshop swaps and agent execs run concurrently. The
+<a href="../../guides/fan-out-runs/">fan-out guide</a> covers the operational caveats, such as
+not running <code>git gc</code> against the repository mid-run.</p>
+<p>A warmer fan-out, where each slot starts from a clone of an already-provisioned
+workshop, would save the per-slot provisioning cost, but it is deferred. ADR 0006
+(<a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0006-defer-warm-fanout-single-repo-workshops.md">defer warm-clone fan-out</a>)
+records that the <code>workshop</code> CLI exposes no clone or <code>launch --from</code> verb and
+neither does its Go client, so the win is unreachable inside taboo's
+shell-out-to-the-CLI contract until an upstream verb lands. The same ADR records
+the decision to keep one workshop per repository rather than build multi-repo
+reuse, because the per-repo git-common coupling makes the alternative impose a
+single-host-parent layout constraint for a launch cost that is not yet measured to
+justify it.</p>
+<h2 id="where-worktrees-live">Where worktrees live<a class="headerlink" href="#where-worktrees-live" title="Permanent link">&para;</a></h2>
+<p>A run's worktree path is derived by <code>Runner.worktreePath</code> as
+<code>&lt;ProjectDir&gt;/worktrees/&lt;branch&gt;</code>, with slashes in the branch name replaced by
+hyphens. The CLI sets <code>ProjectDir</code> to <code>&lt;repo&gt;/.taboo</code>, so worktrees nest at
+<code>&lt;repo&gt;/.taboo/worktrees/&lt;branch&gt;</code>, inside the repository and git-ignored.</p>
+<p>Nesting a worktree under the same repository whose <code>.git</code> is the second mount looks
+risky, but it changes only the host path of the <code>/taboo/workspace</code> source. The two mounts
+themselves are untouched: the worktree still goes to <code>/taboo/workspace</code>, and <code>&lt;repo&gt;/.git</code>
+still mounts at <code>&lt;repo&gt;/.git</code>. The worktree's <code>.git</code> pointer references the common
+directory, which is present through the git-common mount regardless of where the
+worktree physically sits. ADR 0007 records that this nested arrangement was verified
+on workshop 0.9.1 and LXD 6.8, and that the out-of-repo layout remains a sound
+fallback. The only host-side cost the nested layout inherits is the
+repo-not-under-<code>/tmp</code> constraint, which already existed for the git-common mount.</p>
+<h2 id="push-is-denied-the-host-owns-integration">Push is denied; the host owns integration<a class="headerlink" href="#push-is-denied-the-host-owns-integration" title="Permanent link">&para;</a></h2>
+<p>Agents run headless, with no interactive approver, and commit autonomously. Every
+supported profile denies <code>git push</code> from inside the workshop by default (Claude
+Code via <code>--disallowedTools "Bash(git push *)"</code>, Copilot via
+<code>--deny-tool=shell(git push)</code>; see <a href="../../reference/agents/">agents.md</a>). The deny is
+deliberate. A linked worktree shares the host repository's object store and refs, so
+a push from inside the workshop, forced or not, could mutate host branches directly.</p>
+<p>taboo's contract is to commit in place and let the host own integration. The agent
+never needs to push, because its commits are already on the host branch the moment
+it makes them. A workflow that does need to publish a branch or open a pull request
+adds an explicit push stage on the host side, after the run, rather than relying on
+the agent to push from inside the workshop.</p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../design/">Why the API is shaped this way</a></li>
+<li><a href="../../reference/library-api/">Library API reference</a></li>
+<li><a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0006-defer-warm-fanout-single-repo-workshops.md">ADR 0006: defer warm-clone fan-out, one workshop per repo</a></li>
+<li><a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0007-nested-worktree-placement.md">ADR 0007: nested worktree placement</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../design/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Why the API is shaped this way">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Why the API is shaped this way
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../dogfooding/" class="md-footer__link md-footer__link--next" aria-label="Next: Dogfooding the agent loop">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Dogfooding the agent loop
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      taboo · MIT-licensed
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/extra.js"></script>
+      
+    
+  </body>
+</html>
