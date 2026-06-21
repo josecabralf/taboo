@@ -49,6 +49,8 @@ package taboo
 // Declarations are grouped by source package in dependency order (leaves first).
 
 import (
+	"context"
+
 	"github.com/josecabralf/taboo/internal/agent"
 	"github.com/josecabralf/taboo/internal/config"
 	"github.com/josecabralf/taboo/internal/exec"
@@ -68,6 +70,13 @@ type Commander = exec.Commander
 
 // NewExecCommander returns a Commander that runs commands as real host processes.
 func NewExecCommander() Commander { return exec.NewExecCommander() }
+
+// Output runs cmd with a fresh stdout buffer and returns the raw captured
+// stdout together with the run error. The string is untrimmed, and any Stdout
+// already set on cmd is overwritten.
+func Output(ctx context.Context, c Commander, cmd Cmd) (string, error) {
+	return exec.Output(ctx, c, cmd)
+}
 
 // --- internal/agent (leaf): the per-agent abstraction and registry ---
 

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"strings"
 
 	"github.com/josecabralf/taboo"
 )
@@ -11,9 +10,7 @@ import (
 // captured stdout and the run error. All probe command names and args are static
 // literals, so there is no untrusted-input injection concern.
 func probe(ctx context.Context, env Env, name string, args ...string) (string, error) {
-	var out strings.Builder
-	err := env.Cmd.Run(ctx, taboo.Cmd{Name: name, Args: args, Stdout: &out})
-	return out.String(), err
+	return taboo.Output(ctx, env.Cmd, taboo.Cmd{Name: name, Args: args})
 }
 
 // hostChecks assembles every always-on host check in display order, threading
