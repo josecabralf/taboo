@@ -124,6 +124,7 @@ nav:
       - Reference:
           - reference/library-api.md
           - reference/cli.md
+          - reference/afk.md
           - reference/agents.md
           - reference/taboo-yaml.md
           - Run variables: run-vars.md
