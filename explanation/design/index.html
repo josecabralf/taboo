@@ -789,7 +789,7 @@
   
   
     <li class="md-nav__item">
-      <a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg" class="md-nav__link">
+      <a href="https://pkg.go.dev/github.com/josecabralf/taboo" class="md-nav__link">
         
   
   
@@ -1236,7 +1236,7 @@ and why the library is documented as the contract while the CLI is documented as
 convenience over it.</p>
 <h2 id="the-single-side-effecting-seam">The single side-effecting seam<a class="headerlink" href="#the-single-side-effecting-seam" title="Permanent link">&para;</a></h2>
 <p>Everything taboo does to the outside world, every <code>workshop</code> and <code>git</code> invocation,
-goes through one interface. <code>Commander</code> in <code>pkg/internal/exec/commander.go</code> is
+goes through one interface. <code>Commander</code> in <code>internal/exec/commander.go</code> is
 <code>Run(ctx context.Context, c Cmd) error</code>, and <code>Cmd</code> is a single host-side process
 invocation. <code>NewExecCommander</code> returns the production implementation that shells
 out via <code>os/exec</code>.</p>
@@ -1254,7 +1254,7 @@ per-run <code>stop</code> reprovisions the rootfs from the declared SDKs (see
 <a href="../isolation-model/">the isolation model</a>). So taboo packages each supported agent
 as a workshop SDK and bakes it in, rather than installing it at runtime where the
 next <code>stop</code> would wipe it.</p>
-<p>The agent abstraction is <code>AgentProfile</code> in <code>pkg/internal/agent/agent.go</code>. One profile value
+<p>The agent abstraction is <code>AgentProfile</code> in <code>internal/agent/agent.go</code>. One profile value
 fully describes an agent: its name (which doubles as the SDK qualifier), how to
 build its exec invocation, the credential env keys it needs, and its session
 redirect. The command builder returns <code>AgentCommand{Argv []string; Stdin string}</code>
@@ -1279,10 +1279,10 @@ sets only the credential they hold.</p>
 <p>The CLI resolves an agent name and model to an <code>AgentProfile</code>, and enumerates the
 canonical names so it can suggest a correction on a typo. ADR 0005
 (<a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0005-agent-registry-declarative-roster.md">the declarative roster</a>) records
-that <code>pkg/internal/agent/registry.go</code> holds an explicit slice of registrations rather than
+that <code>internal/agent/registry.go</code> holds an explicit slice of registrations rather than
 self-registering agents through <code>init()</code>. The public surface is
-<code>NewProfile(name, model string) (AgentProfile, error)</code>, which returns the wrapped
-<code>ErrUnknownAgent</code> sentinel on a miss, and <code>AgentNames() []string</code>, sorted, for the
+<code>NewProfile(name AgentName, model string) (AgentProfile, error)</code>, which returns the wrapped
+<code>ErrUnknownAgent</code> sentinel on a miss, and <code>AgentNames() []AgentName</code>, sorted, for the
 candidate set.</p>
 <p>The registry is keyed by each profile's own <code>Name()</code>, so there is no second name
 literal to drift out of sync. The choice is about visibility. An <code>init()</code>-based
@@ -1296,7 +1296,7 @@ anything is constructed. ADR 0008 covers the hint and the fuzzy match.</p>
 <h2 id="structured-output-is-the-callers-struct">Structured output is the caller's struct<a class="headerlink" href="#structured-output-is-the-callers-struct" title="Permanent link">&para;</a></h2>
 <p>taboo extracts a typed result from an agent's stdout: a delimited
 <code>&lt;result&gt;{...}&lt;/result&gt;</code> block whose JSON payload becomes a typed Go value. The seam
-is <code>ResultExtractor</code> in <code>pkg/internal/result/result.go</code>, an interface built by the generic
+is <code>ResultExtractor</code> in <code>internal/result/result.go</code>, an interface built by the generic
 constructor <code>JSONResult[T any](opts ...Option) ResultExtractor</code>.</p>
 <p>ADR 0002
 (<a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0002-structured-output-generics-encoding-json.md">structured output over generics</a>)

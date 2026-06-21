@@ -915,7 +915,7 @@
   
   
     <li class="md-nav__item">
-      <a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg" class="md-nav__link">
+      <a href="https://pkg.go.dev/github.com/josecabralf/taboo" class="md-nav__link">
         
   
   
@@ -1217,7 +1217,7 @@
 <p>By the end of this tutorial you will have installed the <code>taboo</code> binary, scaffolded a taboo project into a git repository, set one credential, checked that your host is ready, and run the seeded <code>fix</code> workflow. The <code>taboo</code> CLI wraps the library: <code>init</code> scaffolds the project (<code>cli/internal/app/init.go</code>, <code>cli/internal/app/scaffold.go</code>), <code>doctor</code> checks the host (<code>cli/internal/app/doctor.go</code>), and <code>run</code> drives a workflow end-to-end on a fresh branch (<code>cli/internal/app/run.go</code>).</p>
 <p>This tutorial uses the <code>opencode</code> agent. For why runs are isolated and commit in place, read <a href="../../explanation/isolation-model/">the isolation model</a> afterwards.</p>
 <h2 id="install-the-cli">Install the CLI<a class="headerlink" href="#install-the-cli" title="Permanent link">&para;</a></h2>
-<p>taboo's CLI is its own Go module (<code>github.com/josecabralf/taboo/cli</code>), separate from the yaml.v3-only library at <code>github.com/josecabralf/taboo/pkg</code>. Install the CLI binary, named <code>taboo</code>:</p>
+<p>taboo's CLI is its own Go module (<code>github.com/josecabralf/taboo/cli</code>), separate from the yaml.v3-only library at <code>github.com/josecabralf/taboo</code>. Install the CLI binary, named <code>taboo</code>:</p>
 <div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>go<span class="w"> </span>install<span class="w"> </span>github.com/josecabralf/taboo/cli@latest
 </span></code></pre></div>
 <p>Confirm it is on your <code>PATH</code>:</p>

@@ -904,7 +904,7 @@
   
   
     <li class="md-nav__item">
-      <a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg" class="md-nav__link">
+      <a href="https://pkg.go.dev/github.com/josecabralf/taboo" class="md-nav__link">
         
   
   
@@ -1223,7 +1223,7 @@ Go <code>main.go</code> and <code>go.mod</code>. It never launches a workshop.</
 <tr>
 <td><code>--agent</code></td>
 <td><code>""</code></td>
-<td>Agent to scaffold for (<code>opencode</code>, <code>claude-code</code>, <code>copilot</code>). Required non-interactively.</td>
+<td>Agent to scaffold for (<code>opencode</code>, <code>claude-code</code>, <code>github-copilot</code>). Required non-interactively.</td>
 </tr>
 <tr>
 <td><code>--model</code></td>
@@ -1275,7 +1275,7 @@ interactively)</code>. A fully flagged invocation skips the wizard even at a TTY
 <p><code>init</code> refuses to overwrite an existing <code>.taboo</code> directory unless <code>--force</code> is
 set: <code>.taboo already exists at PATH; pass --force to regenerate its scaffold
 files</code> (<code>ensureWritable</code>). An unknown agent is reported with the valid set:
-<code>unknown agent "X"; valid agents: claude-code, copilot, opencode</code>.</p>
+<code>unknown agent "X"; valid agents: claude-code, github-copilot, opencode</code>.</p>
 <p>Output routing: progress, the scaffold confirmation, and next steps go to
 stdout (<code>printNextSteps</code>); errors go to stderr prefixed with <code>Error:</code>. A
 <code>--dry-run</code> invocation prints <code>taboo init (dry run) — would write:</code> followed by

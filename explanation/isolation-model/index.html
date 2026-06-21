@@ -789,7 +789,7 @@
   
   
     <li class="md-nav__item">
-      <a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg" class="md-nav__link">
+      <a href="https://pkg.go.dev/github.com/josecabralf/taboo" class="md-nav__link">
         
   
   
@@ -1269,17 +1269,17 @@ a run, see the <a href="../../tutorials/library-first-run/">library</a> and
 provisioned by the <code>workshop</code> snap. taboo does not import workshop's Go client or
 speak its REST socket; it shells out to the <code>workshop</code> binary, driving everything
 through <code>Cmd{Name: "workshop", ...}</code> over the <code>Commander</code> seam in
-<code>pkg/internal/exec/commander.go</code>. The verbs it uses are <code>launch</code>, <code>stop</code>, <code>start</code>,
-<code>info</code>, <code>remount</code>, and <code>exec</code>, assembled in <code>pkg/internal/workshop/workshop.go</code>.</p>
+<code>internal/exec/commander.go</code>. The verbs it uses are <code>launch</code>, <code>stop</code>, <code>start</code>,
+<code>info</code>, <code>remount</code>, and <code>exec</code>, assembled in <code>internal/workshop/workshop.go</code>.</p>
 <p>A workshop is expensive to stand up. The LXD container has to be created and the
 agent CLI installed into its rootfs, which takes minutes. That cost shapes the
 rest of the model: taboo provisions a workshop once and reuses it across many
 runs rather than creating one per run. <code>Runner.ensureWorkshop</code> in
-<code>pkg/internal/run/runner.go</code> probes with <code>workshop info</code> and only launches when the
+<code>internal/run/runner.go</code> probes with <code>workshop info</code> and only launches when the
 probe fails, so the second run onward reuses the existing workshop.</p>
 <h2 id="why-two-mounts-not-one">Why two mounts, not one<a class="headerlink" href="#why-two-mounts-not-one" title="Permanent link">&para;</a></h2>
 <p>The agent works inside a fresh git worktree, one per run, created with
-<code>git worktree add -b &lt;branch&gt;</code> (<code>Runner.Setup</code> in <code>pkg/internal/run/runner.go</code>). A
+<code>git worktree add -b &lt;branch&gt;</code> (<code>Runner.Setup</code> in <code>internal/run/runner.go</code>). A
 linked worktree is not self-contained. Its <code>.git</code> entry is a pointer file of the
 form <code>gitdir: &lt;repo&gt;/.git/worktrees/&lt;name&gt;</code>, and its objects and refs live in the
 main repository's <code>.git</code>. Mounting only the worktree's working directory into the
@@ -1288,12 +1288,12 @@ reports <code>fatal: not a git repository</code>.</p>
 <p>So taboo bind-mounts two things into the workshop:</p>
 <ol>
 <li>the run's worktree, at the fixed target <code>/taboo/workspace</code> (the <code>WorkspaceTarget</code>
-   constant in <code>pkg/internal/workshop/template.go</code>);</li>
+   constant in <code>internal/workshop/template.go</code>);</li>
 <li>the repository's main <code>.git</code>, the git common directory, at its identical host
    absolute path inside the workshop.</li>
 </ol>
 <p>The second mount is the load-bearing one. <code>GitCommonTarget</code> in
-<code>pkg/internal/workshop/template.go</code> returns <code>filepath.Join(repoPath, ".git")</code>,
+<code>internal/workshop/template.go</code> returns <code>filepath.Join(repoPath, ".git")</code>,
 and that value is used both as the mount target baked into the workshop
 definition and as the remount source, so the host <code>.git</code> path and the
 in-workshop <code>.git</code> path are the same string.</p>
@@ -1346,17 +1346,17 @@ than installed at runtime. A <code>stop</code> reprovisions the rootfs from the 
 so anything installed ad hoc into the rootfs by a previous <code>exec</code> is wiped before
 the next run. Only the bind-mounts survive. taboo therefore ships the agent CLI
 as a workshop SDK embedded with <code>//go:embed sdk</code> in
-<code>pkg/internal/workshop/materialize.go</code> and seeds it into the project on first run,
+<code>internal/workshop/materialize.go</code> and seeds it into the project on first run,
 so the agent is present in the rootfs every time the workshop starts.</p>
 <h2 id="one-workshop-per-agent-one-workshop-per-slot">One workshop per agent, one workshop per slot<a class="headerlink" href="#one-workshop-per-agent-one-workshop-per-slot" title="Permanent link">&para;</a></h2>
 <p>A single workshop is pinned to one agent and, through the git-common mount, to one
-repository. <code>WorkshopName(base, agent)</code> in <code>pkg/internal/workshop/workshop.go</code>
+repository. <code>WorkshopName(base, agent)</code> in <code>internal/workshop/workshop.go</code>
 derives the name as <code>base + "-" + agent</code>, so each distinct agent gets its own
 reused workshop. The repository pinning is structural: the git-common target
 equals <code>&lt;repoPath&gt;/.git</code>, and <code>remount</code> repoints a mount's source but cannot move
 its target after launch, so a workshop launched for one repository cannot serve
 another at a different absolute path without breaking the identical-path invariant.</p>
-<p>Fan-out follows the same logic at the slot level. <code>Pool</code> in <code>pkg/internal/run/pool.go</code>
+<p>Fan-out follows the same logic at the slot level. <code>Pool</code> in <code>internal/run/pool.go</code>
 gives each concurrency slot a distinct workshop named <code>"&lt;Workshop&gt;-&lt;slot&gt;"</code> under
 its own project directory <code>"&lt;ProjectDir&gt;/slot-&lt;slot&gt;"</code>, so slots never collide on
 definitions, worktrees, or session stores. Isolation is at the workshop level: each

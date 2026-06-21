@@ -926,7 +926,7 @@
   
   
     <li class="md-nav__item">
-      <a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg" class="md-nav__link">
+      <a href="https://pkg.go.dev/github.com/josecabralf/taboo" class="md-nav__link">
         
   
   
@@ -1238,7 +1238,7 @@
 <h1 id="tabooyaml-reference">taboo.yaml reference<a class="headerlink" href="#tabooyaml-reference" title="Permanent link">&para;</a></h1>
 <p><code>taboo.yaml</code> is the parsed project config read by both the CLI and Go callers
 that drive runs through <code>pkg</code>. The schema is defined by <code>ProjectConfig</code>
-in <code>pkg/internal/config/config.go</code>. <code>taboo.LoadConfig(path)</code> reads it, decodes it
+in <code>internal/config/config.go</code>. <code>taboo.LoadConfig(path)</code> reads it, decodes it
 strictly, and resolves the agent and model of the top level and of every
 workflow into an <code>AgentProfile</code>.</p>
 <p>The CLI discovers the file by ascending from the working directory: either the
@@ -1247,7 +1247,7 @@ directory holds <code>taboo.yaml</code>, or an ancestor holds <code>.taboo/taboo
 <p>For the commands that read this file, see <a href="../cli/">cli.md</a>. For agent names and
 the model each expects, see <a href="../agents/">agents.md</a>.</p>
 <h2 id="top-level-keys">Top-level keys<a class="headerlink" href="#top-level-keys" title="Permanent link">&para;</a></h2>
-<p><code>ProjectConfig</code> (<code>pkg/internal/config/config.go</code>). The YAML key is the struct tag in each
+<p><code>ProjectConfig</code> (<code>internal/config/config.go</code>). The YAML key is the struct tag in each
 row.</p>
 <table>
 <thead>
@@ -1316,13 +1316,13 @@ row.</p>
 </tbody>
 </table>
 <p><code>strategy</code> defaults to <code>branch</code> in <code>LoadConfig</code> when omitted (<code>defaultStrategy</code>,
-<code>pkg/internal/config/config.go</code>). <code>agent</code> and <code>model</code> are resolved to a profile only where
+<code>internal/config/config.go</code>). <code>agent</code> and <code>model</code> are resolved to a profile only where
 an agent is set; an empty agent leaves the resolved <code>Profile</code> nil without error.
 Enforcing a required agent is the <code>validate</code> command's job, not the loader's.</p>
 <p><code>Profile</code> (the resolved top-level profile) is not serialized (<code>yaml:"-"</code>). It is
 populated by <code>LoadConfig</code>, not read from the file.</p>
 <h2 id="defaults">defaults<a class="headerlink" href="#defaults" title="Permanent link">&para;</a></h2>
-<p>The <code>defaults:</code> block is <code>RunDefaults</code> (<code>pkg/internal/config/config.go</code>): scalar-only run
+<p>The <code>defaults:</code> block is <code>RunDefaults</code> (<code>internal/config/config.go</code>): scalar-only run
 settings applied when a workflow or flag does not override them. The whole block
 is optional; when omitted, <code>Defaults</code> is nil and every default is its zero
 value.</p>
@@ -1379,11 +1379,11 @@ mirror the CLI's <code>--prompt</code> and <code>--prompt-file</code> flags; the
 resolves their precedence.</p>
 <p><code>timeout</code> is a <code>Duration</code>, a config-friendly <code>time.Duration</code> that parses Go
 duration strings such as <code>30m</code> or <code>1h30m</code> through <code>time.ParseDuration</code>; an empty
-value yields zero (<code>pkg/internal/config/config.go</code>, <code>Duration.UnmarshalYAML</code>). It marshals
+value yields zero (<code>internal/config/config.go</code>, <code>Duration.UnmarshalYAML</code>). It marshals
 back to a Go duration string (<code>Duration.MarshalYAML</code>).</p>
 <h2 id="workflows">workflows<a class="headerlink" href="#workflows" title="Permanent link">&para;</a></h2>
 <p>The <code>workflows:</code> block is a map from workflow name to <code>Workflow</code>
-(<code>pkg/internal/config/config.go</code>). A workflow overrides the top-level run parameters for a
+(<code>internal/config/config.go</code>). A workflow overrides the top-level run parameters for a
 named task type.</p>
 <table>
 <thead>
@@ -1466,7 +1466,7 @@ directory unless it is absolute.</p>
 then workflow, then top level (<code>effectiveAgent</code>, <code>resolveModel</code>, via <code>orElse</code>).</p>
 <h2 id="strict-decode">Strict decode<a class="headerlink" href="#strict-decode" title="Permanent link">&para;</a></h2>
 <p><code>LoadConfig</code> decodes the document strictly (<code>decodeStrict</code>,
-<code>pkg/internal/config/config.go</code>):</p>
+<code>internal/config/config.go</code>):</p>
 <ul>
 <li>Unknown keys are rejected. The decoder sets <code>KnownFields(true)</code>, so any key
   not in the schema fails with <code>taboo: invalid config</code> (<code>ErrConfigParse</code>).</li>

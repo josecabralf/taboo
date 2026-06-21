@@ -800,10 +800,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#copilot" class="md-nav__link">
+  <a href="#github-copilot" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Copilot
+        GitHub Copilot
       
     </span>
   </a>
@@ -926,7 +926,7 @@
   
   
     <li class="md-nav__item">
-      <a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg" class="md-nav__link">
+      <a href="https://pkg.go.dev/github.com/josecabralf/taboo" class="md-nav__link">
         
   
   
@@ -1161,10 +1161,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#copilot" class="md-nav__link">
+  <a href="#github-copilot" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Copilot
+        GitHub Copilot
       
     </span>
   </a>
@@ -1236,67 +1236,26 @@
 
 
 <h1 id="agents-reference">Agents reference<a class="headerlink" href="#agents-reference" title="Permanent link">&para;</a></h1>
-<p>taboo supports three agents: <code>opencode</code>, <code>claude-code</code>, and <code>copilot</code>. Each is
-one <code>AgentProfile</code> implementation (<code>pkg/internal/agent/agent.go</code>); construct one
+<p>taboo supports three agents: <code>opencode</code>, <code>claude-code</code>, and <code>github-copilot</code>. Each is
+one <code>AgentProfile</code> implementation (<code>internal/agent/agent.go</code>); construct one
 through the public <code>NewProfile(name, model)</code>. The profiles live in
-<code>pkg/internal/agent/agent_opencode.go</code>, <code>agent_claudecode.go</code>, and
-<code>agent_copilot.go</code>; the declarative roster that ties names to constructors is in
-<code>pkg/internal/agent/registry.go</code>.</p>
+<code>internal/agent/agent_opencode.go</code>, <code>agent_claudecode.go</code>, and
+<code>agent_githubcopilot.go</code>; the declarative roster that ties names to constructors is in
+<code>internal/agent/registry.go</code>.</p>
 <p>The generated godoc is the rendered source of truth:
-<a href="https://pkg.go.dev/github.com/josecabralf/taboo/pkg">https://pkg.go.dev/github.com/josecabralf/taboo/pkg</a>.</p>
+<a href="https://pkg.go.dev/github.com/josecabralf/taboo">https://pkg.go.dev/github.com/josecabralf/taboo</a>.</p>
 <h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Agent</th>
-<th><code>Name()</code></th>
-<th>Construct with</th>
-<th>Credential env keys</th>
-<th>Prompt delivery</th>
-<th>Sessions <code>DirEnv</code> / <code>Subdir</code></th>
-<th>Model-hint <code>expected</code></th>
-<th>Fork</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>OpenCode</td>
-<td><code>opencode</code></td>
-<td><code>NewProfile("opencode", model)</code></td>
-<td><code>OPENROUTER_API_KEY</code></td>
-<td>argv</td>
-<td><code>XDG_DATA_HOME</code> / <code>opencode</code></td>
-<td><code>&lt;provider&gt;/&lt;model&gt;, e.g. openrouter/qwen/qwen3-coder-plus</code></td>
-<td>native (<code>--fork</code>)</td>
-</tr>
-<tr>
-<td>Claude Code</td>
-<td><code>claude-code</code></td>
-<td><code>NewProfile("claude-code", model)</code></td>
-<td><code>ANTHROPIC_API_KEY</code>, <code>CLAUDE_CODE_OAUTH_TOKEN</code></td>
-<td>stdin</td>
-<td><code>CLAUDE_CONFIG_DIR</code> / <code>projects</code></td>
-<td><code>a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet</code></td>
-<td>native (<code>--fork-session</code>)</td>
-</tr>
-<tr>
-<td>Copilot</td>
-<td><code>copilot</code></td>
-<td><code>NewProfile("copilot", model)</code></td>
-<td><code>COPILOT_GITHUB_TOKEN</code>, <code>GH_TOKEN</code>, <code>GITHUB_TOKEN</code></td>
-<td>argv (value of <code>-p</code>)</td>
-<td><code>COPILOT_HOME</code> / <code>session-state</code></td>
-<td>none (never warns)</td>
-<td>ignored</td>
-</tr>
-</tbody>
-</table>
+<p>| Agent | <code>Name()</code> | Construct with | Credential env keys | Prompt delivery | Sessions <code>DirEnv</code> / <code>Subdir</code> | Model-hint <code>expected</code> | Fork |
+|---|---|---|---|---|---|---|---|---|
+| OpenCode | <code>opencode</code> | <code>NewProfile(taboo.OpenCode, model)</code> | <code>OPENROUTER_API_KEY</code> | argv | <code>XDG_DATA_HOME</code> / <code>opencode</code> | <code>&lt;provider&gt;/&lt;model&gt;, e.g. openrouter/qwen/qwen3-coder-plus</code> | native (<code>--fork</code>) |
+| Claude Code | <code>claude-code</code> | <code>NewProfile(taboo.ClaudeCode, model)</code> | <code>ANTHROPIC_API_KEY</code>, <code>CLAUDE_CODE_OAUTH_TOKEN</code> | stdin | <code>CLAUDE_CONFIG_DIR</code> / <code>projects</code> | <code>a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet</code> | native (<code>--fork-session</code>) |
+| GitHub Copilot | <code>github-copilot</code> | <code>NewProfile(taboo.GitHubCopilot, model)</code> | <code>COPILOT_GITHUB_TOKEN</code>, <code>GH_TOKEN</code>, <code>GITHUB_TOKEN</code> | argv (value of <code>-p</code>) | <code>COPILOT_HOME</code> / <code>session-state</code> | none (never warns) | ignored |</p>
 <p>All three deny <code>git push</code> from inside the workshop. Credential env keys reach the
 agent via <code>workshop exec --env NAME</code>, which silently drops any key that is unset
 on the host, so a user forwards only the credential they hold.</p>
 <h2 id="opencode">OpenCode<a class="headerlink" href="#opencode" title="Permanent link">&para;</a></h2>
-<p>Source: <code>pkg/internal/agent/agent_opencode.go</code>.</p>
-<p><code>Name()</code> returns <code>opencode</code>. Construct it with <code>NewProfile("opencode", model)</code>.</p>
+<p>Source: <code>internal/agent/agent_opencode.go</code>.</p>
+<p><code>Name()</code> returns <code>opencode</code>. Construct it with <code>NewProfile(taboo.OpenCode, model)</code>.</p>
 <p>Credential env keys (<code>CredentialEnvKeys()</code>): <code>OPENROUTER_API_KEY</code>. OpenCode
 authenticates from this key in the environment.</p>
 <p>Prompt delivery: argv. <code>BuildCommand</code> renders
@@ -1313,8 +1272,8 @@ The hint pattern is <code>^[^/]+/.+$</code>, so a value with no leading provider
 <p>Push deny: yes. OpenCode runs its tools freely inside the isolated workshop, and
 the workshop is the security boundary.</p>
 <h2 id="claude-code">Claude Code<a class="headerlink" href="#claude-code" title="Permanent link">&para;</a></h2>
-<p>Source: <code>pkg/internal/agent/agent_claudecode.go</code>.</p>
-<p><code>Name()</code> returns <code>claude-code</code>. Construct it with <code>NewProfile("claude-code", model)</code>.</p>
+<p>Source: <code>internal/agent/agent_claudecode.go</code>.</p>
+<p><code>Name()</code> returns <code>claude-code</code>. Construct it with <code>NewProfile(taboo.ClaudeCode, model)</code>.</p>
 <p>Credential env keys (<code>CredentialEnvKeys()</code>): <code>ANTHROPIC_API_KEY</code> and
 <code>CLAUDE_CODE_OAUTH_TOKEN</code>, in that order. <code>ANTHROPIC_API_KEY</code> is for API users;
 <code>CLAUDE_CODE_OAUTH_TOKEN</code> (from <code>claude setup-token</code>) is for subscription users.
@@ -1338,9 +1297,9 @@ warns.</p>
 <p>Push deny: yes, via <code>--disallowedTools "Bash(git push *)"</code>. A deny outranks
 <code>--permission-mode auto</code>. The single <code>*</code> spans all arguments, so bare
 <code>git push</code>, <code>git push origin main</code>, and <code>--force</code> in any position are blocked.</p>
-<h2 id="copilot">Copilot<a class="headerlink" href="#copilot" title="Permanent link">&para;</a></h2>
-<p>Source: <code>pkg/internal/agent/agent_copilot.go</code>.</p>
-<p><code>Name()</code> returns <code>copilot</code>. Construct it with <code>NewProfile("copilot", model)</code>.</p>
+<h2 id="github-copilot">GitHub Copilot<a class="headerlink" href="#github-copilot" title="Permanent link">&para;</a></h2>
+<p>Source: <code>internal/agent/agent_githubcopilot.go</code>.</p>
+<p><code>Name()</code> returns <code>github-copilot</code>. Construct it with <code>NewProfile(taboo.GitHubCopilot, model)</code>.</p>
 <p>Credential env keys (<code>CredentialEnvKeys()</code>): <code>COPILOT_GITHUB_TOKEN</code>, <code>GH_TOKEN</code>,
 and <code>GITHUB_TOKEN</code>, in Copilot's own documented precedence order. <code>workshop exec
 --env NAME</code> drops whichever are unset; when several are set, Copilot's precedence
@@ -1356,7 +1315,7 @@ exposes to relocate its home directory; it captures the entire home. Session
 transcripts land under <code>session-state/</code>.</p>
 <p>Model hint: none. <code>copilotHint</code> is the no-opinion hint (nil pattern), because
 Copilot proxies models from many providers. <code>taboo validate</code> never warns on a
-Copilot model, and <code>MatchModelFormat("copilot", ...)</code> returns <code>expected</code> as <code>""</code>.</p>
+Copilot model, and <code>MatchModelFormat(taboo.GitHubCopilot, ...)</code> returns <code>expected</code> as <code>""</code>.</p>
 <p>Fork: ignored. Copilot has no native headless fork, so <code>CommandOptions.Fork</code> is
 not consulted in <code>BuildCommand</code>. A run that sets <code>Fork</code> degrades to worktree-only
 isolation.</p>
@@ -1370,35 +1329,38 @@ commit-in-place: the agent commits through the bind-mount and the host owns
 integration. The agent never needs to push. See
 <a href="../../explanation/isolation-model/">the isolation model</a>.</p>
 <h2 id="agent-resolution">Agent resolution<a class="headerlink" href="#agent-resolution" title="Permanent link">&para;</a></h2>
-<p>Source: <code>pkg/internal/agent/registry.go</code>.</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewProfile</span><span class="p">(</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">AgentProfile</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">AgentNames</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kd">func</span><span class="w"> </span><span class="nx">MatchModelFormat</span><span class="p">(</span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">ok</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">expected</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
+<p>Source: <code>internal/agent/registry.go</code>.</p>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewProfile</span><span class="p">(</span><span class="nx">name</span><span class="w"> </span><span class="nx">AgentName</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">AgentProfile</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">AgentNames</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">AgentName</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kd">func</span><span class="w"> </span><span class="nx">MatchModelFormat</span><span class="p">(</span><span class="nx">agent</span><span class="w"> </span><span class="nx">AgentName</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">ok</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">expected</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span>
 </span></code></pre></div>
 <p>The roster in <code>registry.go</code> is a slice of registrations, one line per supported
-agent, keyed by each profile's own <code>Name()</code>:</p>
+agent (internal constructor names <code>NewOpenCode</code>, <code>NewClaudeCode</code>, <code>NewGitHubCopilot</code>).
+The public constants live in <code>internal/agent</code> and are re-exported from the
+facade as <code>taboo.OpenCode</code>, <code>taboo.ClaudeCode</code>, and <code>taboo.GitHubCopilot</code>:</p>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kd">var</span><span class="w"> </span><span class="nx">agents</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[]</span><span class="nx">registration</span><span class="p">{</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="p">{</span><span class="nx">New</span><span class="p">:</span><span class="w"> </span><span class="nx">OpenCode</span><span class="p">,</span><span class="w"> </span><span class="nx">Hint</span><span class="p">:</span><span class="w"> </span><span class="nx">openCodeHint</span><span class="p">},</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="p">{</span><span class="nx">New</span><span class="p">:</span><span class="w"> </span><span class="nx">ClaudeCode</span><span class="p">,</span><span class="w"> </span><span class="nx">Hint</span><span class="p">:</span><span class="w"> </span><span class="nx">claudeCodeHint</span><span class="p">},</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="p">{</span><span class="nx">New</span><span class="p">:</span><span class="w"> </span><span class="nx">Copilot</span><span class="p">,</span><span class="w"> </span><span class="nx">Hint</span><span class="p">:</span><span class="w"> </span><span class="nx">copilotHint</span><span class="p">},</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="p">{</span><span class="nx">New</span><span class="p">:</span><span class="w"> </span><span class="nx">NewOpenCode</span><span class="p">,</span><span class="w"> </span><span class="nx">Hint</span><span class="p">:</span><span class="w"> </span><span class="nx">openCodeHint</span><span class="p">},</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="p">{</span><span class="nx">New</span><span class="p">:</span><span class="w"> </span><span class="nx">NewClaudeCode</span><span class="p">,</span><span class="w"> </span><span class="nx">Hint</span><span class="p">:</span><span class="w"> </span><span class="nx">claudeCodeHint</span><span class="p">},</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="p">{</span><span class="nx">New</span><span class="p">:</span><span class="w"> </span><span class="nx">NewGitHubCopilot</span><span class="p">,</span><span class="w"> </span><span class="nx">Hint</span><span class="p">:</span><span class="w"> </span><span class="nx">copilotHint</span><span class="p">},</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="p">}</span>
 </span></code></pre></div>
-<p><code>NewProfile(name, model)</code> scans the roster for a registration whose <code>Name()</code>
+<p><code>NewProfile(name AgentName, model)</code> scans the roster for a registration whose <code>Name()</code>
 equals <code>name</code> and returns <code>New(model)</code>. An unmatched name returns a wrapped
 <code>ErrUnknownAgent</code> (<code>taboo: unknown agent</code>); match it with <code>errors.Is</code>.
 <code>NewProfile</code> validates the name only, not the model.</p>
-<p><code>AgentNames()</code> returns the registered names sorted: <code>claude-code</code>, <code>copilot</code>,
-<code>opencode</code>.</p>
-<p><code>MatchModelFormat(agent, model)</code> reads the registration's <code>Hint</code> and reports
+<p><code>AgentNames()</code> returns the registered names sorted: <code>claude-code</code>, <code>github-copilot</code>,
+<code>opencode</code>. Use the <code>taboo.OpenCode</code>, <code>taboo.ClaudeCode</code>, and <code>taboo.GitHubCopilot</code>
+constants with <code>NewProfile</code> or <code>Workflow.Agent</code>.</p>
+<p><code>MatchModelFormat(agent AgentName, model)</code> reads the registration's <code>Hint</code> and reports
 whether <code>model</code> looks well-formed, plus the <code>expected</code> format string. It is
 advisory: <code>taboo validate</code> turns a non-match into a warning, never a failure.</p>
-<p><code>LoadConfig</code> (<code>pkg/internal/config/config.go</code>) resolves the top-level <code>agent</code> and <code>model</code>, and each
+<p><code>LoadConfig</code> (<code>internal/config/config.go</code>) resolves the top-level <code>agent</code> and <code>model</code>, and each
 workflow's, to an <code>AgentProfile</code> through <code>NewProfile</code>, storing them on
 <code>ProjectConfig.Profile</code> and <code>Workflow.Profile</code>.</p>
 <h2 id="unsupported-agents">Unsupported agents<a class="headerlink" href="#unsupported-agents" title="Permanent link">&para;</a></h2>
 <p><code>codex</code> and <code>pi</code> are not supported. They exist only as SDK stub directories under
-<code>pkg/internal/workshop/sdk/</code>. They have no Go profile in <code>agent_*.go</code> and no registration in
-<code>registry.go</code>, so <code>NewProfile("codex", ...)</code> and <code>NewProfile("pi", ...)</code> return
+<code>internal/workshop/sdk/</code>. They have no Go profile in <code>agent_*.go</code> and no registration in
+<code>registry.go</code>, so <code>NewProfile(taboo.AgentName("codex"), ...)</code> and <code>NewProfile(taboo.AgentName("pi"), ...)</code> return
 <code>ErrUnknownAgent</code>, and <code>AgentNames()</code> does not list them.</p>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
