@@ -18,7 +18,7 @@ var errBoom = errors.New("boom")
 
 // fakeExec is a taboo.Commander double: it records the (name, args) of the call
 // and the stdin it was fed, writes canned stdout (and optional stderr) to the
-// command's writers, and returns a canned error — so tests can assert the exact
+// command's writers, and returns a canned error, so tests can assert the exact
 // argv built by the Client and feed it scripted output without shelling out.
 type fakeExec struct {
 	name   string
@@ -593,8 +593,8 @@ func TestRunSurfacesStderrContextOnFailure(t *testing.T) {
 	t.Parallel()
 
 	// When the underlying command fails, taboo.Output folds the child's stderr
-	// into the returned error — so a Client method's error carries the diagnostic
-	// gh/git wrote, not just an opaque exit code.
+	// into the returned error, so a Client method's error carries the diagnostic
+	// gh/git wrote rather than just an opaque exit code.
 	fe := &fakeExec{stderr: "fatal: not a git repository", err: errBoom}
 	c := New(fe)
 

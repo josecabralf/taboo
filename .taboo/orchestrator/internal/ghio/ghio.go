@@ -28,7 +28,8 @@ func (c *Client) run(ctx context.Context, name string, args ...string) (string, 
 	return taboo.Output(ctx, c.cmd, taboo.Cmd{Name: name, Args: args})
 }
 
-// runInput is run with stdin fed to the child — used to POST a JSON body to gh api.
+// runInput is run with stdin fed to the child. The sole caller pipes a JSON
+// body to gh api.
 func (c *Client) runInput(ctx context.Context, stdin, name string, args ...string) (string, error) {
 	return taboo.Output(ctx, c.cmd, taboo.Cmd{Name: name, Args: args, Stdin: strings.NewReader(stdin)})
 }

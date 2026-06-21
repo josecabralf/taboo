@@ -42,9 +42,8 @@ func NewExecCommander() Commander { return execCommander{} }
 func Output(ctx context.Context, c Commander, cmd Cmd) (string, error) {
 	var out strings.Builder
 	cmd.Stdout = &out
-	// Capture stderr so a failed command's diagnostics survive in the returned
-	// error — the same context os/exec's cmd.Output() folds into ExitError.Stderr.
-	// A caller that wired its own Stderr keeps it.
+	// Capture stderr only when the caller didn't wire its own, so a caller that
+	// supplied a Stderr keeps it.
 	var stderr strings.Builder
 	if cmd.Stderr == nil {
 		cmd.Stderr = &stderr
