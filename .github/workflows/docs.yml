@@ -1,0 +1,68 @@
+# docs.yml — build the Material for MkDocs site and publish to GitHub Pages.
+#
+# build:  runs on every PR and push to main. `mkdocs build --strict` is the
+#         gate — it fails CI on broken intra-docs links or nav issues.
+# deploy: runs only on push to main; rebuilds and pushes the rendered site to
+#         the gh-pages branch (Pages serves from there — see docs/RELEASING or
+#         the issue for the one-time "Settings → Pages" enablement step).
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Material prints an upcoming-MkDocs-2.0 advisory on every build; it's
+  # informational and we pin mkdocs<2 anyway, so keep CI logs quiet.
+  NO_MKDOCS_2_WARNING: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install MkDocs Material
+        run: pip install -r requirements.txt
+
+      - name: Build (strict)
+        run: mkdocs build --strict
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # gh-deploy force-pushes the rendered site to gh-pages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install MkDocs Material
+        run: pip install -r requirements.txt
+
+      - name: Deploy to gh-pages
+        run: mkdocs gh-deploy --force

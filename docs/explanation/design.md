@@ -6,7 +6,7 @@ output are modeled all follow from a small set of decisions, each recorded in an
 ADR. This page explains those decisions and why they hold. For the catalogue of
 types and signatures, see the
 [library API reference](../reference/library-api.md). The architecture decisions
-themselves live under [docs/adr/](../adr/).
+themselves live under [docs/adr/](https://github.com/josecabralf/taboo/tree/main/docs/adr).
 
 ## The library is the primary contract
 
@@ -54,7 +54,7 @@ fully describes an agent: its name (which doubles as the SDK qualifier), how to
 build its exec invocation, the credential env keys it needs, and its session
 redirect. The command builder returns `AgentCommand{Argv []string; Stdin string}`
 rather than a bare argv slice. ADR 0001
-([the argv + stdin command contract](../adr/0001-agentprofile-argv-stdin-command-contract.md))
+([the argv + stdin command contract](https://github.com/josecabralf/taboo/blob/main/docs/adr/0001-agentprofile-argv-stdin-command-contract.md))
 records why: the supported agents split on how they receive the prompt. OpenCode and
 Copilot take it in argv; Claude Code takes it on stdin. An argv-only return could
 not represent the stdin half without a later breaking change to an interface that
@@ -62,11 +62,11 @@ fan-out and sessions build on, so the two-field struct covers the whole roster u
 front, and sidesteps the `ARG_MAX` limit on argv-delivered prompts.
 
 Two further decisions extend the same command seam without reshaping it. ADR 0003
-([session resume and fork](../adr/0003-session-resume-fork-command-contract.md))
+([session resume and fork](https://github.com/josecabralf/taboo/blob/main/docs/adr/0003-session-resume-fork-command-contract.md))
 adds `ResumeSession` and `Fork` to `CommandOptions` and mirrors them on
 `RunRequest`, so each profile maps them into its own CLI dialect while the
 orchestration code stays agent-neutral. ADR 0004
-([multi-key credential env](../adr/0004-multi-key-credential-env.md)) lets
+([multi-key credential env](https://github.com/josecabralf/taboo/blob/main/docs/adr/0004-multi-key-credential-env.md)) lets
 `CredentialEnvKeys()` return more than one key, so Claude Code can offer both
 `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`; this is safe because
 `workshop exec --env NAME` silently drops a key that is unset on the host, so a user
@@ -76,7 +76,7 @@ sets only the credential they hold.
 
 The CLI resolves an agent name and model to an `AgentProfile`, and enumerates the
 canonical names so it can suggest a correction on a typo. ADR 0005
-([the declarative roster](../adr/0005-agent-registry-declarative-roster.md)) records
+([the declarative roster](https://github.com/josecabralf/taboo/blob/main/docs/adr/0005-agent-registry-declarative-roster.md)) records
 that `pkg/internal/agent/registry.go` holds an explicit slice of registrations rather than
 self-registering agents through `init()`. The public surface is
 `NewProfile(name, model string) (AgentProfile, error)`, which returns the wrapped
@@ -101,7 +101,7 @@ is `ResultExtractor` in `pkg/internal/result/result.go`, an interface built by t
 constructor `JSONResult[T any](opts ...Option) ResultExtractor`.
 
 ADR 0002
-([structured output over generics](../adr/0002-structured-output-generics-encoding-json.md))
+([structured output over generics](https://github.com/josecabralf/taboo/blob/main/docs/adr/0002-structured-output-generics-encoding-json.md))
 records the reasoning. sandcastle, the TypeScript product taboo is modeled on, uses
 Zod, which fuses one artifact into both a runtime schema and a static type. Go has no
 such fusion, so this is a genuine fork. taboo treats the caller's Go struct as the
@@ -130,7 +130,7 @@ Fan-out runs one workshop per concurrency slot, each provisioned cold (see
 [the isolation model](isolation-model.md)). Starting each slot from a warm clone of
 an already-provisioned workshop would save the dominant per-slot cost, and it was
 investigated. ADR 0006
-([defer warm-clone fan-out](../adr/0006-defer-warm-fanout-single-repo-workshops.md))
+([defer warm-clone fan-out](https://github.com/josecabralf/taboo/blob/main/docs/adr/0006-defer-warm-fanout-single-repo-workshops.md))
 records the decision to adopt neither warm-clone fan-out nor multi-repo workshop
 reuse for now.
 
@@ -151,4 +151,4 @@ implementing behind the `Commander` seam.
 - [The isolation model](isolation-model.md)
 - [Library API reference](../reference/library-api.md)
 - [Agents reference](../reference/agents.md)
-- [Architecture decision records](../adr/)
+- [Architecture decision records](https://github.com/josecabralf/taboo/tree/main/docs/adr)
