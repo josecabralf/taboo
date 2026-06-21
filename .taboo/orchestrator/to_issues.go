@@ -90,8 +90,8 @@ func toIssues(ctx context.Context, startDir string, parent int, out io.Writer, g
 }
 
 // childBody assembles a child issue's body: the agent-authored body, a
-// "Part of #<parent>." back-link to the PRD issue it was decomposed from, and —
-// when the child has resolved dependencies — a "Blocked by #N1, #N2" line that
+// "Part of #<parent>." back-link to the PRD issue it was decomposed from, and,
+// when the child has resolved dependencies, a "Blocked by #N1, #N2" line that
 // plan/loop's parseBlockedBy reads to honor the declared ordering.
 func childBody(body string, parent int, blockedBy []int) string {
 	out := fmt.Sprintf("%s\n\nPart of #%d.", body, parent)

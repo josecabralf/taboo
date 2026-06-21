@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -157,10 +158,10 @@ func TestToIssuesWritesBlockedByWithRealNumbers(t *testing.T) {
 	if strings.Contains(gh.createBodies[0], "Blocked by") {
 		t.Errorf("child A body = %q, want no \"Blocked by\" line", gh.createBodies[0])
 	}
-	if got := parseBlockedBy(gh.createBodies[1]); strings.Join(intsToStr(got), ",") != "101" {
+	if got := parseBlockedBy(gh.createBodies[1]); !slices.Equal(got, []int{101}) {
 		t.Errorf("child B blocked_by = %v, want [101]", got)
 	}
-	if got := parseBlockedBy(gh.createBodies[2]); strings.Join(intsToStr(got), ",") != "101,102" {
+	if got := parseBlockedBy(gh.createBodies[2]); !slices.Equal(got, []int{101, 102}) {
 		t.Errorf("child C blocked_by = %v, want [101 102]", got)
 	}
 
@@ -196,7 +197,7 @@ func TestToIssuesDropsInvalidBlockedByRefs(t *testing.T) {
 	if len(gh.createBodies) != 2 {
 		t.Fatalf("CreateIssue called %d times, want 2", len(gh.createBodies))
 	}
-	if got := parseBlockedBy(gh.createBodies[1]); strings.Join(intsToStr(got), ",") != "200" {
+	if got := parseBlockedBy(gh.createBodies[1]); !slices.Equal(got, []int{200}) {
 		t.Errorf("child B blocked_by = %v, want [200] (invalid refs dropped)", got)
 	}
 }
@@ -321,15 +322,6 @@ func TestToIssuesSurfacesCreateError(t *testing.T) {
 	if !strings.Contains(err.Error(), "Child A") {
 		t.Errorf("error = %q, want it to name the child whose creation failed", err.Error())
 	}
-}
-
-// intsToStr renders a []int as []string for stable comparison in assertions.
-func intsToStr(ns []int) []string {
-	out := make([]string, len(ns))
-	for i, n := range ns {
-		out[i] = fmt.Sprintf("%d", n)
-	}
-	return out
 }
 
 // Ensure *ghio.Client satisfies toIssuesGH and the typed bridge satisfies
