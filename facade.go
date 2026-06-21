@@ -219,6 +219,12 @@ func NewPool(cfg Config, limit int, cmd Commander) *Pool { return run.NewPool(cf
 // NewResultWithWorktree returns a RunResult whose Artifact reads from an existing worktree directory.
 func NewResultWithWorktree(worktree string) RunResult { return run.NewResultWithWorktree(worktree) }
 
+// NewResultWithWorktreeCmd returns a RunResult that can both read artifacts from
+// and Dispose an existing worktree directory, driving git through cmd.
+func NewResultWithWorktreeCmd(worktree string, cmd Commander) RunResult {
+	return run.NewResultWithWorktreeCmd(worktree, cmd)
+}
+
 // ErrForkLoop is returned when a forked run is given more than one iteration.
 var ErrForkLoop = run.ErrForkLoop
 

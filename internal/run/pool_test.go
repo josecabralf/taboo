@@ -413,6 +413,72 @@ func TestPool_SerializesWorktreeAdd(t *testing.T) {
 	}
 }
 
+// TestSerialCommander_SerializesWorktreeRemove pins that the predicate locks
+// worktree remove as well as add (not just add), so concurrent Dispose across
+// pooled results, which share one serialCommander, can never run two removes
+// against the shared repo at once.
+func TestSerialCommander_SerializesWorktreeRemove(t *testing.T) {
+	const n = 3
+	fc := &fakeCommander{
+		gateVerb: "worktree",
+		gate:     make(chan struct{}),
+		entered:  make(chan struct{}, n),
+	}
+	sc := serialCommander{inner: fc, gitLock: &sync.Mutex{}}
+
+	// n results sharing the one serialCommander; each worktree dir must exist so
+	// dispose actually shells out (it no-ops on an absent worktree).
+	results := make([]RunResult, n)
+	for i := range results {
+		results[i] = RunResult{handle: &runResultHandle{repoPath: t.TempDir(), worktreePath: t.TempDir(), cmd: sc}}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for i := range results {
+			wg.Add(1)
+			go func(r RunResult) { defer wg.Done(); _ = r.Dispose() }(results[i])
+		}
+		wg.Wait()
+		close(done)
+	}()
+
+	// Release gated removes one at a time, asserting only one is ever in flight.
+	for i := 0; i < n; i++ {
+		<-fc.entered
+		if got := fc.inflight.Load(); got != 1 {
+			t.Fatalf("worktree-remove inflight = %d, want 1 (must be serialized)", got)
+		}
+		fc.gate <- struct{}{}
+	}
+	<-done
+	if peak := fc.peak.Load(); peak != 1 {
+		t.Errorf("worktree-remove peak concurrency = %d, want 1 (serialized)", peak)
+	}
+}
+
+// TestIsWorktreeMutation pins the predicate: it matches worktree add and remove,
+// and ignores everything else (other git verbs, non-git commands).
+func TestIsWorktreeMutation(t *testing.T) {
+	cases := []struct {
+		name string
+		c    exec.Cmd
+		want bool
+	}{
+		{"add", exec.Cmd{Name: "git", Args: []string{"-C", "/r", "worktree", "add", "-b", "x", "/wt"}}, true},
+		{"remove", exec.Cmd{Name: "git", Args: []string{"-C", "/r", "worktree", "remove", "/wt"}}, true},
+		{"list", exec.Cmd{Name: "git", Args: []string{"-C", "/r", "worktree", "list"}}, false},
+		{"other git", exec.Cmd{Name: "git", Args: []string{"-C", "/r", "rev-parse", "HEAD"}}, false},
+		{"not git", exec.Cmd{Name: "workshop", Args: []string{"worktree", "remove"}}, false},
+	}
+	for _, tc := range cases {
+		if got := isWorktreeMutation(tc.c); got != tc.want {
+			t.Errorf("isWorktreeMutation(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestPool_EmptyRequestsIssuesNothing(t *testing.T) {
 	fc := &fakeCommander{}
 	p := NewPool(testConfig(t), 4, fc)

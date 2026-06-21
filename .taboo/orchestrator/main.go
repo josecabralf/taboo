@@ -307,6 +307,15 @@ func implement(ctx context.Context, startDir string, issue int, gh ghClient, run
 	if err != nil {
 		plan = ""
 	}
+
+	// The worktree-backed read above is done, so free the run's worktree. Disposal
+	// must follow the Artifact read, which depends on the worktree it removes.
+	// Cleanup is best-effort; the PR is the meaningful outcome, so a removal
+	// failure is logged, not propagated.
+	if err := res.Dispose(); err != nil {
+		fmt.Fprintf(os.Stderr, "afk: dispose worktree for #%d: %v\n", iss.Number, err)
+	}
+
 	body := prBody(iss.Number, plan)
 
 	url, err := gh.CreateDraftPR(ctx, branch, prTitle(iss.Title), body)

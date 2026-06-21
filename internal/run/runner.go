@@ -53,11 +53,10 @@ type RunRequest struct {
 	Fork bool
 }
 
-// runResultHandle is a RunResult's private capability to read a run's artifacts
-// without callers needing to know the worktree's on-disk layout. Exec's rev-parse
-// capture and Artifact both read worktreePath through the handle. The repoPath and
-// cmd fields are unused today; they are here for upcoming repo-backed reads via git
-// (#120 adds Dispose).
+// runResultHandle is a RunResult's private capability to read and tear down a
+// run without callers needing to know the worktree's on-disk layout. Exec's
+// rev-parse capture and Artifact read worktreePath through the handle; dispose
+// also uses repoPath and cmd to shell out to `git -C <repoPath> worktree remove`.
 type runResultHandle struct {
 	repoPath     string
 	worktreePath string
@@ -88,6 +87,15 @@ func NewResultWithWorktree(worktree string) RunResult {
 	return RunResult{handle: &runResultHandle{worktreePath: worktree}}
 }
 
+// NewResultWithWorktreeCmd is NewResultWithWorktree plus a Commander, so a
+// consumer test can exercise Dispose (which shells out to git) against a
+// hand-built result without a full run. repoPath is left empty; Dispose passes
+// it to `git -C`, where the test's fake Commander records the call instead of
+// running it.
+func NewResultWithWorktreeCmd(worktree string, cmd exec.Commander) RunResult {
+	return RunResult{handle: &runResultHandle{worktreePath: worktree, cmd: cmd}}
+}
+
 // Artifact reads the file at relpath within the run's worktree and returns its
 // contents.
 func (r RunResult) Artifact(relpath string) (string, error) {
@@ -106,6 +114,36 @@ func (r RunResult) Artifact(relpath string) (string, error) {
 		return "", fmt.Errorf("read artifact %q: %w", relpath, err)
 	}
 	return string(b), nil
+}
+
+// Dispose removes the run's worktree with a non-force `git worktree remove`,
+// matching taboo clean's teardown. It is explicit, never automatic. A worktree
+// already gone is success, not an error. The branch ref and the workshop are
+// left intact (persisting is the default) so a later push or run can reuse them.
+// It returns an error, rather than panicking, when the result has no worktree
+// handle.
+func (r RunResult) Dispose() error {
+	if r.handle == nil {
+		return errors.New("dispose: result has no worktree handle")
+	}
+	return r.handle.dispose(context.Background())
+}
+
+// dispose performs the worktree removal for Dispose. Idempotency lives here: a
+// worktree already gone (a prior Dispose, or a manual `git worktree remove`)
+// short-circuits to success before shelling out, so git's "not a working tree"
+// failure never surfaces.
+func (h *runResultHandle) dispose(ctx context.Context) error {
+	if _, err := os.Stat(h.worktreePath); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if h.cmd == nil {
+		return errors.New("dispose: result handle has no commander")
+	}
+	return h.cmd.Run(ctx, exec.Cmd{
+		Name: "git",
+		Args: []string{"-C", h.repoPath, "worktree", "remove", h.worktreePath},
+	})
 }
 
 // Runner orchestrates agent runs in a taboo-managed workshop.

@@ -522,3 +522,19 @@ func assertContains(t *testing.T, got []string, want, why string) {
 
 // Ensure *ghio.Client satisfies loopGH, so the production wiring stays type-correct.
 var _ loopGH = (*ghio.Client)(nil)
+
+// TestSettleResultDisposesWorktree pins that the loop frees each result's worktree
+// after it settles — the wave's post-run path does no worktree I/O, so disposal
+// belongs here.
+func TestSettleResultDisposesWorktree(t *testing.T) {
+	worktree := t.TempDir()
+	rec := &recordingDisposer{}
+	res := taboo.NewResultWithWorktreeCmd(worktree, rec)
+
+	gh := &fakeLoopGH{}
+	settleResult(context.Background(), gh, planItem{Number: 7, Branch: "agent/x"}, res)
+
+	if got := rec.removeCount(); got != 1 {
+		t.Errorf("worktree-remove count = %d, want 1 (settleResult must dispose the worktree)", got)
+	}
+}

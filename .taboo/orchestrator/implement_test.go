@@ -5,13 +5,46 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"afk/internal/ghio"
 
 	"github.com/josecabralf/taboo"
 )
+
+// recordingDisposer is a taboo.Commander that records every command and, on a
+// `git worktree remove`, deletes the target directory — simulating real git so a
+// Dispose that wrongly ran before the worktree-backed read would make that read
+// fail. Safe for concurrent use (the loop may dispose results from several waves).
+type recordingDisposer struct {
+	mu    sync.Mutex
+	calls []taboo.Cmd
+}
+
+func (d *recordingDisposer) Run(_ context.Context, c taboo.Cmd) error {
+	d.mu.Lock()
+	d.calls = append(d.calls, c)
+	d.mu.Unlock()
+	if slices.Contains(c.Args, "remove") && len(c.Args) > 0 {
+		_ = os.RemoveAll(c.Args[len(c.Args)-1]) // last arg is the worktree path
+	}
+	return nil
+}
+
+func (d *recordingDisposer) removeCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := 0
+	for _, c := range d.calls {
+		if c.Name == "git" && slices.Contains(c.Args, "worktree") && slices.Contains(c.Args, "remove") {
+			n++
+		}
+	}
+	return n
+}
 
 // fakeGH records the order and arguments of the gh/git calls implement makes and
 // returns canned values (or injected errors) without shelling out. A non-nil
@@ -196,3 +229,39 @@ var (
 	_ ghClient       = (*ghio.Client)(nil)
 	_ workflowRunner = taboo.RunWorkflow
 )
+
+// TestImplementDisposesWorktreeAfterPlanRead pins that implement frees the run's
+// worktree, and only AFTER reading the plan artifact: the plan still reaches the
+// PR body (proving the read happened first), and exactly one worktree-remove is
+// issued.
+func TestImplementDisposesWorktreeAfterPlanRead(t *testing.T) {
+	t.Parallel()
+
+	worktree := t.TempDir()
+	plan := "## Plan\n\n- do the thing\n"
+	if err := os.WriteFile(filepath.Join(worktree, planFile), []byte(plan), 0o600); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	gh := &fakeGH{
+		issue: ghio.Issue{Number: 42, Title: "Add the Foo!", Body: "b"},
+		prURL: "https://github.com/o/r/pull/99",
+	}
+	rec := &recordingDisposer{}
+	run := func(_ context.Context, _, _ string, _ map[string]string, _ taboo.PlanOverrides, _ taboo.Commander) (taboo.OrchestratedResult, error) {
+		return taboo.OrchestratedResult{RunResult: taboo.NewResultWithWorktreeCmd(worktree, rec)}, nil
+	}
+
+	if err := implement(context.Background(), t.TempDir(), 42, gh, run); err != nil {
+		t.Fatalf("implement returned error: %v", err)
+	}
+
+	if got := rec.removeCount(); got != 1 {
+		t.Errorf("worktree-remove count = %d, want 1 (implement must dispose the worktree)", got)
+	}
+	// The plan reached the PR body, so the Artifact read ran BEFORE dispose deleted
+	// the worktree — the required ordering.
+	if !strings.Contains(gh.prBody, plan) {
+		t.Errorf("PR body = %q, want it to contain the plan — dispose ran before the Artifact read", gh.prBody)
+	}
+}
