@@ -1,0 +1,106 @@
+# agent-finalize.yml — label-driven "finalize a PR" workflow (issue #109).
+#
+# AUTHORIZATION: gated by the `agent:finalize` label. Only a maintainer with
+# write access can apply it, so applying it is the act of trusting these inputs.
+# Like agent-review, this uses pull_request_target (it needs write tokens to
+# edit the PR and flip it out of draft) and is therefore NOT hardened against
+# untrusted public-fork PRs — running it on a fork PR would expose secrets. The
+# inputs (the realized diff of our own trusted implement/update-branch agents)
+# are inside the trust boundary.
+#
+# MANUAL TRIGGER: unlike `agent:review`, no upstream stage applies this label —
+# implement does not add it. Finalize is the closing step a human runs once an
+# issue's branch has settled (implemented → reviewed → up to date with main), so
+# the maintainer applies `agent:finalize` deliberately.
+#
+# ENGINE: the orchestration is a Go application — the `afk` binary, a nested Go
+# module at .taboo/orchestrator built on pkg/taboo. `afk write-pr --branch <b>
+# --ready` regenerates the PR title/body from the *realized* `main...<branch>`
+# diff, updates the existing PR in place (PRForBranch → EditPR, never a
+# duplicate), and marks it ready for review (`gh pr ready`, a no-op if already
+# ready). All GitHub I/O happens in Go (internal/ghio), never in this workflow's
+# bash. This layer keeps only checkout/setup, token plumbing, and label
+# bookkeeping.
+#
+# NO PUSH: finalize never pushes. The branch is already on the remote by this
+# stage (implement/update-branch pushed it); finalize only reconciles the PR's
+# description and draft state.
+name: agent-finalize
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  finalize:
+    if: github.event.label.name == 'agent:finalize'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: agent-finalize-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Transition labels (finalize -> in-progress)
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_NUMBER" --remove-label agent:finalize || true
+          gh pr edit "$PR_NUMBER" --remove-label agent:blocked || true
+          gh pr edit "$PR_NUMBER" --add-label agent:in-progress
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch the PR head branch locally
+        # write-pr resolves the diff with `git diff main...<branch>` and looks the
+        # PR up with `gh pr list --head <branch>`, so the head branch must exist
+        # locally under its bare name (the checkout above only has main).
+        run: |
+          set -euo pipefail
+          git fetch origin "$HEAD_REF":"$HEAD_REF"
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-env
+
+      - name: Run finalize (write-pr --ready)
+        # The afk orchestrator is a nested Go module (.taboo/orchestrator), so it
+        # cannot be `go run ./.taboo/orchestrator` from the parent module (Go
+        # excludes nested modules). Build it inside the module, then run the binary
+        # from the repo root so it finds .taboo/taboo.yaml and treats the checkout
+        # as the repository. It regenerates the PR title/body from the realized
+        # diff, updates the PR in place, and flips it out of draft — all in Go.
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          ( cd .taboo/orchestrator && go build -o "$RUNNER_TEMP/afk" . )
+          "$RUNNER_TEMP/afk" write-pr --branch "$HEAD_REF" --ready
+
+      - name: Mark blocked on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_NUMBER" --add-label agent:blocked || true
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh pr comment "$PR_NUMBER" --body "$(printf 'agent:finalize failed. See the run log: %s\n\nRe-add the `agent:finalize` label to retry.' "$run_url")"
+
+      - name: Remove in-progress label
+        if: always()
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_NUMBER" --remove-label agent:in-progress || true

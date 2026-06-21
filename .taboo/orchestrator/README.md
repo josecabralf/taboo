@@ -23,7 +23,8 @@ earlier bash-around-`taboo run` workflows (PRs #65, #79). See
   drives every issue through the `agent:in-progress` / `agent:blocked` label state
   machine.
 - `internal/ghio` — GitHub/git I/O (`gh issue view`, `git push`, draft-PR
-  create, label add, `gh pr diff`, `gh api` PR-review POST, and — for
+  create, label add, `gh pr diff`, `gh api` PR-review POST, for `write-pr` the
+  `PRForBranch`/`EditPR` update path and `gh pr ready` un-draft, and — for
   `update-branch` — `gh pr view` head-branch resolution, `git fetch`, an
   up-to-date-with-main check, a non-force `git push`, and `gh pr comment`) behind a
   fakeable `Exec` seam.
@@ -35,6 +36,7 @@ earlier bash-around-`taboo run` workflows (PRs #65, #79). See
 ```
 afk implement --issue N
 afk review --pr N
+afk write-pr [--branch B] [--ready]
 afk update-branch --pr N
 afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 ```
@@ -59,6 +61,24 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
    (`internal/diffmap`), logging a notice for each — never an error.
 4. **Post** one PR review via `gh api`; an empty review (no summary, no in-diff
    comments) is skipped rather than posted, so GitHub never 422s.
+
+`write-pr` composes a PR description from a branch's realized diff, and is the
+**finalize** stage when run with `--ready`:
+
+1. **Resolve** the branch (`--branch`, default the current one) and compute its
+   diff against `main` (`git diff main...<branch>`).
+2. **Run** the `write-pr` workflow on `pkg`, asking for a `<result>` block of
+   `{title, body}`, decoded in-loop by `taboo.RunWorkflowAs[prContent]`. An empty
+   diff or empty title is an error before any PR is touched.
+3. **Update in place**: `PRForBranch` → `EditPR` refreshes the branch's existing
+   PR (an idempotent re-run never opens a duplicate); only when none exists is a
+   new PR created.
+4. **`--ready`** (the finalize step, #109): after the update, mark the PR ready
+   for review via `gh pr ready` — lifting the PR `implement` opened as a draft
+   out of draft. An already-ready PR is a clean no-op. No push happens here: the branch
+   is already on the remote by this stage, and finalize only reconciles the PR's
+   description and draft state. The label-driven `agent-finalize` workflow wires
+   this; unlike `agent:review` it is applied manually, not by implement.
 
 `update-branch` brings a PR's branch up to date with `main`:
 

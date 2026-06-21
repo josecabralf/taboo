@@ -657,6 +657,38 @@ func TestCommentPRBuildsArgv(t *testing.T) {
 	}
 }
 
+func TestMarkPRReadyBuildsArgv(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	// A nil error from gh models both the draft→ready transition and the
+	// already-ready clean no-op (gh exits 0 either way).
+	if err := c.MarkPRReady(context.Background(), "https://github.com/o/r/pull/7"); err != nil {
+		t.Fatalf("MarkPRReady returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"pr", "ready", "https://github.com/o/r/pull/7"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
+func TestMarkPRReadyPropagatesError(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{err: errBoom}
+	c := New(fe)
+
+	if err := c.MarkPRReady(context.Background(), "https://github.com/o/r/pull/7"); !errors.Is(err, errBoom) {
+		t.Errorf("err = %v, want %v", err, errBoom)
+	}
+}
+
 func TestEditPRBuildsArgv(t *testing.T) {
 	t.Parallel()
 

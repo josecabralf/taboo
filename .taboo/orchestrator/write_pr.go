@@ -28,6 +28,7 @@ type writePRGH interface {
 	PRForBranch(ctx context.Context, branch string) (ghio.PR, bool, error)
 	CreatePR(ctx context.Context, branch, title, body string) (string, error)
 	EditPR(ctx context.Context, prRef, title, body string) error
+	MarkPRReady(ctx context.Context, prRef string) error
 }
 
 // writePRRunner runs the write-pr workflow discovered at or above startDir and
@@ -43,12 +44,15 @@ type writePRRunner func(ctx context.Context, startDir, workflow string, vars map
 // prContent in-loop via the bridge), then open a PR for the branch — or, when the
 // branch already has an open PR, update that one in place so a re-run refreshes the
 // same-repo branch's PR instead of opening a duplicate — carrying the agent's title
-// and body, and print the PR URL to out. An empty diff and an empty agent title are
-// surfaced as errors before any PR is touched. The branch must already exist on the
+// and body, and print the PR URL to out. When ready is set the PR is marked
+// ready-for-review (flipped out of draft) after the create/edit succeeds, so a
+// finalize re-run refreshes the body and lifts the same PR out of draft in one pass.
+// An empty diff or an empty agent title is an error before any PR is touched. The
+// branch must already exist on the
 // remote: write-pr opens or edits the PR but does not push it (the implement flow
 // and the workflow layer own pushing). The gh and taboo seams are injected so tests
 // drive the full sequence with fakes.
-func writePR(ctx context.Context, startDir, branch string, out io.Writer, gh writePRGH, runWritePR writePRRunner) error {
+func writePR(ctx context.Context, startDir, branch string, ready bool, out io.Writer, gh writePRGH, runWritePR writePRRunner) error {
 	if branch == "" {
 		cur, err := gh.CurrentBranch(ctx)
 		if err != nil {
@@ -84,21 +88,14 @@ func writePR(ctx context.Context, startDir, branch string, out io.Writer, gh wri
 		return fmt.Errorf("write-pr agent produced an empty title")
 	}
 
-	existing, found, err := gh.PRForBranch(ctx, branch)
+	url, err := upsertPR(ctx, gh, branch, content)
 	if err != nil {
-		return fmt.Errorf("look up existing PR: %w", err)
+		return err
 	}
 
-	var url string
-	if found {
-		if err := gh.EditPR(ctx, existing.URL, content.Title, content.Body); err != nil {
-			return fmt.Errorf("update PR: %w", err)
-		}
-		url = existing.URL
-	} else {
-		url, err = gh.CreatePR(ctx, branch, content.Title, content.Body)
-		if err != nil {
-			return fmt.Errorf("create PR: %w", err)
+	if ready {
+		if err := gh.MarkPRReady(ctx, url); err != nil {
+			return fmt.Errorf("mark PR ready: %w", err)
 		}
 	}
 
@@ -106,4 +103,25 @@ func writePR(ctx context.Context, startDir, branch string, out io.Writer, gh wri
 		return fmt.Errorf("write PR url: %w", err)
 	}
 	return nil
+}
+
+// upsertPR carries content onto the branch's PR: it edits the branch's existing
+// open PR in place when one exists (so an idempotent re-run never opens a
+// duplicate), and otherwise opens a new one. It returns the PR's URL.
+func upsertPR(ctx context.Context, gh writePRGH, branch string, content prContent) (string, error) {
+	existing, found, err := gh.PRForBranch(ctx, branch)
+	if err != nil {
+		return "", fmt.Errorf("look up existing PR: %w", err)
+	}
+	if found {
+		if err := gh.EditPR(ctx, existing.URL, content.Title, content.Body); err != nil {
+			return "", fmt.Errorf("update PR: %w", err)
+		}
+		return existing.URL, nil
+	}
+	url, err := gh.CreatePR(ctx, branch, content.Title, content.Body)
+	if err != nil {
+		return "", fmt.Errorf("create PR: %w", err)
+	}
+	return url, nil
 }
