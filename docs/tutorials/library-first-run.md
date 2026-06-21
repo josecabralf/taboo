@@ -62,7 +62,7 @@ Create a new directory for the program and initialize a module:
 mkdir -p "$HOME/taboo-demo"
 cd "$HOME/taboo-demo"
 go mod init taboo-demo
-go get github.com/josecabralf/taboo/pkg
+go get github.com/josecabralf/taboo
 ```
 
 Write `main.go`:
@@ -75,7 +75,7 @@ import (
 	"fmt"
 	"os"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 func main() {

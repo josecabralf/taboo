@@ -43,7 +43,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // planFile is the path, relative to the run's worktree, where the implement agent

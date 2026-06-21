@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // defaultBase is the workshop base image init assumes when none is supplied.
@@ -134,7 +134,7 @@ func runInitCmd(env Env, opts *initOptions) error {
 		Workshop: opts.workshop,
 		Base:     opts.base,
 		Repo:     opts.repo,
-		Agent:    opts.agent,
+		Agent:    taboo.AgentName(opts.agent),
 		Model:    opts.model,
 		Profile:  profile,
 		// Seed the example workflows unless the user opted out with --workflows none.
@@ -295,7 +295,7 @@ func requireWorkshopProject(repo string) error {
 // unknown agent into an error that lists the valid agent names (the fuzzy "did
 // you mean" lives in the separate validate slice).
 func resolveProfile(agent, model string) (taboo.AgentProfile, error) {
-	profile, err := taboo.NewProfile(agent, model)
+	profile, err := taboo.NewProfile(taboo.AgentName(agent), model)
 	if err != nil {
 		if errors.Is(err, taboo.ErrUnknownAgent) {
 			return nil, fmt.Errorf("unknown agent %q; valid agents: %s",

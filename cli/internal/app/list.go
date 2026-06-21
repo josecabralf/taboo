@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // newListCmd builds the `list` subcommand: a read-only, per-.taboo lifecycle
@@ -260,7 +260,7 @@ func projectWorkshops(cfg *taboo.ProjectConfig) []string {
 	}
 	var names []string
 	for _, p := range distinctProfiles(cfg) {
-		names = append(names, workshopName(cfg.Workshop, p.Name()))
+		names = append(names, workshopName(cfg.Workshop, string(p.Name())))
 	}
 	return names
 }

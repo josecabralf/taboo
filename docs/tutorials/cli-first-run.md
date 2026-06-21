@@ -6,7 +6,7 @@ This tutorial uses the `opencode` agent. For why runs are isolated and commit in
 
 ## Install the CLI
 
-taboo's CLI is its own Go module (`github.com/josecabralf/taboo/cli`), separate from the yaml.v3-only library at `github.com/josecabralf/taboo/pkg`. Install the CLI binary, named `taboo`:
+taboo's CLI is its own Go module (`github.com/josecabralf/taboo/cli`), separate from the yaml.v3-only library at `github.com/josecabralf/taboo`. Install the CLI binary, named `taboo`:
 
 ```sh
 go install github.com/josecabralf/taboo/cli@latest

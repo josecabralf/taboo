@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // probe runs a single host command through the Commander seam and returns its

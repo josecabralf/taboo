@@ -53,7 +53,7 @@
               <span class="window__name">main.go</span>
             </div>
             <pre class="code" aria-hidden="true"><code><span class="c-kw">result</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(ctx, taboo.Workflow{
-    Agent:  taboo.<span class="c-cn">Claude</span>,
+    Agent:  taboo.<span class="c-cn">ClaudeCode</span>,
     Branch: <span class="c-st">"main"</span>,
     Task:   <span class="c-st">"Add retries to the HTTP client"</span>,
 })
@@ -89,7 +89,7 @@
             <div class="window window--sm">
               <div class="window__bar"><span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window__name">workflow.go</span></div>
               <pre class="code"><code>wf := taboo.Workflow{
-    Agent:  taboo.<span class="c-cn">Claude</span>,
+    Agent:  taboo.<span class="c-cn">ClaudeCode</span>,
     Branch: <span class="c-st">"main"</span>,
     Task:   <span class="c-st">"Add retries"</span>,
 }</code></pre>
@@ -147,7 +147,7 @@
             </div>
             <div class="window window--sm path__code">
               <div class="window__bar"><span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window__name">import</span></div>
-              <pre class="code"><code><span class="c-kw">import</span> <span class="c-st">"github.com/josecabralf/taboo/pkg/taboo"</span>
+              <pre class="code"><code><span class="c-kw">import</span> <span class="c-st">"github.com/josecabralf/taboo"</span>
 
 res, _ := taboo.<span class="c-fn">RunWorkflow</span>(ctx, wf)
 log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %d commits"</span>, <span class="c-kw">len</span>(res.Commits))</code></pre>

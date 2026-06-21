@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // gitRepo makes a temp dir and marks it a git work tree fixture by creating a
@@ -104,7 +104,7 @@ func TestInit_SeedsWorkflowsByDefault(t *testing.T) {
 			t.Errorf("expected prompts/%s written: %v", name, statErr)
 		}
 	}
-	profile, _ := taboo.NewProfile("opencode", "m")
+	profile, _ := taboo.NewProfile(taboo.OpenCode, "m")
 	envExample, err := os.ReadFile(filepath.Join(root, ".taboo", ".env.example"))
 	if err != nil {
 		t.Fatalf("read .env.example: %v", err)
@@ -174,7 +174,7 @@ func TestInit_TemplateScaffoldsGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read go.mod: %v", err)
 	}
-	if !strings.Contains(string(goMod), "require github.com/josecabralf/taboo/pkg ") {
+	if !strings.Contains(string(goMod), "require github.com/josecabralf/taboo ") {
 		t.Errorf("go.mod missing pinned require\nfull:\n%s", goMod)
 	}
 	if strings.Contains(string(goMod), "replace") {
@@ -367,7 +367,7 @@ func TestInit_UnknownAgent(t *testing.T) {
 		t.Errorf("error %q does not mention bogus", msg)
 	}
 	for _, name := range taboo.AgentNames() {
-		if !strings.Contains(msg, name) {
+		if !strings.Contains(msg, string(name)) {
 			t.Errorf("error %q does not list valid agent %q", msg, name)
 		}
 	}

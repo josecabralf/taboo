@@ -32,7 +32,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // blockedLabel is the label the loop applies to an issue whose implement run

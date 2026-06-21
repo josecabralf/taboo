@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // seedSDKQuarantine lays out the in-project SDK quarantine the way slice 5

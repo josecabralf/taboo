@@ -33,7 +33,7 @@ import (
 	"errors"
 	"fmt"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 type review struct {

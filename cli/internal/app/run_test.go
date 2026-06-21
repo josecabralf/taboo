@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // runProjectBody is a complete, valid taboo.yaml the run tests build on. Its
@@ -1456,7 +1456,7 @@ func TestRun_FlagSet(t *testing.T) {
 // line (the default), a no, EOF, or junk all decline, so an accidental Enter
 // never launches a run.
 func TestPromptConfirm(t *testing.T) {
-	profile, err := taboo.NewProfile("opencode", "anthropic/claude")
+	profile, err := taboo.NewProfile(taboo.OpenCode, "anthropic/claude")
 	if err != nil {
 		t.Fatalf("NewProfile: %v", err)
 	}

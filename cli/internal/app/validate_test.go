@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // runValidate executes a freshly built validate command with the given env and
@@ -445,10 +445,10 @@ func TestValidate_BadModelFormatWarns(t *testing.T) {
 		}
 	})
 
-	t.Run("any model for copilot is fine", func(t *testing.T) {
+	t.Run("any model for github-copilot is fine", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
-		writeTabooProject(t, root, "workshop: demo\nagent: copilot\nmodel: some-exotic-model\nrepo: "+tabooRepoRoot(t)+"\n")
+		writeTabooProject(t, root, "workshop: demo\nagent: github-copilot\nmodel: some-exotic-model\nrepo: "+tabooRepoRoot(t)+"\n")
 		fake := &fakeCommander{stdoutFn: okHostStdout}
 		env := configEnv(t, fake, root, nil)
 
@@ -581,9 +581,9 @@ func TestReferencedAgents(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  taboo.ProjectConfig
-		want []string
+		want []taboo.AgentName
 	}{
-		{name: "top-level only", cfg: taboo.ProjectConfig{Agent: "opencode"}, want: []string{"opencode"}},
+		{name: "top-level only", cfg: taboo.ProjectConfig{Agent: "opencode"}, want: []taboo.AgentName{"opencode"}},
 		{
 			name: "workflow override deduped and sorted",
 			cfg: taboo.ProjectConfig{
@@ -593,7 +593,7 @@ func TestReferencedAgents(t *testing.T) {
 					"b": {}, // inherits opencode
 				},
 			},
-			want: []string{"claude-code", "opencode"},
+			want: []taboo.AgentName{"claude-code", "opencode"},
 		},
 		{name: "no agent anywhere", cfg: taboo.ProjectConfig{Model: "m"}, want: nil},
 	}

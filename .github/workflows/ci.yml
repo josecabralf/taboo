@@ -3,10 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
-    # Subdir modules are served by subdir-prefixed tags only (pkg/vX.Y.Z,
-    # cli/vX.Y.Z); an unprefixed v* tag does not resolve for `go get`. See
+    # The library is the repo root module, released via an unprefixed v* tag; the
+    # CLI is a subdir module, served only by a cli/-prefixed tag. See
     # docs/RELEASING.md.
-    tags: ["pkg/v*", "cli/v*"]
+    tags: ["v*", "cli/v*"]
   pull_request:
     branches: [main]
 

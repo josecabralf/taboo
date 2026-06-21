@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // consumerProfile is an external-style AgentProfile declared entirely outside the
@@ -17,7 +17,7 @@ import (
 // interface demands, and satisfaction would fail across the module boundary.
 type consumerProfile struct{}
 
-func (consumerProfile) Name() string { return "consumer" }
+func (consumerProfile) Name() taboo.AgentName { return "consumer" }
 
 func (consumerProfile) BuildCommand(opts taboo.CommandOptions) taboo.AgentCommand {
 	return taboo.AgentCommand{Argv: []string{"consumer", opts.Prompt}}
@@ -36,7 +36,7 @@ func (consumerProfile) Sessions() (taboo.SessionSpec, bool) {
 var _ taboo.AgentProfile = consumerProfile{}
 
 // TestConsumerCrossModuleBoundary is the cross-module boundary guard for issue
-// #93. The library was split into its own module github.com/josecabralf/taboo/pkg
+// #93. The library was split into its own module github.com/josecabralf/taboo
 // whose public surface is a facade of `=` aliases and re-exported sentinels. This
 // test, living in the separate afk module, proves that curated surface works
 // across a real module boundary: interface satisfaction, enum const identity, and

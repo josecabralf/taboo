@@ -21,7 +21,7 @@ expected string}` pair. `pattern` is the shape a well-formed model matches;
 function exposes it:
 
 ```go
-func MatchModelFormat(agent, model string) (ok bool, expected string)
+func MatchModelFormat(agent AgentName, model string) (ok bool, expected string)
 ```
 
 It is **warn-not-fail by construction**: an unknown agent, a no-opinion hint (nil

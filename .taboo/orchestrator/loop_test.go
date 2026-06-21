@@ -10,7 +10,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // fakeLoopGH implements loopGH, recording the label/comment ops the loop drives

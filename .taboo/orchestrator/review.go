@@ -10,7 +10,7 @@ import (
 	"afk/internal/diffmap"
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // reviewGH is the subset of GitHub I/O the review sequence uses. *ghio.Client

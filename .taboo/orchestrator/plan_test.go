@@ -11,7 +11,7 @@ import (
 
 	"afk/internal/ghio"
 
-	taboo "github.com/josecabralf/taboo/pkg"
+	"github.com/josecabralf/taboo"
 )
 
 // fakePlanGH records the labels it was queried for and returns canned issues per
