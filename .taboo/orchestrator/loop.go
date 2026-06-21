@@ -232,6 +232,13 @@ func settleResult(ctx context.Context, gh loopGH, item planItem, res taboo.RunRe
 		fmt.Fprintf(os.Stderr, "afk: implemented #%d on %s\n", item.Number, item.Branch)
 	}
 	releaseInProgress(ctx, gh, item.Number)
+
+	// The wave's post-run path does no worktree I/O, so free the run's worktree
+	// once its outcome is settled. Best-effort: a removal failure is logged, never
+	// propagated, so it cannot strand the rest of the batch.
+	if err := res.Dispose(); err != nil {
+		fmt.Fprintf(os.Stderr, "afk: dispose worktree for #%d: %v\n", item.Number, err)
+	}
 }
 
 // releaseInProgress removes the agent:in-progress label from an issue,

@@ -92,6 +92,18 @@ func NewResultWithWorktree(worktree string) RunResult {
 	}
 }
 
+// NewResultWithWorktreeCmd is NewResultWithWorktree plus a Commander, so a
+// consumer test can exercise Dispose (which shells out to git) against a
+// hand-built result without a full run. The repoPath is left empty: Dispose
+// passes it to `git -C`, and a consumer test's fake Commander records the call
+// rather than running it.
+func NewResultWithWorktreeCmd(worktree string, cmd exec.Commander) RunResult {
+	return RunResult{
+		WorktreePath: worktree,
+		handle:       &runResultHandle{worktreePath: worktree, cmd: cmd},
+	}
+}
+
 // Artifact reads the file at relpath within the run's worktree and returns its
 // contents.
 func (r RunResult) Artifact(relpath string) (string, error) {
@@ -110,6 +122,36 @@ func (r RunResult) Artifact(relpath string) (string, error) {
 		return "", fmt.Errorf("read artifact %q: %w", relpath, err)
 	}
 	return string(b), nil
+}
+
+// Dispose removes the run's worktree with a non-force `git worktree remove`,
+// matching taboo clean's teardown. It is explicit (never automatic) and
+// idempotent — a worktree already gone is success, not an error. It leaves the
+// branch ref and the workshop intact (persisting is the default, so a later push
+// or run can reuse them) and returns a clear error (never panics) when the result
+// has no worktree handle.
+func (r RunResult) Dispose() error {
+	if r.handle == nil {
+		return errors.New("dispose: result has no worktree handle")
+	}
+	return r.handle.dispose(context.Background())
+}
+
+// dispose performs the worktree removal for Dispose. Idempotency lives here: a
+// worktree already gone (a prior Dispose, or a manual `git worktree remove`)
+// short-circuits to success before shelling out, so git's "not a working tree"
+// failure never surfaces.
+func (h *runResultHandle) dispose(ctx context.Context) error {
+	if _, err := os.Stat(h.worktreePath); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if h.cmd == nil {
+		return errors.New("dispose: result handle has no commander")
+	}
+	return h.cmd.Run(ctx, exec.Cmd{
+		Name: "git",
+		Args: []string{"-C", h.repoPath, "worktree", "remove", h.worktreePath},
+	})
 }
 
 // Runner orchestrates agent runs in a taboo-managed workshop.

@@ -24,8 +24,8 @@ import (
 // The limit bounds both the number of concurrent workshops and the number of
 // worker goroutines: with more requests than the limit, requests queue and run
 // in waves. All slots share the base RepoPath (the two-mount rule pins the
-// gitcommon mount to the host .git), so Pool serializes `git worktree add`
-// across slots; concurrent commits to distinct branches are otherwise safe
+// gitcommon mount to the host .git), so Pool serializes `git worktree add` and
+// `git worktree remove` across slots; concurrent commits to distinct branches are otherwise safe
 // because refs are per-worktree and the object store is append-only. Callers
 // MUST NOT run `git gc`/`repack`/`prune` against RepoPath while a Pool run is in
 // flight. A single Pool is not safe for concurrent Run calls (overlapping calls
@@ -83,8 +83,9 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) 
 		workers = len(reqs)
 	}
 
-	// Slots share one RepoPath, so serialize the `git worktree add` that mutates
-	// it; everything else (workshop swaps, agent exec) still runs concurrently.
+	// Slots share one RepoPath, so serialize the `git worktree add` and `git
+	// worktree remove` that mutate it; everything else (workshop swaps, agent
+	// exec) still runs concurrently.
 	cmd := serialCommander{inner: p.cmd, gitLock: &sync.Mutex{}}
 
 	type job struct {
@@ -127,18 +128,19 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) 
 }
 
 // serialCommander wraps a Commander and serializes concurrent `git worktree add`
-// invocations behind gitLock. Worktree creation mutates the shared repo's .git
-// metadata (refs and the worktrees registry), which is not safe to run from
-// several processes at once; every other command passes straight through and may
-// run concurrently. Pool uses it so fan-out across slots that share one RepoPath
-// stays correct.
+// and `git worktree remove` invocations behind gitLock. Worktree creation and
+// disposal both mutate the shared repo's .git metadata (the worktrees registry,
+// and refs on add), which is not safe to run from several processes at once;
+// every other command passes straight through and may run concurrently. Pool
+// uses it so fan-out across slots that share one RepoPath stays correct — both
+// the worktree adds during setup and the worktree removes during Dispose.
 type serialCommander struct {
 	inner   exec.Commander
 	gitLock *sync.Mutex
 }
 
 func (s serialCommander) Run(ctx context.Context, c exec.Cmd) error {
-	if isWorktreeAdd(c) {
+	if isWorktreeMutation(c) {
 		s.gitLock.Lock()
 		defer s.gitLock.Unlock()
 	}
