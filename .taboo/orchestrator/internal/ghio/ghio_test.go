@@ -492,6 +492,31 @@ func TestCreatePRBuildsArgvAndReturnsURL(t *testing.T) {
 	}
 }
 
+func TestCreateIssueBuildsArgvAndReturnsURL(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: "https://github.com/o/r/issues/42\n"}
+	c := New(fe)
+
+	got, err := c.CreateIssue(context.Background(), "T", "B", []string{"ready-for-agent"})
+	if err != nil {
+		t.Fatalf("CreateIssue returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"issue", "create", "--title", "T", "--body", "B", "--label", "ready-for-agent"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+
+	want := "https://github.com/o/r/issues/42"
+	if got != want {
+		t.Errorf("url = %q, want %q", got, want)
+	}
+}
+
 // seqExec records every call's full argv and returns canned stdout per call in
 // order, so a multi-call method (UpToDateWithMain shells out twice) can be driven
 // and asserted call by call. The 1-based errOn makes that nth call return err.
