@@ -410,10 +410,10 @@ func TestPool_SerializesWorktreeAdd(t *testing.T) {
 	}
 }
 
-// TestSerialCommander_SerializesWorktreeMutations pins that the predicate locks
-// BOTH worktree add and worktree remove (not just add), so concurrent Dispose
-// across pooled results — which share one serialCommander — can never run two
-// removes against the shared repo at once.
+// TestSerialCommander_SerializesWorktreeRemove pins that the predicate locks
+// worktree remove as well as add (not just add), so concurrent Dispose across
+// pooled results, which share one serialCommander, can never run two removes
+// against the shared repo at once.
 func TestSerialCommander_SerializesWorktreeRemove(t *testing.T) {
 	const n = 3
 	fc := &fakeCommander{

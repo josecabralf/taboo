@@ -25,8 +25,9 @@ import (
 // worker goroutines: with more requests than the limit, requests queue and run
 // in waves. All slots share the base RepoPath (the two-mount rule pins the
 // gitcommon mount to the host .git), so Pool serializes `git worktree add` and
-// `git worktree remove` across slots; concurrent commits to distinct branches are otherwise safe
-// because refs are per-worktree and the object store is append-only. Callers
+// `git worktree remove` across slots; concurrent commits to distinct branches
+// are otherwise safe because refs are per-worktree and the object store is
+// append-only. Callers
 // MUST NOT run `git gc`/`repack`/`prune` against RepoPath while a Pool run is in
 // flight. A single Pool is not safe for concurrent Run calls (overlapping calls
 // would collide on the same slot directories and workshop names); serialize them
@@ -128,12 +129,11 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) 
 }
 
 // serialCommander wraps a Commander and serializes concurrent `git worktree add`
-// and `git worktree remove` invocations behind gitLock. Worktree creation and
-// disposal both mutate the shared repo's .git metadata (the worktrees registry,
-// and refs on add), which is not safe to run from several processes at once;
-// every other command passes straight through and may run concurrently. Pool
-// uses it so fan-out across slots that share one RepoPath stays correct — both
-// the worktree adds during setup and the worktree removes during Dispose.
+// and `git worktree remove` invocations behind gitLock. Both mutate the shared
+// repo's .git metadata (the worktrees registry, and refs on add), which is not
+// safe to run from several processes at once; every other command passes
+// straight through and may run concurrently. Pool uses it so fan-out across
+// slots that share one RepoPath stays correct.
 type serialCommander struct {
 	inner   exec.Commander
 	gitLock *sync.Mutex
