@@ -538,6 +538,73 @@ func TestSetup_ChangedProjectDefRefreshesWorkshop(t *testing.T) {
 	}
 }
 
+// TestSetup_BaseRefFetchesAndStartsWorktreeFromRef pins the #83 capability: when
+// RunRequest.BaseRef is set, Setup first fetches origin (so the ref — and
+// origin/main, which the agent later merges — are current) and then starts the
+// run's worktree branch FROM that ref, rather than from the host repo's HEAD.
+// The fetch must precede the worktree add (the ref has to exist locally before
+// git can branch from it).
+func TestSetup_BaseRefFetchesAndStartsWorktreeFromRef(t *testing.T) {
+	cfg := testConfig(t)
+	fc := &fakeCommander{errFn: failOnVerb("info")} // absent -> launch, like TestRun
+	r := New(cfg, fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{
+		Branch:  "agent/update-pr-12",
+		BaseRef: "origin/feature-x",
+		Prompt:  "merge main",
+	})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	// origin is fetched so the base ref (and origin/main) are current locally.
+	fetch := fc.findCallN(t, "fetch", 0)
+	wantFetch := []string{"-C", cfg.RepoPath, "fetch", "origin"}
+	if !slices.Equal(fetch.Args, wantFetch) {
+		t.Errorf("fetch args = %v, want %v", fetch.Args, wantFetch)
+	}
+
+	// The worktree branch starts at the base ref's tip (the start-point trailing arg).
+	wtAdd := fc.findCallN(t, "worktree", 0)
+	wantAdd := []string{"-C", cfg.RepoPath, "worktree", "add", "-b", "agent/update-pr-12", res.WorktreePath, "origin/feature-x"}
+	if !slices.Equal(wtAdd.Args, wantAdd) {
+		t.Errorf("worktree add args = %v, want %v", wtAdd.Args, wantAdd)
+	}
+
+	// The fetch must come before the worktree add: git can only branch from the
+	// ref once it has been updated locally.
+	verbs := fc.verbs()
+	if fi, wi := slices.Index(verbs, "fetch"), slices.Index(verbs, "worktree"); fi == -1 || fi > wi {
+		t.Errorf("verbs %v: fetch must precede worktree add", verbs)
+	}
+}
+
+// TestSetup_NoBaseRefSkipsFetchAndStartPoint pins the default path's negative: an
+// empty BaseRef must NOT fetch and must add the worktree with no start-point, so
+// a plain run still branches off the host repo's HEAD exactly as before #83. A
+// stray fetch (a network round-trip) or a trailing start-point would silently
+// change every existing run's behavior.
+func TestSetup_NoBaseRefSkipsFetchAndStartPoint(t *testing.T) {
+	cfg := testConfig(t)
+	fc := &fakeCommander{errFn: failOnVerb("info")}
+	r := New(cfg, fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/plain", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	if slices.Contains(fc.verbs(), "fetch") {
+		t.Errorf("verbs %v contains fetch; the default path must not fetch", fc.verbs())
+	}
+	wtAdd := fc.findCallN(t, "worktree", 0)
+	wantAdd := []string{"-C", cfg.RepoPath, "worktree", "add", "-b", "agent/plain", res.WorktreePath}
+	if !slices.Equal(wtAdd.Args, wantAdd) {
+		t.Errorf("worktree add args = %v, want %v (no start-point)", wtAdd.Args, wantAdd)
+	}
+}
+
 // findCallN returns the nth (0-based) recorded Cmd whose verb matches, or fails.
 func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) exec.Cmd {
 	t.Helper()

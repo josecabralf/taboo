@@ -31,3 +31,6 @@ workflows:
   write-pr:
     prompt-file: prompts/write-pr.md
     model: claude-opus-4-8
+  update-branch:
+    prompt-file: prompts/update-branch.md
+    model: claude-opus-4-8

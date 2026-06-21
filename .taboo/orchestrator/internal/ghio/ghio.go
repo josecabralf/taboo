@@ -278,6 +278,67 @@ func (c *Client) CreatePR(ctx context.Context, branch, title, body string) (stri
 	return strings.TrimSpace(out), nil
 }
 
+// PRHeadBranch returns PR number's head branch name via `gh pr view`. The
+// update-branch subcommand uses it to resolve which branch to merge main into.
+func (c *Client) PRHeadBranch(ctx context.Context, number int) (string, error) {
+	out, err := c.exec.Run(ctx, "gh", "pr", "view", strconv.Itoa(number), "--json", "headRefName")
+	if err != nil {
+		return "", err
+	}
+	var v struct {
+		HeadRefName string `json:"headRefName"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		return "", fmt.Errorf("parsing gh pr view output: %w", err)
+	}
+	return v.HeadRefName, nil
+}
+
+// Fetch updates the remote-tracking refs from origin via `git fetch origin`, so
+// origin/main and origin/<branch> are current before the update-branch run reads
+// or merges them.
+func (c *Client) Fetch(ctx context.Context) error {
+	_, err := c.exec.Run(ctx, "git", "fetch", "origin")
+	return err
+}
+
+// UpToDateWithMain reports whether origin/<branch> already contains origin/main —
+// i.e. merging main into the branch would be a no-op. It compares
+// merge-base(origin/main, origin/<branch>) against origin/main's tip: equal means
+// main is an ancestor of the branch. Both shell-outs succeed-or-error (no
+// exit-code-1 "false" signal), so the method composes cleanly with run()'s error
+// handling — unlike `git merge-base --is-ancestor`, whose exit code 1 is a valid
+// answer that run() would surface as an error. Call Fetch first so the refs are
+// current.
+func (c *Client) UpToDateWithMain(ctx context.Context, branch string) (bool, error) {
+	base, err := c.exec.Run(ctx, "git", "merge-base", "origin/main", "origin/"+branch)
+	if err != nil {
+		return false, err
+	}
+	mainTip, err := c.exec.Run(ctx, "git", "rev-parse", "origin/main")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(base) == strings.TrimSpace(mainTip), nil
+}
+
+// Push pushes branch to origin WITHOUT --force. The update-branch flow advances
+// the branch by merging main, so its new tip descends from the remote branch and
+// the push is a fast-forward; a non-force push then fails safely (rather than
+// clobbering) if the remote branch moved under us. This is deliberately distinct
+// from PushBranch, which force-pushes the per-issue agent branch implement owns.
+func (c *Client) Push(ctx context.Context, branch string) error {
+	_, err := c.exec.Run(ctx, "git", "push", "origin", branch)
+	return err
+}
+
+// CommentPR posts a comment on a PR via `gh pr comment`. The update-branch flow
+// uses it to record why a merge was blocked, alongside the agent:blocked label.
+func (c *Client) CommentPR(ctx context.Context, number int, body string) error {
+	_, err := c.exec.Run(ctx, "gh", "pr", "comment", strconv.Itoa(number), "--body", body)
+	return err
+}
+
 // EditPR updates an existing PR's title and body via `gh pr edit`. The prRef
 // argument is the PR's number, URL or head branch (write-pr passes the URL
 // PRForBranch returned). It is how a re-run refreshes a PR in place instead of

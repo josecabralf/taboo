@@ -193,3 +193,33 @@ func TestRunReviewRequiresPRBeforeIO(t *testing.T) {
 		t.Errorf("error = %q, want it to mention --pr is required", err.Error())
 	}
 }
+
+func TestRunUpdateBranchRequiresPRBeforeIO(t *testing.T) {
+	t.Parallel()
+
+	// With no --pr flag the function must fail validation before touching gh or
+	// taboo, mirroring runReview's pre-I/O guard.
+	err := runUpdateBranch(context.Background(), nil)
+	if err == nil {
+		t.Fatal("runUpdateBranch with no --pr returned nil, want a required-flag error")
+	}
+	if !strings.Contains(err.Error(), "--pr is required") {
+		t.Errorf("error = %q, want it to mention --pr is required", err.Error())
+	}
+}
+
+func TestRunUpdateBranchDispatchesFromRun(t *testing.T) {
+	t.Parallel()
+
+	// An unknown flag must surface as a flag-parse error from runUpdateBranch's own
+	// FlagSet, proving the update-branch case is wired into run's switch (not
+	// falling through to the unknown-command branch). Keeping the assertion on the
+	// parse error keeps the test hermetic — no real run is ever driven.
+	err := run([]string{"update-branch", "--bogus-flag"})
+	if err == nil {
+		t.Fatal(`run(["update-branch", "--bogus-flag"]) returned nil, want a flag-parse error`)
+	}
+	if strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("error = %q, want a flag-parse error, not the unknown-command branch", err.Error())
+	}
+}

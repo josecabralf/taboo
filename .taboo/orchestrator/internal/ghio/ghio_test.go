@@ -492,6 +492,171 @@ func TestCreatePRBuildsArgvAndReturnsURL(t *testing.T) {
 	}
 }
 
+// seqExec records every call's full argv and returns canned stdout per call in
+// order, so a multi-call method (UpToDateWithMain shells out twice) can be driven
+// and asserted call by call. The 1-based errOn makes that nth call return err.
+type seqExec struct {
+	calls   [][]string
+	stdouts []string
+	err     error
+	errOn   int
+}
+
+func (s *seqExec) Run(_ context.Context, name string, args ...string) (string, error) {
+	s.calls = append(s.calls, append([]string{name}, args...))
+	i := len(s.calls)
+	if s.errOn == i {
+		return "", s.err
+	}
+	if i-1 < len(s.stdouts) {
+		return s.stdouts[i-1], nil
+	}
+	return "", nil
+}
+
+func (s *seqExec) RunInput(ctx context.Context, _, name string, args ...string) (string, error) {
+	return s.Run(ctx, name, args...)
+}
+
+func TestPRHeadBranchBuildsArgvAndParses(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{stdout: `{"headRefName":"agent/update-pr-12"}`}
+	c := New(fe)
+
+	got, err := c.PRHeadBranch(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("PRHeadBranch returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"pr", "view", "12", "--json", "headRefName"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+	if got != "agent/update-pr-12" {
+		t.Errorf("branch = %q, want %q", got, "agent/update-pr-12")
+	}
+}
+
+func TestFetchBuildsArgv(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.Fetch(context.Background()); err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+
+	if fe.name != "git" {
+		t.Errorf("ran %q, want %q", fe.name, "git")
+	}
+	wantArgs := []string{"fetch", "origin"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
+func TestUpToDateWithMainTrueWhenMainContained(t *testing.T) {
+	t.Parallel()
+
+	// merge-base(origin/main, origin/branch) == origin/main's tip ⇒ origin/main is
+	// already contained in the branch, so merging main would be a no-op.
+	se := &seqExec{stdouts: []string{"abc123\n", "abc123\n"}}
+	c := New(se)
+
+	got, err := c.UpToDateWithMain(context.Background(), "agent/update-pr-12")
+	if err != nil {
+		t.Fatalf("UpToDateWithMain returned error: %v", err)
+	}
+	if !got {
+		t.Errorf("upToDate = false, want true (main is contained in the branch)")
+	}
+
+	wantMergeBase := []string{"git", "merge-base", "origin/main", "origin/agent/update-pr-12"}
+	if !slices.Equal(se.calls[0], wantMergeBase) {
+		t.Errorf("call[0] = %q, want %q", se.calls[0], wantMergeBase)
+	}
+	wantRevParse := []string{"git", "rev-parse", "origin/main"}
+	if !slices.Equal(se.calls[1], wantRevParse) {
+		t.Errorf("call[1] = %q, want %q", se.calls[1], wantRevParse)
+	}
+}
+
+func TestUpToDateWithMainFalseWhenBehind(t *testing.T) {
+	t.Parallel()
+
+	// merge-base diverges from origin/main's tip ⇒ the branch is behind main, so a
+	// merge would advance it (not a no-op).
+	se := &seqExec{stdouts: []string{"abc123\n", "def456\n"}}
+	c := New(se)
+
+	got, err := c.UpToDateWithMain(context.Background(), "agent/update-pr-12")
+	if err != nil {
+		t.Fatalf("UpToDateWithMain returned error: %v", err)
+	}
+	if got {
+		t.Errorf("upToDate = true, want false (branch is behind main)")
+	}
+}
+
+func TestUpToDateWithMainSurfacesError(t *testing.T) {
+	t.Parallel()
+
+	se := &seqExec{err: errBoom, errOn: 1}
+	c := New(se)
+
+	if _, err := c.UpToDateWithMain(context.Background(), "agent/x"); !errors.Is(err, errBoom) {
+		t.Errorf("err = %v, want %v", err, errBoom)
+	}
+}
+
+func TestPushBuildsArgvWithoutForce(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.Push(context.Background(), "agent/update-pr-12"); err != nil {
+		t.Fatalf("Push returned error: %v", err)
+	}
+
+	if fe.name != "git" {
+		t.Errorf("ran %q, want %q", fe.name, "git")
+	}
+	wantArgs := []string{"push", "origin", "agent/update-pr-12"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+	// A merge fast-forwards the branch, so the push must NOT force — a forced push
+	// would clobber a remote branch that moved under us instead of failing safely.
+	if slices.Contains(fe.args, "--force") {
+		t.Errorf("args = %q, must not contain --force (a merge push is a fast-forward)", fe.args)
+	}
+}
+
+func TestCommentPRBuildsArgv(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.CommentPR(context.Background(), 12, "merge validation failed"); err != nil {
+		t.Fatalf("CommentPR returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"pr", "comment", "12", "--body", "merge validation failed"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
 func TestEditPRBuildsArgv(t *testing.T) {
 	t.Parallel()
 
