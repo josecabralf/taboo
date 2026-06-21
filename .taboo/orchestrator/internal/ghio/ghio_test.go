@@ -4,37 +4,45 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/josecabralf/taboo"
 )
 
 // errBoom is the canned error fakeExec returns so tests can assert a Client
 // method propagates the underlying exec failure unchanged.
 var errBoom = errors.New("boom")
 
-// fakeExec records the (name, args) of each call and returns canned stdout, so
-// tests can assert the exact argv built by the Client and feed it scripted
-// output without shelling out.
+// fakeExec is a taboo.Commander double: it records the (name, args) of the call
+// and the stdin it was fed, writes canned stdout (and optional stderr) to the
+// command's writers, and returns a canned error — so tests can assert the exact
+// argv built by the Client and feed it scripted output without shelling out.
 type fakeExec struct {
 	name   string
 	args   []string
 	stdin  string
 	stdout string
+	stderr string
 	err    error
 }
 
-func (f *fakeExec) Run(_ context.Context, name string, args ...string) (string, error) {
-	f.name = name
-	f.args = args
-	return f.stdout, f.err
-}
-
-func (f *fakeExec) RunInput(_ context.Context, stdin, name string, args ...string) (string, error) {
-	f.name = name
-	f.args = args
-	f.stdin = stdin
-	return f.stdout, f.err
+func (f *fakeExec) Run(_ context.Context, c taboo.Cmd) error {
+	f.name = c.Name
+	f.args = c.Args
+	if c.Stdin != nil {
+		b, _ := io.ReadAll(c.Stdin)
+		f.stdin = string(b)
+	}
+	if f.stdout != "" {
+		_, _ = io.WriteString(c.Stdout, f.stdout)
+	}
+	if f.stderr != "" {
+		_, _ = io.WriteString(c.Stderr, f.stderr)
+	}
+	return f.err
 }
 
 func TestIssueViewBuildsArgvAndParsesIssue(t *testing.T) {
@@ -527,20 +535,16 @@ type seqExec struct {
 	errOn   int
 }
 
-func (s *seqExec) Run(_ context.Context, name string, args ...string) (string, error) {
-	s.calls = append(s.calls, append([]string{name}, args...))
+func (s *seqExec) Run(_ context.Context, c taboo.Cmd) error {
+	s.calls = append(s.calls, append([]string{c.Name}, c.Args...))
 	i := len(s.calls)
 	if s.errOn == i {
-		return "", s.err
+		return s.err
 	}
 	if i-1 < len(s.stdouts) {
-		return s.stdouts[i-1], nil
+		_, _ = io.WriteString(c.Stdout, s.stdouts[i-1])
 	}
-	return "", nil
-}
-
-func (s *seqExec) RunInput(ctx context.Context, _, name string, args ...string) (string, error) {
-	return s.Run(ctx, name, args...)
+	return nil
 }
 
 func TestPRHeadBranchBuildsArgvAndParses(t *testing.T) {
@@ -582,6 +586,24 @@ func TestFetchBuildsArgv(t *testing.T) {
 	wantArgs := []string{"fetch", "origin"}
 	if !slices.Equal(fe.args, wantArgs) {
 		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
+func TestRunSurfacesStderrContextOnFailure(t *testing.T) {
+	t.Parallel()
+
+	// When the underlying command fails, taboo.Output folds the child's stderr
+	// into the returned error — so a Client method's error carries the diagnostic
+	// gh/git wrote, not just an opaque exit code.
+	fe := &fakeExec{stderr: "fatal: not a git repository", err: errBoom}
+	c := New(fe)
+
+	err := c.Fetch(context.Background())
+	if err == nil {
+		t.Fatal("Fetch returned nil error, want a failure carrying stderr")
+	}
+	if !strings.Contains(err.Error(), "fatal: not a git repository") {
+		t.Errorf("err = %q, want it to contain the command's stderr", err.Error())
 	}
 }
 

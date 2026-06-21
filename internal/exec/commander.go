@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	osexec "os/exec"
@@ -36,11 +37,23 @@ func NewExecCommander() Commander { return execCommander{} }
 // Output runs cmd with a fresh stdout buffer and returns the raw captured
 // stdout together with the run error. The string is untrimmed: callers that
 // need trimming do it themselves. Any Stdout already set on cmd is overwritten.
+// On failure the returned error carries the command's stderr, so a failed run's
+// diagnostics survive in the error the same way os/exec's cmd.Output() does.
 func Output(ctx context.Context, c Commander, cmd Cmd) (string, error) {
-	var buf strings.Builder
-	cmd.Stdout = &buf
+	var out strings.Builder
+	cmd.Stdout = &out
+	// Capture stderr so a failed command's diagnostics survive in the returned
+	// error — the same context os/exec's cmd.Output() folds into ExitError.Stderr.
+	// A caller that wired its own Stderr keeps it.
+	var stderr strings.Builder
+	if cmd.Stderr == nil {
+		cmd.Stderr = &stderr
+	}
 	err := c.Run(ctx, cmd)
-	return buf.String(), err
+	if err != nil && stderr.Len() > 0 {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return out.String(), err
 }
 
 func (execCommander) Run(ctx context.Context, c Cmd) error {
