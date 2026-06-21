@@ -89,9 +89,9 @@ func NewResultWithWorktree(worktree string) RunResult {
 
 // NewResultWithWorktreeCmd is NewResultWithWorktree plus a Commander, so a
 // consumer test can exercise Dispose (which shells out to git) against a
-// hand-built result without a full run. repoPath is left empty; Dispose passes
-// it to `git -C`, where the test's fake Commander records the call instead of
-// running it.
+// hand-built result without a full run. The repoPath is left empty; Dispose
+// passes it to `git -C`, where the test's fake Commander records the call
+// instead of running it.
 func NewResultWithWorktreeCmd(worktree string, cmd exec.Commander) RunResult {
 	return RunResult{handle: &runResultHandle{worktreePath: worktree, cmd: cmd}}
 }
