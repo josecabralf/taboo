@@ -355,6 +355,16 @@ func (c *Client) CommentPR(ctx context.Context, number int, body string) error {
 	return err
 }
 
+// MarkPRReady transitions a PR from draft to ready-for-review via
+// `gh pr ready`. The prRef argument is the PR's number, URL or head branch (the
+// finalize stage passes the URL PRForBranch returned). Re-running on an
+// already-ready PR is harmless: gh treats it as a no-op and exits 0. Any gh
+// failure is returned verbatim.
+func (c *Client) MarkPRReady(ctx context.Context, prRef string) error {
+	_, err := c.exec.Run(ctx, "gh", "pr", "ready", prRef)
+	return err
+}
+
 // EditPR updates an existing PR's title and body via `gh pr edit`. The prRef
 // argument is the PR's number, URL or head branch (write-pr passes the URL
 // PRForBranch returned). It is how a re-run refreshes a PR in place instead of

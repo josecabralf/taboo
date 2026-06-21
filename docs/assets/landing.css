@@ -1,0 +1,356 @@
+/* =============================================================
+   taboo landing — "The Lit Workshop" (the door)
+   A bespoke, dark, high-contrast home. Ported from the design mockup
+   (sandbox assets/styles.css) and scoped under .tbl so none of it leaks
+   onto the docs pages. The door is dark-only by design — the light/dark
+   toggle governs the docs ("the bench"); no light landing was designed.
+   Rendered into Material's {% block hero %} (full-bleed, before .md-main).
+   ============================================================= */
+
+/* ---- On the home page, keep Material's header (the shared topbar) but hide
+   the reading chrome — the door supplies its own body and footer. The header
+   and the page background both follow the light/dark toggle, so crossing into
+   the docs is seamless in either theme. ------------------------------------- */
+body:has(.tbl) .md-main,
+body:has(.tbl) .md-footer,
+body:has(.tbl) .md-sidebar { display: none !important; }
+body:has(.tbl) .md-container { display: block; }
+
+/* ============================ Tokens ============================ */
+/* The color palette (--bg, --surface-*, --ink*, --accent*, --line*, --focus)
+   is NOT defined here: the landing inherits it from the per-scheme tokens in
+   extra.css, so the door follows the light/dark toggle like the docs. Only the
+   landing-specific (--glow) and structural (type/space/radius/font) tokens live
+   here. The dark "window" panels pin themselves back to the dark palette below. */
+.tbl {
+  --glow: oklch(0.646 0.187 39 / 0.55);   /* accent bloom — softened for light below */
+
+  --sans: "Ubuntu Sans", "Ubuntu", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Ubuntu Sans Mono", "Ubuntu Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace;
+
+  --step-display: clamp(2.2rem, 1.0rem + 5.1vw, 4.9rem);
+  --step-h2:      clamp(1.85rem, 1.35rem + 2.0vw, 2.85rem);
+  --step-h3:      clamp(1.18rem, 1.06rem + 0.4vw, 1.4rem);
+  --step-lead:    clamp(1.06rem, 1.0rem + 0.35vw, 1.28rem);
+
+  --s-1: 0.25rem; --s-2: 0.5rem; --s-3: 0.75rem; --s-4: 1rem;
+  --s-5: 1.5rem; --s-6: 2rem; --s-7: 3rem; --s-8: 4rem; --s-9: 6rem; --s-10: 8rem;
+
+  --maxw: 61rem;            /* matches Material's .md-grid — edges line up with the docs */
+  --radius: 14px;
+  --radius-sm: 10px;
+
+  --ease-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-expo:  cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* base surface */
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;          /* stray landing text stays >=1rem (the legibility floor) */
+  font-weight: 400;
+  line-height: 1.65;
+  letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+/* The accent bloom is a dark-room flourish; dial it back on the light door. */
+[data-md-color-scheme="default"] .tbl { --glow: oklch(0.646 0.187 39 / 0.20); }
+
+.tbl *, .tbl *::before, .tbl *::after { box-sizing: border-box; }
+.tbl img, .tbl svg { display: block; max-width: 100%; }
+.tbl a { color: var(--accent-text); text-decoration: none; }
+.tbl ::selection { background: oklch(0.646 0.187 39 / 0.30); color: var(--ink); }
+.tbl :where(a, button, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 4px;
+}
+.tbl h1, .tbl h2, .tbl h3 { line-height: 1.08; letter-spacing: -0.02em; text-wrap: balance; font-weight: 700; }
+.tbl p { text-wrap: pretty; }
+
+.tbl .wrap { width: min(100% - 2.5rem, var(--maxw)); margin-inline: auto; }
+
+/* ============================ Brand mark ============================ */
+.tbl .brand { display: inline-flex; align-items: center; gap: 0.55rem; color: var(--ink); }
+.tbl .brand__name { font-weight: 700; font-size: 1.18rem; letter-spacing: -0.02em; }
+.tbl .brand__logo { display: inline-flex; line-height: 0; }
+.tbl .brand__logo svg { display: block; width: 27px; height: 27px; }
+
+/* The topbar is Material's real header (shared with the docs), styled by
+   extra.css — the landing no longer ships a bespoke nav. */
+
+/* ============================ Buttons ============================ */
+.tbl .btn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-family: var(--sans); font-weight: 700; font-size: 1rem;
+  padding: 0.82rem 1.4rem; border-radius: var(--radius-sm);
+  border: 1px solid transparent; cursor: pointer;
+  transition: transform 0.2s var(--ease-quint), background 0.2s ease,
+              box-shadow 0.3s var(--ease-quint), border-color 0.2s ease;
+}
+.tbl .btn__arrow { transition: transform 0.25s var(--ease-quint); }
+.tbl .btn:hover .btn__arrow { transform: translateX(3px); }
+.tbl .btn--primary {
+  background: var(--accent); color: oklch(0.99 0 0);   /* white on Ubuntu orange, both themes */
+  box-shadow: 0 0 0 1px oklch(0.646 0.187 39 / 0.4), 0 8px 26px -10px var(--glow);
+}
+.tbl .btn--primary:hover {
+  background: var(--accent-bright); transform: translateY(-2px);
+  box-shadow: 0 0 0 1px oklch(0.705 0.18 42 / 0.5), 0 14px 36px -12px var(--glow);
+}
+.tbl .btn--ghost { color: var(--ink); border-color: var(--line-strong); background: color-mix(in oklab, var(--ink) 3%, transparent); }
+.tbl .btn--ghost:hover { border-color: var(--ink-faint); transform: translateY(-2px); background: color-mix(in oklab, var(--ink) 6%, transparent); }
+.tbl .btn:active { transform: translateY(0) scale(0.99); }
+
+/* ============================ Copy chip ============================ */
+.tbl .copy {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  background: var(--surface-1); border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm); padding: 0.45rem 0.45rem 0.45rem 0.95rem; max-width: 100%;
+}
+.tbl .copy__text {
+  font-family: var(--mono); font-size: 0.92rem; color: var(--ink);
+  white-space: nowrap; overflow: auto hidden; scrollbar-width: none;
+}
+.tbl .copy__text::-webkit-scrollbar { display: none; }
+.tbl .copy__sigil { color: var(--ink-faint); margin-right: 0.4rem; user-select: none; }
+.tbl .copy__btn {
+  display: inline-flex; align-items: center; gap: 0.4rem; flex: none;
+  font-family: var(--sans); font-size: 0.82rem; font-weight: 500; color: var(--ink-muted);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 7px;
+  padding: 0.4rem 0.6rem; cursor: pointer; transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.tbl .copy__btn:hover { color: var(--ink); border-color: var(--accent); background: oklch(0.646 0.187 39 / 0.1); }
+.tbl .copy__icon { flex: none; }
+.tbl .copy.is-copied .copy__btn { color: var(--accent-text); border-color: var(--accent); }
+.tbl .copy--block { display: flex; width: 100%; }
+.tbl .copy--block .copy__text { flex: 1; }
+.tbl .copy--lg { padding: 0.6rem 0.6rem 0.6rem 1.2rem; }
+.tbl .copy--lg .copy__text { font-size: 1.02rem; }
+
+/* ============================ Window / code / terminal ============================ */
+.tbl .window {
+  /* The window is the dark "workshop panel" in BOTH themes — it matches the
+     docs' always-dark code blocks. Pin the palette tokens to the dark/window
+     values (from extra.css) so light mode doesn't bleed into the panel chrome
+     or its syntax colors; only the drop shadow follows the page theme. */
+  --ink: var(--win-ink);
+  --ink-muted: var(--win-muted);
+  --ink-faint: var(--win-faint);
+  --line: var(--win-line);
+  --line-strong: var(--win-line-s);
+  --surface-1: oklch(0.190 0 0);
+  --surface-2: oklch(0.230 0 0);
+  --surface-3: oklch(0.275 0 0);
+  --accent-text: oklch(0.745 0.150 48);   /* readable orange on the dark panel */
+
+  background: linear-gradient(180deg, var(--win-bg-top) 0%, var(--win-bg-bot) 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--win-shadow);
+}
+.tbl .window__bar {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.6rem 0.95rem; border-bottom: 1px solid var(--line);
+  background: oklch(0.165 0 0 / 0.6);
+}
+.tbl .window__dots { display: inline-flex; gap: 0.4rem; }
+.tbl .window__dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--surface-3); }
+.tbl .window__dots i:first-child { background: oklch(0.55 0.07 30); }
+.tbl .window__name { font-family: var(--mono); font-size: 0.82rem; color: var(--ink-faint); }
+.tbl .code, .tbl .term {
+  font-family: var(--mono); font-size: 0.86rem; line-height: 1.7;
+  padding: 1.05rem 1.15rem; overflow-x: auto; color: var(--ink);
+  font-variant-ligatures: none; tab-size: 2;
+}
+.tbl .term { color: var(--ink-muted); }
+.tbl pre.code, .tbl pre.term { white-space: pre; margin: 0; }
+
+.tbl .c-kw { color: oklch(0.78 0.11 300); }
+.tbl .c-fn { color: oklch(0.82 0.12 230); }
+.tbl .c-st { color: oklch(0.80 0.10 150); }
+.tbl .c-cn { color: var(--accent-text); }
+.tbl .c-cm { color: var(--ink-faint); font-style: italic; }
+.tbl .t-ok   { color: oklch(0.80 0.10 150); }
+.tbl .t-run  { color: var(--ink-muted); }
+.tbl .t-key  { color: var(--ink); }
+.tbl .t-dim  { color: var(--ink-faint); }
+.tbl .t-hash { color: oklch(0.82 0.12 230); }
+.tbl .t-sig  { color: var(--accent); }
+.tbl .t-sig-t{ color: var(--accent-text); font-weight: 500; }
+.tbl .t-land { color: var(--ink); }
+
+.tbl .window__run {
+  font-family: var(--mono); font-size: 0.8rem; color: var(--ink-faint);
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 1.15rem; border-block: 1px solid var(--line);
+  background: oklch(0.165 0 0 / 0.5);
+}
+.tbl .window__rundot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
+
+/* ---- Light-mode windows ----------------------------------------------------
+   In dark mode the window stays the dark workshop panel (pinned above). In
+   light mode it becomes a light editor surface: re-pin the window's palette
+   tokens to the light scheme (so --ink/--surface/--line-driven chrome adapts)
+   and re-color the hardcoded bright-on-dark syntax hues to darker, saturated
+   ones that hold contrast on the light surface. */
+[data-md-color-scheme="default"] .tbl .window {
+  --ink: oklch(0.205 0 0);
+  --ink-muted: oklch(0.435 0 0);
+  --ink-faint: oklch(0.520 0 0);
+  --line: oklch(0.205 0 0 / 0.12);
+  --line-strong: oklch(0.205 0 0 / 0.20);
+  --surface-1: oklch(0.962 0 0);
+  --surface-2: oklch(0.935 0 0);
+  --surface-3: oklch(0.905 0 0);
+  --accent-text: oklch(0.520 0.170 40);   /* readable orange on the light panel */
+  background: linear-gradient(180deg, oklch(0.985 0 0) 0%, oklch(0.962 0 0) 100%);
+}
+[data-md-color-scheme="default"] .tbl .window__bar { background: oklch(0.905 0 0 / 0.7); }
+[data-md-color-scheme="default"] .tbl .window__run { background: oklch(0.92 0 0 / 0.5); }
+[data-md-color-scheme="default"] .tbl .hero__proof .term { background: oklch(0.97 0 0 / 0.6); }
+
+[data-md-color-scheme="default"] .tbl .c-kw { color: oklch(0.50 0.16 300); }
+[data-md-color-scheme="default"] .tbl .c-fn { color: oklch(0.50 0.16 255); }
+[data-md-color-scheme="default"] .tbl .c-st { color: oklch(0.46 0.12 150); }
+[data-md-color-scheme="default"] .tbl .t-ok   { color: oklch(0.50 0.13 150); }
+[data-md-color-scheme="default"] .tbl .t-hash { color: oklch(0.50 0.16 255); }
+
+/* ============================ Hero ============================ */
+.tbl .hero { position: relative; padding-top: clamp(2.5rem, 1rem + 6vw, 5rem); padding-bottom: clamp(3.5rem, 2rem + 4vw, 5.5rem); }
+.tbl .hero__grid {
+  position: relative; z-index: 2;
+  display: grid; grid-template-columns: 1.05fr 0.95fr;
+  gap: clamp(2rem, 1rem + 4vw, 5rem); align-items: center;
+}
+.tbl .hero__copy, .tbl .hero__proof, .tbl .step, .tbl .path,
+.tbl .path--lead > *, .tbl .reason > * { min-width: 0; }
+.tbl .hero__copy { max-width: 36rem; }
+.tbl .hero__title { font-size: 3.5rem; letter-spacing: -0.04em; line-height: 1.0; margin-top: var(--s-4); margin-bottom: var(--s-2); }
+.tbl .hero__subtitle {
+  font-size: clamp(1.3rem, 1.05rem + 1.1vw, 1.9rem);
+  font-weight: 600; line-height: 1.15; letter-spacing: -0.02em;
+  color: var(--ink); max-width: 32rem; margin-bottom: var(--s-5); text-wrap: balance;
+}
+.tbl .hero__lead { font-size: var(--step-lead); color: var(--ink-muted); max-width: 34rem; line-height: 1.6; }
+.tbl .hero__actions { display: flex; flex-direction: column; gap: var(--s-4); margin-top: var(--s-6); align-items: flex-start; }
+.tbl .hero__cta { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.tbl .hero__proof { position: relative; z-index: 2; }
+.tbl .hero__proof .term { background: oklch(0.135 0 0 / 0.7); }
+
+/* ============================ Section scaffolding ============================ */
+.tbl .section-head { max-width: 46rem; margin-bottom: var(--s-7); }
+.tbl .section-title { font-size: var(--step-h2); letter-spacing: -0.025em; }
+.tbl .section-lead { font-size: var(--step-lead); color: var(--ink-muted); margin-top: var(--s-3); max-width: 40rem; }
+.tbl .run, .tbl .paths, .tbl .why { padding-block: clamp(3.5rem, 2rem + 4.5vw, 6rem); }
+.tbl .run { border-top: 1px solid var(--line); }
+/* Tighten the seam between "Start where you are" and "Why taboo" — the two
+   stacked section paddings otherwise leave an oversized gap. */
+.tbl .paths { padding-bottom: clamp(2rem, 1.2rem + 2vw, 3rem); }
+.tbl .why { padding-top: clamp(2rem, 1.2rem + 2vw, 3rem); }
+
+/* ============================ Steps ============================ */
+.tbl .steps { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(1.2rem, 0.4rem + 2vw, 2.2rem); }
+.tbl .step { display: flex; flex-direction: column; position: relative; }
+.tbl .step__no { font-family: var(--mono); font-size: 0.95rem; font-weight: 700; color: var(--accent-text); letter-spacing: 0.08em; margin-bottom: var(--s-3); }
+.tbl .step__title { font-size: var(--step-h3); margin-bottom: var(--s-2); }
+.tbl .step__text { color: var(--ink-muted); font-size: 0.95rem; margin-bottom: var(--s-4); min-height: 2.85em; }
+.tbl .window--sm .code, .tbl .window--sm .term { font-size: 0.8rem; padding: 0.85rem 0.95rem; line-height: 1.65; }
+
+/* ============================ Entry paths ============================ */
+.tbl .paths { border-top: 1px solid var(--line); }
+.tbl .paths__grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: clamp(1rem, 0.4rem + 1.4vw, 1.5rem); align-items: stretch; }
+.tbl .path {
+  display: flex; flex-direction: column;
+  background: var(--surface-1); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: clamp(1.3rem, 1rem + 1vw, 1.75rem);
+  transition: border-color 0.3s var(--ease-quint), transform 0.3s var(--ease-quint), background 0.3s ease;
+}
+.tbl .path:hover { border-color: var(--line-strong); transform: translateY(-3px); }
+.tbl .path--lead { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1.05fr; gap: clamp(1.5rem, 0.8rem + 2.2vw, 3rem); align-items: center; background: var(--surface-1); }
+.tbl .path__body { display: flex; flex-direction: column; }
+.tbl .path__kind { font-family: var(--mono); font-size: 0.76rem; letter-spacing: 0.06em; color: var(--ink-faint); text-transform: uppercase; }
+.tbl .path__title { font-size: var(--step-h3); margin-top: var(--s-2); }
+.tbl .path__text { color: var(--ink-muted); margin-top: var(--s-3); font-size: 0.96rem; }
+.tbl .path__link { margin-top: var(--s-4); align-self: flex-start; display: inline-flex; align-items: center; gap: 0.4rem; color: var(--accent-text); font-weight: 500; font-size: 0.8rem; }
+.tbl .path__link span { transition: transform 0.25s var(--ease-quint); }
+.tbl .path__link:hover span { transform: translateX(3px); }
+.tbl .path__list { list-style: none; padding: 0; margin-top: var(--s-4); display: grid; gap: 0.5rem; }
+.tbl .path__list a { color: var(--ink-muted); display: inline-flex; gap: 0.5rem; align-items: center; font-size: 0.8rem; line-height: 1.3; }
+.tbl .path__list a::before { content: "›"; color: var(--accent-text); }
+.tbl .path__list a:hover { color: var(--ink); }
+.tbl .path .copy--block { margin-top: var(--s-4); }
+
+/* ============================ Why ============================ */
+.tbl .reasons { display: grid; gap: 0; }
+.tbl .reason { display: grid; grid-template-columns: minmax(12rem, 0.8fr) 1.4fr; gap: clamp(1rem, 0.4rem + 2.5vw, 4rem); padding-block: clamp(1.6rem, 1rem + 1.5vw, 2.6rem); border-top: 1px solid var(--line); align-items: start; }
+.tbl .reason__title { font-size: clamp(1.3rem, 1.1rem + 0.9vw, 1.85rem); letter-spacing: -0.02em; }
+.tbl .reason__text { color: var(--ink-muted); font-size: var(--step-lead); line-height: 1.6; max-width: 56ch; }
+
+/* ============================ Final CTA ============================ */
+.tbl .cta { position: relative; padding-block: clamp(4rem, 3rem + 4vw, 7rem); text-align: center; overflow: hidden; border-top: 1px solid var(--line); }
+.tbl .cta__glow {
+  position: absolute; z-index: 1; pointer-events: none;
+  left: 50%; bottom: -55%; transform: translateX(-50%);
+  width: min(90vw, 820px); aspect-ratio: 1.6;
+  background: radial-gradient(ellipse at center, var(--glow), transparent 60%);
+  filter: blur(50px); opacity: 0.7;
+}
+.tbl .cta__inner { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: var(--s-6); }
+.tbl .cta__title { font-size: var(--step-h2); letter-spacing: -0.03em; max-width: 18ch; }
+.tbl .cta__actions { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; }
+
+/* ============================ Footer ============================ */
+.tbl-foot { border-top: 1px solid var(--line); padding-block: var(--s-8) var(--s-7); }
+.tbl .foot__grid { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: clamp(1.5rem, 0.5rem + 3vw, 4rem); }
+.tbl .foot__tag { color: var(--ink-muted); margin-top: var(--s-4); max-width: 34ch; font-size: 0.96rem; }
+.tbl .foot__meta { color: var(--ink-faint); margin-top: var(--s-4); font-size: 0.86rem; font-family: var(--mono); }
+.tbl .foot__col { display: flex; flex-direction: column; gap: 0.7rem; }
+.tbl .foot__h { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); font-weight: 700; margin-bottom: 0.2rem; }
+.tbl .foot__col a { color: var(--ink-muted); font-size: 0.95rem; width: fit-content; }
+.tbl .foot__col a:hover { color: var(--ink); }
+
+/* ============================ Motion: entrance ============================ */
+/* extra.js adds .tbl-reveal-ready once it's safe to animate; without JS,
+   everything stays visible (reveals enhance already-visible content). */
+.tbl.tbl-reveal-ready [data-reveal] { opacity: 0; transform: translateY(18px); }
+.tbl.tbl-reveal-ready [data-reveal].in {
+  opacity: 1; transform: none;
+  transition: opacity 0.7s var(--ease-expo), transform 0.8s var(--ease-expo);
+  transition-delay: calc(var(--i, 0) * 90ms);
+}
+.tbl.tbl-reveal-ready .t-line { opacity: 0; transform: translateY(4px); }
+.tbl.tbl-reveal-ready [data-reveal].in .t-line,
+.tbl.tbl-reveal-ready .hero__proof.in .t-line {
+  opacity: 1; transform: none;
+  transition: opacity 0.45s var(--ease-quint), transform 0.45s var(--ease-quint);
+  transition-delay: calc(0.5s + var(--t, 0) * 0.18s);
+}
+
+/* ============================ Responsive ============================ */
+@media (max-width: 960px) {
+  .tbl .hero__grid { grid-template-columns: 1fr; }
+  .tbl .hero__proof { order: 2; max-width: 38rem; }
+  .tbl .hero__copy { max-width: none; }
+  .tbl .steps { grid-template-columns: 1fr; gap: var(--s-5); }
+  .tbl .step__text { max-width: none; }
+  .tbl .step .window { margin-top: var(--s-2); }
+  .tbl .paths__grid { grid-template-columns: 1fr; }
+  .tbl .path--lead { grid-template-columns: 1fr; }
+  .tbl .reason { grid-template-columns: 1fr; gap: var(--s-3); }
+}
+@media (max-width: 620px) {
+  .tbl .foot__grid { grid-template-columns: 1fr 1fr; }
+  .tbl .foot__brand { grid-column: 1 / -1; }
+  .tbl .hero__cta { width: 100%; flex-direction: column; align-items: stretch; }
+  .tbl .hero__cta .btn { justify-content: center; }
+  .tbl .copy { width: 100%; }
+}
+
+/* ============================ Reduced motion ============================ */
+@media (prefers-reduced-motion: reduce) {
+  .tbl [data-reveal],
+  .tbl [data-reveal].in,
+  .tbl .t-line { opacity: 1 !important; transform: none !important; transition: none !important; }
+}

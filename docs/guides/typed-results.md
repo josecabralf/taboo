@@ -173,7 +173,7 @@ default:
 
 - [Iterate until the agent signals done](iterate-until-done.md) to attach an
   extractor to a loop.
-- [Structured output: generics and encoding/json](../adr/0002-structured-output-generics-encoding-json.md)
+- [Structured output: generics and encoding/json](https://github.com/josecabralf/taboo/blob/main/docs/adr/0002-structured-output-generics-encoding-json.md)
   for why the struct is the schema.
 - [Library API reference](../reference/library-api.md) for the signatures of
   `JSONResult`, `Option`, `WithStrictFields`, `WithDelimiters`, and `Validator`.

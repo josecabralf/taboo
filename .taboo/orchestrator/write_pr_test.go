@@ -40,6 +40,9 @@ type fakeWritePRGH struct {
 	editTitle string
 	editBody  string
 	editErr   error
+
+	readyRef string
+	readyErr error
 }
 
 func (f *fakeWritePRGH) CurrentBranch(_ context.Context) (string, error) {
@@ -71,6 +74,12 @@ func (f *fakeWritePRGH) EditPR(_ context.Context, prRef, title, body string) err
 	return f.editErr
 }
 
+func (f *fakeWritePRGH) MarkPRReady(_ context.Context, prRef string) error {
+	f.calls = append(f.calls, "MarkPRReady")
+	f.readyRef = prRef
+	return f.readyErr
+}
+
 // fakeWritePRRunner returns a writePRRunner that captures the vars and hands back
 // a canned, already-decoded prContent (or an error). The bridge threads the
 // JSONResult extractor into the run loop, so the fake returns a typed prContent
@@ -90,7 +99,7 @@ func TestWritePRCreatesPRFromAgentContent(t *testing.T) {
 	run := fakeWritePRRunner(&captured, prContent{Title: "Add write-pr", Body: "Body text"}, nil)
 
 	var buf bytes.Buffer
-	if err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", &buf, gh, run); err != nil {
+	if err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, &buf, gh, run); err != nil {
 		t.Fatalf("writePR returned error: %v", err)
 	}
 
@@ -124,7 +133,7 @@ func TestWritePRUpdatesExistingOpenPR(t *testing.T) {
 	run := fakeWritePRRunner(&captured, prContent{Title: "Updated title", Body: "Updated body"}, nil)
 
 	var buf bytes.Buffer
-	if err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", &buf, gh, run); err != nil {
+	if err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, &buf, gh, run); err != nil {
 		t.Fatalf("writePR returned error: %v", err)
 	}
 
@@ -157,7 +166,7 @@ func TestWritePRDefaultsToCurrentBranch(t *testing.T) {
 
 	var buf bytes.Buffer
 	// An empty branch argument means "use the branch currently checked out".
-	if err := writePR(context.Background(), t.TempDir(), "", &buf, gh, run); err != nil {
+	if err := writePR(context.Background(), t.TempDir(), "", false, &buf, gh, run); err != nil {
 		t.Fatalf("writePR returned error: %v", err)
 	}
 
@@ -180,7 +189,7 @@ func TestWritePRErrorsOnEmptyDiff(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{Title: "x"}, nil)
 
-	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want an error for an empty diff")
 	}
@@ -203,7 +212,7 @@ func TestWritePRErrorsOnEmptyTitle(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{Title: "  ", Body: "has a body but no title"}, nil)
 
-	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want an error for an empty title")
 	}
@@ -225,7 +234,7 @@ func TestWritePRSurfacesRunFailure(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{}, taboo.ErrNoResult)
 
-	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want a run error")
 	}
@@ -249,7 +258,7 @@ func TestWritePRRejectsUnresolvableBranch(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{Title: "x"}, nil)
 
-	err := writePR(context.Background(), t.TempDir(), "", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want an error for an unresolvable branch")
 	}
@@ -272,7 +281,7 @@ func TestWritePRSurfacesDiffError(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{Title: "x"}, nil)
 
-	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want the diff error surfaced")
 	}
@@ -291,7 +300,7 @@ func TestWritePRSurfacesPRLookupError(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{Title: "Add write-pr", Body: "Body"}, nil)
 
-	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want the PR-lookup error surfaced")
 	}
@@ -311,7 +320,7 @@ func TestWritePRSurfacesCreateError(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{Title: "Add write-pr", Body: "Body"}, nil)
 
-	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want the create error surfaced")
 	}
@@ -332,12 +341,112 @@ func TestWritePRSurfacesEditError(t *testing.T) {
 	var captured map[string]string
 	run := fakeWritePRRunner(&captured, prContent{Title: "Updated", Body: "Body"}, nil)
 
-	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", io.Discard, gh, run)
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, io.Discard, gh, run)
 	if err == nil {
 		t.Fatal("writePR returned nil, want the edit error surfaced")
 	}
 	if !strings.Contains(err.Error(), "update PR") {
 		t.Errorf("error = %q, want it to wrap the edit failure", err.Error())
+	}
+}
+
+func TestWritePRMarksReadyWhenRequested(t *testing.T) {
+	t.Parallel()
+
+	// The finalize path: an existing draft PR is refreshed in place, then flipped
+	// out of draft via MarkPRReady carrying that same PR's URL.
+	gh := &fakeWritePRGH{
+		diff:        "diff --git a/x b/x\n",
+		prForBranch: ghio.PR{Number: 7, URL: "https://github.com/o/r/pull/7"},
+		prFound:     true,
+	}
+	var captured map[string]string
+	run := fakeWritePRRunner(&captured, prContent{Title: "Updated title", Body: "Updated body"}, nil)
+
+	var buf bytes.Buffer
+	if err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", true, &buf, gh, run); err != nil {
+		t.Fatalf("writePR returned error: %v", err)
+	}
+
+	wantCalls := []string{"BranchDiff", "PRForBranch", "EditPR", "MarkPRReady"}
+	if strings.Join(gh.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Errorf("gh call order = %v, want %v (finalize must mark ready after the edit)", gh.calls, wantCalls)
+	}
+	if gh.readyRef != "https://github.com/o/r/pull/7" {
+		t.Errorf("MarkPRReady got %q, want the existing PR URL", gh.readyRef)
+	}
+	if got, want := buf.String(), "https://github.com/o/r/pull/7\n"; got != want {
+		t.Errorf("stdout = %q, want the existing PR URL %q", got, want)
+	}
+}
+
+func TestWritePRMarksReadyOnCreate(t *testing.T) {
+	t.Parallel()
+
+	// With no existing PR the branch's PR is created first, then marked ready
+	// carrying the freshly created URL.
+	gh := &fakeWritePRGH{diff: "diff --git a/x b/x\n", createURL: "https://github.com/o/r/pull/9"}
+	var captured map[string]string
+	run := fakeWritePRRunner(&captured, prContent{Title: "Add write-pr", Body: "Body text"}, nil)
+
+	var buf bytes.Buffer
+	if err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", true, &buf, gh, run); err != nil {
+		t.Fatalf("writePR returned error: %v", err)
+	}
+
+	wantCalls := []string{"BranchDiff", "PRForBranch", "CreatePR", "MarkPRReady"}
+	if strings.Join(gh.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Errorf("gh call order = %v, want %v (finalize must mark ready after the create)", gh.calls, wantCalls)
+	}
+	if gh.readyRef != "https://github.com/o/r/pull/9" {
+		t.Errorf("MarkPRReady got %q, want the created PR URL", gh.readyRef)
+	}
+	if got, want := buf.String(), "https://github.com/o/r/pull/9\n"; got != want {
+		t.Errorf("stdout = %q, want the created PR URL %q", got, want)
+	}
+}
+
+func TestWritePRSkipsReadyWhenNotRequested(t *testing.T) {
+	t.Parallel()
+
+	// Without --ready the PR is refreshed but left in draft: MarkPRReady is untouched.
+	gh := &fakeWritePRGH{
+		diff:        "diff --git a/x b/x\n",
+		prForBranch: ghio.PR{Number: 7, URL: "https://github.com/o/r/pull/7"},
+		prFound:     true,
+	}
+	var captured map[string]string
+	run := fakeWritePRRunner(&captured, prContent{Title: "Updated title", Body: "Updated body"}, nil)
+
+	var buf bytes.Buffer
+	if err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", false, &buf, gh, run); err != nil {
+		t.Fatalf("writePR returned error: %v", err)
+	}
+
+	wantCalls := []string{"BranchDiff", "PRForBranch", "EditPR"}
+	if strings.Join(gh.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Errorf("gh call order = %v, want %v (no ready flip when not requested)", gh.calls, wantCalls)
+	}
+}
+
+func TestWritePRReturnsErrorWhenMarkReadyFails(t *testing.T) {
+	t.Parallel()
+
+	gh := &fakeWritePRGH{
+		diff:        "diff --git a/x b/x\n",
+		prForBranch: ghio.PR{Number: 7, URL: "https://github.com/o/r/pull/7"},
+		prFound:     true,
+		readyErr:    errors.New("gh pr ready failed"),
+	}
+	var captured map[string]string
+	run := fakeWritePRRunner(&captured, prContent{Title: "Updated", Body: "Body"}, nil)
+
+	err := writePR(context.Background(), t.TempDir(), "issue-82-afk-write-pr", true, io.Discard, gh, run)
+	if err == nil {
+		t.Fatal("writePR returned nil, want the mark-ready error surfaced")
+	}
+	if !strings.Contains(err.Error(), "mark PR ready") {
+		t.Errorf("error = %q, want it to wrap the mark-ready failure", err.Error())
 	}
 }
 

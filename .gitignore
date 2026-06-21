@@ -38,3 +38,6 @@ go.work.sum
 .taboo/worktrees/
 .taboo-plan.md
 .taboo-review.json
+
+# Docs site (Material for MkDocs) — rendered output, never committed
+site/

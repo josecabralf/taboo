@@ -77,7 +77,7 @@ func main() {
 }
 
 // usage summarizes the orchestrator's subcommands.
-const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>] | afk update-branch --pr <n> | afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run] | afk to-issues --issue <n>"
+const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>] [--ready] | afk update-branch --pr <n> | afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run] | afk to-issues --issue <n>"
 
 // run dispatches to a subcommand: "implement", "review", "plan", "write-pr",
 // "to-issues", "update-branch" or "loop".
@@ -163,12 +163,14 @@ func runPlan(ctx context.Context, args []string) error {
 }
 
 // runWritePR parses the write-pr subcommand's flags (--branch defaults to the
-// current branch) and wires the production gh and taboo seams into writePR. The
-// typed bridge taboo.RunWorkflowAs[prContent] decodes the agent's <result> block
-// into a prContent in-loop.
+// current branch; --ready marks the PR ready for review after refreshing it —
+// the finalize behavior) and wires the production gh and taboo seams into
+// writePR. The typed bridge taboo.RunWorkflowAs[prContent] decodes the agent's
+// <result> block into a prContent in-loop.
 func runWritePR(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("write-pr", flag.ContinueOnError)
 	branch := fs.String("branch", "", "branch to open a PR for (default: the current branch)")
+	ready := fs.Bool("ready", false, "after refreshing the PR, mark it ready for review (un-draft); already-ready is a no-op")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -176,7 +178,7 @@ func runWritePR(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
-	return writePR(ctx, startDir, *branch, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[prContent])
+	return writePR(ctx, startDir, *branch, *ready, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[prContent])
 }
 
 // runToIssues parses the to-issues subcommand's flags, enforces --issue before
