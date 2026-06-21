@@ -1,40 +1,77 @@
 # Dogfooding the agent loop
 
 taboo drives its own development. Label an issue and an agent implements it;
-label the resulting pull request and an agent reviews it. The whole loop is built
-out of two GitHub Actions, two prompt files, two skills, and the existing
-`taboo run` command — taboo core gains nothing. This page explains why the loop
-is shaped the way it is, and where its trust boundary sits. For how a single run
-works underneath, see the [isolation model](isolation-model.md).
+label the resulting pull request and an agent reviews it. The loop that does this
+is itself built on the thing taboo ships — the `taboo` library — so the flagship
+pipeline is the library's own reference consumer. This page explains why the loop
+is shaped the way it is, and where its trust boundary sits. For the command
+surface — every `afk` subcommand and flag — see the
+[afk reference](../reference/afk.md); for how a single run works underneath, see
+the [isolation model](isolation-model.md).
 
-## Two workflows and a label state machine
+## A Go orchestrator on the taboo library
 
-The loop is two label-triggered workflows in `.github/workflows/`:
+The orchestration is a small Go application — the `afk` ("away from keyboard")
+binary at `.taboo/orchestrator/`. It is not the `taboo` CLI and it is not new
+library code: it is an ordinary, unit-tested *consumer* of `taboo`, the same way
+an external integrator would build a pipeline. Each step of the loop is a
+subcommand:
 
-- `agent-implement.yml` fires on an issue gaining the `agent:implement` label.
-- `agent-review.yml` fires on a pull request gaining the `agent:review` label.
+- `afk implement --issue N` — fetch the issue, run the agent, push the branch,
+  open a draft PR, hand off to review.
+- `afk review --pr N` — fetch the PR diff, run the review agent, post one review.
+- `afk write-pr [--ready]` — (re)compose a PR description from a branch's diff;
+  with `--ready`, the finalize step that lifts the draft.
+- `afk update-branch --pr N` — merge `main` into a PR's branch and validate.
+- `afk to-issues --issue N` — decompose a PRD issue into ready child issues.
+- `afk loop` — the master orchestrator that drains the backlog (below).
 
-Four labels carry the state. Applying `agent:implement` to an issue claims it:
-the implement workflow swaps the issue to `agent:in-progress`, runs
-`taboo run implement` (Claude Code / Opus) inside a workshop on the runner,
-pushes the agent's branch, opens a draft PR whose body is the agent's plan, and
-labels that PR `agent:review`. The review workflow swaps the PR to
-`agent:in-progress`, runs the `afk review` orchestrator (Claude Code / Opus),
-posts a single PR review, and clears the label. On either side a failure adds
-`agent:blocked` and comments a run link plus a retry hint; re-adding the trigger
-label retries.
+The runs themselves go onto taboo through two bridge one-liners. `afk implement`
+calls `taboo.RunWorkflow`, which discovers `.taboo/taboo.yaml`, resolves the
+named workflow into a plan, and drives the run. The flows that need a structured
+answer back — `review`, `write-pr`, `update-branch`, `to-issues` — call the
+typed bridge `taboo.RunWorkflowAs[T]`, which threads a JSON extractor into the
+run so the agent's `<result>` block comes back as a statically typed value with
+no caller-side parsing. `afk loop` fans those runs out across a wave of issues
+with `taboo.Pool`, bounded-parallel. The orchestrator never re-implements
+worktrees, workshops, or completion detection — it consumes taboo's contract and
+adds only the GitHub-shaped glue around it. The decision to build the loop this
+way, rather than as bash around the `taboo run` CLI, is
+[ADR 0010](https://github.com/josecabralf/taboo/blob/main/docs/adr/0010-go-orchestrator-on-pkg-taboo.md).
+
+## Labels are the state machine; `loop` drains the backlog
+
+The loop is label-triggered. The workflows in `.github/workflows/` —
+`agent-implement.yml`, `agent-review.yml`, `agent-finalize.yml` — fire on a label
+event and do nothing but check out, set up the workshop, plumb tokens, claim the
+issue/PR with the `agent:in-progress`/`agent:blocked` bookkeeping, and run the
+`afk` binary; all the real orchestration is inside Go. Applying `agent:implement`
+to an issue claims it: the workflow swaps it to `agent:in-progress`, runs
+`afk implement`, and the orchestrator pushes the branch, opens a draft PR whose
+body is the agent's plan, and labels that PR `agent:review`. The review workflow
+swaps the PR to `agent:in-progress`, runs `afk review`, posts one review, and
+clears the label. On either side a failure adds `agent:blocked` and a run-link
+comment; re-adding the trigger label retries.
 
 The chain from implement to review — and CI on the resulting PR — is automatic,
-but only because the implement workflow opens the PR and applies the
-`agent:review` label with a personal access token rather than the default
-`GITHUB_TOKEN`. An event created with `GITHUB_TOKEN` does not trigger another
-workflow — GitHub suppresses that to prevent recursive runs. So the cascade
-depends on `secrets.AGENT_PAT`; without it the PR is opened and labelled but
-nothing downstream fires — neither the PR's CI nor the review workflow wakes up.
-This is the single non-obvious wiring fact in the whole loop, and the one-time
-setup below calls it out.
+but only because the implement flow applies the `agent:review` label with a
+personal access token rather than the default `GITHUB_TOKEN`. An event created
+with `GITHUB_TOKEN` does not trigger another workflow — GitHub suppresses that to
+prevent recursive runs. So the cascade depends on `secrets.AGENT_PAT`; without it
+the PR is opened and labelled but nothing downstream fires — neither the PR's CI
+nor the review workflow wakes up. This is the single non-obvious wiring fact in
+the whole loop, and the one-time setup below calls it out.
 
-## Why the boundary is "scaffolding only"
+`afk loop` is the same machine run autonomously. Where `implement` drives one
+issue, `loop` drains the whole `ready-for-agent` backlog wave by wave: each wave
+it plans the next parallel-safe batch, *claims* every issue in it (removing
+`ready-for-agent`, adding `agent:in-progress`) so a later wave can never
+re-select one in flight, fans the implement flow out across the batch through
+`taboo.Pool`, and settles each run — success releases the in-progress label, a
+failure also adds `agent:blocked` with a diagnostic comment. It repeats up to
+`--max-iterations` waves; an empty plan means the queue is drained and it stops.
+
+## The trust boundary: GitHub I/O is on the host, the agent is push-denied
 
 taboo's contract is to run an agent inside a workshop and land its commits on a
 host branch. It denies `git push` from inside the workshop, by design, because a
@@ -42,27 +79,58 @@ linked worktree shares the host repository's object store and a push could mutat
 host branches directly (see [the isolation model](isolation-model.md)). That deny
 is the load-bearing reason the loop is split the way it is.
 
-Everything GitHub-shaped lives on the host, in the workflow YAML, not in taboo
-and not in the agent:
+Everything GitHub-shaped lives on the host, in the Go orchestrator, not in the
+workshop and not in the agent:
 
 - The **agent** explores, plans, does TDD, and commits in place. It never
   fetches an issue, pushes a branch, opens a PR, or posts a comment.
-- The **workflow** does all of that: it fetches the issue body, computes the
-  branch name, builds the variables file, invokes `taboo run`, pushes the branch,
-  opens the draft PR, labels it, and (on the review side) posts the review.
+- The **orchestrator** does all of that, in Go: issue/diff fetch, branch name,
+  prompt-variable injection, the `taboo` run, the branch push, the draft PR, the
+  labels, and the posted review. Every `gh`/`git` side effect funnels through one
+  package, `internal/ghio`, behind a fakeable seam — so the whole loop is
+  unit-tested and runs locally, not scripted in untestable workflow YAML.
 
-This keeps taboo core frozen. The loop is config (`taboo.yaml`), prompts
-(`.taboo/prompts/`), skills (`.agents/skills/`), and two Actions — no new
-push-or-GitHub code anywhere in `pkg/taboo`. If you wanted a different host (say
-GitLab), you would rewrite the workflow layer and leave taboo untouched.
+This keeps taboo *core* frozen: the orchestrator adds no push-or-GitHub code to
+the `taboo` library — it is a consumer of it. The library still only runs an
+agent in a workshop and lands commits; the host still owns publishing. If you
+wanted a different host (say GitLab), you would rewrite `internal/ghio` and leave
+`taboo` untouched.
 
 Inputs reach the agent through taboo's variable substitution, never through the
-shell. The workflows build a JSON variables file and pass it with
-`taboo run --vars-file`. taboo fills the prompt's `{{VAR}}` placeholders from
-that file literally, so an issue body full of backticks, `$()`, or quotes is
-injected as data and cannot be interpreted as a command (issue #61). An undefined
-placeholder when variables are supplied is a hard error, which is why each prompt
-declares exactly the variable set its workflow provides.
+shell. The orchestrator builds a variables map and the run fills the prompt's
+`{{VAR}}` placeholders from it literally (`taboo.Substitute`), so an issue body
+full of backticks, `$()`, or quotes is injected as data and cannot be
+interpreted as a command (issue #61). An undefined placeholder when variables are
+supplied is a hard error, which is why each prompt declares exactly the variable
+set its flow provides.
+
+## One config drives both the CLI and the orchestrator
+
+There is exactly one `.taboo/taboo.yaml`, and it is the single source of truth
+for both `taboo run` on the command line and `afk` as a library consumer. The
+workshop, the agent profile, the model, the prompt files, and the
+iteration/timeout/completion-signal knobs all resolve from that one file. When
+`afk implement` runs the `implement` workflow, it discovers and loads the *same*
+config a developer running `taboo run implement` by hand would — there is no
+orchestrator-specific configuration and no second place for loop settings to
+drift out of sync. Dogfooding is honest precisely because the autonomous loop and
+the manual CLI read identical config.
+
+## Why `afk` is a nested module under `.taboo/`
+
+`afk` is a **nested** Go module — `module afk` at `.taboo/orchestrator/`, with a
+`replace github.com/josecabralf/taboo => ../..` pinning it to the in-tree
+library. It has to be nested under a dot-directory: Go tooling ignores
+directories beginning with `.`, so the root module's `./...` (and therefore
+`make build/test`) cannot see it. That isolation is the point — the example's
+surface and its own `main` stay out of the library's public module, while
+`replace` keeps it building against the very taboo in the same tree.
+
+The cost is two ergonomic quirks: it is **not** `go run`-able from the repo root
+(Go excludes nested modules), and because `./...` skips it, CI must build/vet/test
+it with a dedicated step. The [afk reference](../reference/afk.md) covers how to
+invoke it; [ADR 0010](https://github.com/josecabralf/taboo/blob/main/docs/adr/0010-go-orchestrator-on-pkg-taboo.md)
+records the decision in full.
 
 ## The agent self-validates; the PR's CI is the gate
 
@@ -90,7 +158,7 @@ quality before the PR exists; CI is what proves the change on the way to merge.
 
 Self-validation does not touch the trust boundary. Running `make` needs no GitHub
 access and no push — the agent is still push-denied and still works only inside
-its workshop, and the host workflow still owns every GitHub side effect.
+its workshop, and the host orchestrator still owns every GitHub side effect.
 
 ## Inline comments are dropped, not errored
 
@@ -124,13 +192,14 @@ our own implement agent on a branch we control. The review workflow consumes the
 with write-scoped tokens because it has to post a review, and it does so trusting
 that a maintainer's label vouched for them.
 
-This is **not hardened for untrusted public forks.** The review workflow uses
-`pull_request_target`, which runs with the base repository's secrets even for a
-fork's PR. On a repository that accepts drive-by fork PRs, a labeller could be
-tricked into running agent code with access to `CLAUDE_CODE_OAUTH_TOKEN` and
-`AGENT_PAT` — the classic `pull_request_target` secret-exfiltration footgun. The
-loop assumes a trusted-contributor repository where everyone who can label is
-already trusted with secrets. Hardening it for open public contribution (forks,
+This is **not hardened for untrusted public forks.** The review and finalize
+workflows use `pull_request_target`, which runs with the base repository's
+secrets even for a fork's PR. On a repository that accepts drive-by fork PRs, a
+labeller could be tricked into running agent code with access to the agent
+credential (`CLAUDE_CODE_OAUTH_TOKEN`) those jobs expose — the classic
+`pull_request_target` secret-exfiltration footgun. The loop assumes a
+trusted-contributor repository where everyone who can label is already trusted
+with secrets. Hardening it for open public contribution (forks,
 sandboxed review of untrusted diffs, scoped-down tokens) is a separate project,
 not part of this loop.
 
@@ -152,9 +221,10 @@ Before the loop can run, a repository admin sets up four things by hand:
   read/write`, `Issues: read/write` (labels go through the issues API), and the
   baseline `Metadata: read` — or, better, a short-lived **GitHub App** token
   (`actions/create-github-app-token`). The identity must have write access to the
-  repo. A classic `repo`-scoped PAT works too but is far broader than needed, and
-  this credential is exposed in the `pull_request_target` review job, so the
-  narrowest scope wins.
+  repo. A classic `repo`-scoped PAT works too but is far broader than needed; this
+  is a long-lived, write-capable credential, so the narrowest scope wins. It is
+  used only by `agent-implement` (an `issues`-triggered job), not by the
+  `pull_request_target` review and finalize jobs.
 - **Confirm Actions permissions:** GitHub Actions must be allowed to push
   branches, open and label pull requests, and post reviews (workflow `contents`,
   `issues`, and `pull-requests` write permissions, plus repository settings that
@@ -165,6 +235,10 @@ to end.
 
 ## See also
 
+- [afk reference](../reference/afk.md) — every orchestrator subcommand, its
+  flags, and the environment it needs.
+- [ADR 0010](https://github.com/josecabralf/taboo/blob/main/docs/adr/0010-go-orchestrator-on-pkg-taboo.md)
+  — the decision to build the loop as a Go orchestrator on the library.
 - [The isolation model](isolation-model.md) — push-denied workshops and why the
   host owns integration.
 - [Why the API is shaped this way](design.md)
