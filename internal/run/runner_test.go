@@ -567,7 +567,7 @@ func TestSetup_BaseRefFetchesAndStartsWorktreeFromRef(t *testing.T) {
 
 	// The worktree branch starts at the base ref's tip (the start-point trailing arg).
 	wtAdd := fc.findCallN(t, "worktree", 0)
-	wantAdd := []string{"-C", cfg.RepoPath, "worktree", "add", "-b", "agent/update-pr-12", res.WorktreePath, "origin/feature-x"}
+	wantAdd := []string{"-C", cfg.RepoPath, "worktree", "add", "-b", "agent/update-pr-12", res.handle.worktreePath, "origin/feature-x"}
 	if !slices.Equal(wtAdd.Args, wantAdd) {
 		t.Errorf("worktree add args = %v, want %v", wtAdd.Args, wantAdd)
 	}
@@ -599,7 +599,7 @@ func TestSetup_NoBaseRefSkipsFetchAndStartPoint(t *testing.T) {
 		t.Errorf("verbs %v contains fetch; the default path must not fetch", fc.verbs())
 	}
 	wtAdd := fc.findCallN(t, "worktree", 0)
-	wantAdd := []string{"-C", cfg.RepoPath, "worktree", "add", "-b", "agent/plain", res.WorktreePath}
+	wantAdd := []string{"-C", cfg.RepoPath, "worktree", "add", "-b", "agent/plain", res.handle.worktreePath}
 	if !slices.Equal(wtAdd.Args, wantAdd) {
 		t.Errorf("worktree add args = %v, want %v (no start-point)", wtAdd.Args, wantAdd)
 	}
@@ -649,7 +649,7 @@ func TestRun_PerRunSequence(t *testing.T) {
 	// Assert the whole remount argv against the builder the production path uses
 	// (its flag layout is pinned by TestWorkshopArgs), so this test stays about
 	// wiring the right plug+source rather than positional argument shape.
-	wantWs := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "workspace", res.WorktreePath)
+	wantWs := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "workspace", res.handle.worktreePath)
 	if got := fc.findCallN(t, "remount", 0).Args; !slices.Equal(got, wantWs) {
 		t.Errorf("workspace remount args =\n  %v\nwant\n  %v", got, wantWs)
 	}
@@ -676,8 +676,8 @@ func TestRun_PerRunSequence(t *testing.T) {
 	if !slices.Contains(wtAdd.Args, "agent/skeleton") {
 		t.Errorf("worktree add missing branch: %v", wtAdd.Args)
 	}
-	if !slices.Contains(wtAdd.Args, res.WorktreePath) {
-		t.Errorf("worktree add missing worktree path %q: %v", res.WorktreePath, wtAdd.Args)
+	if !slices.Contains(wtAdd.Args, res.handle.worktreePath) {
+		t.Errorf("worktree add missing worktree path %q: %v", res.handle.worktreePath, wtAdd.Args)
 	}
 
 	// exec carries the agent command + prompt, env keys, and /taboo/workspace cwd.
@@ -796,8 +796,8 @@ func TestRun_ForkReachesExecAndAllocatesNewWorktree(t *testing.T) {
 	if !slices.Contains(wtAdd.Args, "fork/divergent") {
 		t.Errorf("fork did not allocate a worktree on the fork branch: %v", wtAdd.Args)
 	}
-	if !slices.Contains(wtAdd.Args, res.WorktreePath) {
-		t.Errorf("fork worktree path %q missing from worktree add: %v", res.WorktreePath, wtAdd.Args)
+	if !slices.Contains(wtAdd.Args, res.handle.worktreePath) {
+		t.Errorf("fork worktree path %q missing from worktree add: %v", res.handle.worktreePath, wtAdd.Args)
 	}
 }
 
@@ -934,12 +934,63 @@ func TestRun_CapturesCommit(t *testing.T) {
 
 	// rev-parse runs against the worktree, after exec.
 	rp := fc.findCallN(t, "rev-parse", 0)
-	if !slices.Contains(rp.Args, res.WorktreePath) {
-		t.Errorf("rev-parse not run against worktree %q: %v", res.WorktreePath, rp.Args)
+	if !slices.Contains(rp.Args, res.handle.worktreePath) {
+		t.Errorf("rev-parse not run against worktree %q: %v", res.handle.worktreePath, rp.Args)
 	}
 	verbs := fc.verbs()
 	if verbs[len(verbs)-1] != "rev-parse" {
 		t.Errorf("rev-parse should be last; sequence = %v", verbs)
+	}
+}
+
+// TestExec_RevParseReadsHandle pins that Exec's rev-parse captures the worktree
+// path from the result's handle. The handle is the sole source of truth for the
+// worktree path (#119 removed the public field); a result whose handle points
+// somewhere specific must have its rev-parse run against exactly that path.
+func TestExec_RevParseReadsHandle(t *testing.T) {
+	fc := &fakeCommander{
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "rev-parse" {
+				return "deadbeefcafe\n"
+			}
+			return ""
+		},
+	}
+	r := New(testConfig(t), fc)
+
+	const handlePath = "/handle/worktree"
+	base := RunResult{
+		Branch: "agent/x",
+		handle: &runResultHandle{worktreePath: handlePath},
+	}
+
+	res, err := r.Exec(context.Background(), RunRequest{Prompt: "go"}, base)
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if res.Commit != "deadbeefcafe" {
+		t.Errorf("Commit = %q, want deadbeefcafe", res.Commit)
+	}
+
+	rp := fc.findCallN(t, "rev-parse", 0)
+	if !slices.Contains(rp.Args, handlePath) {
+		t.Errorf("rev-parse not run against handle path %q: %v", handlePath, rp.Args)
+	}
+}
+
+// TestExec_NilHandleErrors pins that Exec rejects a hand-built result with no
+// worktree handle rather than rev-parsing against an empty path. Setup always
+// populates the handle; this guards callers who construct a RunResult directly.
+func TestExec_NilHandleErrors(t *testing.T) {
+	fc := &fakeCommander{}
+	r := New(testConfig(t), fc)
+
+	_, err := r.Exec(context.Background(), RunRequest{Prompt: "go"}, RunResult{Branch: "agent/x"})
+	if err == nil {
+		t.Fatal("Exec with nil handle: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "worktree handle") {
+		t.Errorf("error = %q, want it to mention the missing worktree handle", err)
 	}
 }
 

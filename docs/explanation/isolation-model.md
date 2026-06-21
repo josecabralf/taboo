@@ -166,7 +166,8 @@ repo-not-under-`/tmp` constraint, which already existed for the git-common mount
 
 Setup creates a worktree; nothing on the run path removes it. `Runner.Run`,
 `Setup`, `Exec`, the orchestrator loop, and `Pool.Run` all leave the worktree on
-disk after they return, and `RunResult.WorktreePath` keeps pointing at it. This is
+disk after they return, and the `RunResult`'s worktree handle keeps pointing at
+it (read its files with `res.Artifact(relpath)`). This is
 deliberate: the commit lives in the shared `.git`, so a finished run has nothing
 left to extract from the working directory, but the directory itself is not
 reaped. A long-running session, a daemon, or a `Pool` that fans many runs out
