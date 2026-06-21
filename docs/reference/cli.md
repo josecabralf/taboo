@@ -152,7 +152,6 @@ With `--json`, stdout carries an indented JSON object (`jsonRunResult`):
 {
   "branch": "taboo/fix-20260617-101500-000000001",
   "commit": "1f3c9ab",
-  "worktree": "/home/you/project/.taboo/worktrees/taboo-fix-20260617-101500-000000001",
   "output": "captured agent stdout",
   "iterations": 1,
   "stopReason": "max-iterations"
