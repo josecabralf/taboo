@@ -295,9 +295,8 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 
 // gitCapture runs a git command and returns its trimmed stdout.
 func (r *Runner) gitCapture(ctx context.Context, args []string) (string, error) {
-	var buf strings.Builder
-	err := r.cmd.Run(ctx, exec.Cmd{Name: "git", Args: args, Stdout: &buf})
-	return strings.TrimSpace(buf.String()), err
+	out, err := exec.Output(ctx, r.cmd, exec.Cmd{Name: "git", Args: args})
+	return strings.TrimSpace(out), err
 }
 
 // ensureWorkshop reconciles the long-lived workshop with the just-derived

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	osexec "os/exec"
+	"strings"
 )
 
 // Cmd is a single host-side process invocation (workshop or git).
@@ -31,6 +32,16 @@ type execCommander struct{}
 // NewExecCommander returns a Commander that runs commands as real host
 // processes.
 func NewExecCommander() Commander { return execCommander{} }
+
+// Output runs cmd with a fresh stdout buffer and returns the raw captured
+// stdout together with the run error. The string is untrimmed: callers that
+// need trimming do it themselves. Any Stdout already set on cmd is overwritten.
+func Output(ctx context.Context, c Commander, cmd Cmd) (string, error) {
+	var buf strings.Builder
+	cmd.Stdout = &buf
+	err := c.Run(ctx, cmd)
+	return buf.String(), err
+}
 
 func (execCommander) Run(ctx context.Context, c Cmd) error {
 	// Running caller-supplied commands is this type's entire purpose; the

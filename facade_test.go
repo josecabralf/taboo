@@ -12,6 +12,7 @@ package taboo_test
 //   - JSONResult[T] round-trips a typed value out of a delimited block.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -106,6 +107,29 @@ func TestFacade_SentinelsMatchAcrossBoundary(t *testing.T) {
 		if !errors.Is(wrapped, sentinel) {
 			t.Errorf("errors.Is(wrapped, %v) = false, want true", sentinel)
 		}
+	}
+}
+
+// fakeOutputCommander is a Commander declared OUTSIDE the taboo package. Storing
+// it in a taboo.Commander var only compiles if taboo.Commander / taboo.Cmd are
+// `=` aliases of the internal types, so this also exercises the alias-identity
+// invariant across the package boundary — here for the exec seam's Output wrapper.
+type fakeOutputCommander struct{ canned string }
+
+func (f fakeOutputCommander) Run(_ context.Context, c taboo.Cmd) error {
+	_, _ = c.Stdout.Write([]byte(f.canned))
+	return nil
+}
+
+func TestFacade_OutputCapturesStdoutAcrossBoundary(t *testing.T) {
+	var fake taboo.Commander = fakeOutputCommander{canned: "deadbeef\n"}
+
+	out, err := taboo.Output(context.Background(), fake, taboo.Cmd{Name: "git", Args: []string{"rev-parse", "HEAD"}})
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out != "deadbeef\n" {
+		t.Errorf("Output = %q, want %q", out, "deadbeef\n")
 	}
 }
 
