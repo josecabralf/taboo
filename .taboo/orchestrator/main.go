@@ -9,10 +9,14 @@
 // batch of them as JSON. The "write-pr" subcommand computes a branch's diff
 // against main, runs the write-pr workflow for a structured {title, body}
 // <result>, and opens a PR for the branch — updating the branch's existing open
-// PR instead of opening a duplicate when one is already present. All GitHub/git
-// I/O funnels through internal/ghio; the taboo runs go through the taboo bridge
-// one-liners taboo.RunWorkflow / taboo.RunWorkflowAs (config discovery +
-// resolution + run).
+// PR instead of opening a duplicate when one is already present. The "loop"
+// subcommand is the master orchestrator: it drains the ready-for-agent backlog in
+// bounded-parallel waves via taboo.Pool, planning a parallel-safe batch and
+// fanning the implement workflow out across it each wave, and driving every issue
+// through the agent:in-progress / agent:blocked label state machine. All
+// GitHub/git I/O funnels through internal/ghio; the taboo runs go through the
+// taboo bridge one-liners taboo.RunWorkflow / taboo.RunWorkflowAs (config
+// discovery + resolution + run).
 // In CI it is built inside its own module and run from the repo root (it cannot
 // be `go run` from the parent module, which excludes nested modules); see
 // .github/workflows/agent-implement.yml and agent-review.yml.
@@ -64,9 +68,10 @@ func main() {
 }
 
 // usage summarizes the orchestrator's subcommands.
-const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>]"
+const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>] | afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run]"
 
-// run dispatches to a subcommand: "implement", "review", "plan" or "write-pr".
+// run dispatches to a subcommand: "implement", "review", "plan", "write-pr" or
+// "loop".
 func run(args []string) error {
 	if len(args) == 0 {
 		return errors.New(usage)
@@ -80,6 +85,8 @@ func run(args []string) error {
 		return runPlan(context.Background(), args[1:])
 	case "write-pr":
 		return runWritePR(context.Background(), args[1:])
+	case "loop":
+		return runLoop(context.Background(), args[1:])
 	default:
 		return fmt.Errorf("unknown command %q (%s)", args[0], usage)
 	}
@@ -157,6 +164,50 @@ func runWritePR(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 	return writePR(ctx, startDir, *branch, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[prContent])
+}
+
+// runLoop parses the loop subcommand's flags and wires the production gh, plan,
+// resolve, and pool seams into loop. It is the master orchestrator: it drains the
+// ready-for-agent backlog wave by wave, fanning the implement workflow out across
+// each parallel-safe batch through taboo.Pool.
+func runLoop(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("loop", flag.ContinueOnError)
+	maxIterations := fs.Int("max-iterations", defaultLoopMaxIterations, "maximum plan→fan-out waves before stopping")
+	parallelism := fs.Int("parallelism", defaultLoopParallelism, "maximum concurrent implement runs per wave")
+	dryRun := fs.Bool("dry-run", false, "print the selected plan without launching any agent")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+
+	gh := ghio.New(ghio.NewExec())
+	planBatch := func(ctx context.Context, dir string) ([]planItem, error) {
+		return selectBatch(ctx, dir, gh, taboo.RunWorkflowAs[[]planItem])
+	}
+	resolve := func(dir, workflow string, vars map[string]string, ov taboo.PlanOverrides) (*taboo.Plan, error) {
+		path, found := taboo.FindConfig(dir)
+		if !found {
+			return nil, fmt.Errorf("no taboo.yaml found from %s", dir)
+		}
+		cfg, err := taboo.LoadConfig(path)
+		if err != nil {
+			return nil, err
+		}
+		return cfg.Plan(filepath.Dir(path), workflow, vars, ov)
+	}
+	runPool := func(ctx context.Context, cfg taboo.Config, limit int, cmd taboo.Commander, reqs []taboo.RunRequest) ([]taboo.RunResult, error) {
+		return taboo.NewPool(cfg, limit, cmd).Run(ctx, reqs)
+	}
+
+	return loop(ctx, startDir, loopOptions{
+		maxIterations: *maxIterations,
+		parallelism:   *parallelism,
+		dryRun:        *dryRun,
+	}, os.Stdout, gh, planBatch, resolve, runPool)
 }
 
 // implement is the testable core of the implement subcommand: it fetches the

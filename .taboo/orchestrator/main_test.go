@@ -163,6 +163,23 @@ func TestRunImplementRequiresIssueBeforeIO(t *testing.T) {
 	}
 }
 
+func TestRunLoopDispatchesAndParsesFlags(t *testing.T) {
+	t.Parallel()
+
+	// An unknown flag must surface as a flag-parse error from runLoop's own
+	// FlagSet, which proves the loop case is wired into run's switch (not falling
+	// through to the unknown-command branch) and that runLoop parses its flags
+	// before any working-directory or gh I/O. Keeping the assertion on the parse
+	// error keeps the test hermetic — no real wave is ever driven.
+	err := run([]string{"loop", "--bogus-flag"})
+	if err == nil {
+		t.Fatal(`run(["loop", "--bogus-flag"]) returned nil, want a flag-parse error`)
+	}
+	if strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("error = %q, want a flag-parse error, not the unknown-command branch", err.Error())
+	}
+}
+
 func TestRunReviewRequiresPRBeforeIO(t *testing.T) {
 	t.Parallel()
 

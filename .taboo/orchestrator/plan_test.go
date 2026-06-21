@@ -22,6 +22,7 @@ import (
 type fakePlanGH struct {
 	calls       []string
 	by          map[string][]ghio.Issue
+	errBy       map[string]error
 	states      map[int]string
 	stateErr    map[int]error
 	stateLookup []int
@@ -29,6 +30,9 @@ type fakePlanGH struct {
 
 func (f *fakePlanGH) ListOpenIssuesByLabel(_ context.Context, label string) ([]ghio.Issue, error) {
 	f.calls = append(f.calls, label)
+	if err, ok := f.errBy[label]; ok {
+		return nil, err
+	}
 	if issues, ok := f.by[label]; ok {
 		return issues, nil
 	}
@@ -246,6 +250,104 @@ func TestPlanSurfacesDependencyLookupError(t *testing.T) {
 	}
 	if !strings.HasPrefix(err.Error(), "check dependencies for #1: ") {
 		t.Errorf("error = %q, want it to start with %q", err.Error(), "check dependencies for #1: ")
+	}
+}
+
+func TestSelectBatchDerivesTitleAndBranchFromCandidate(t *testing.T) {
+	t.Parallel()
+
+	// The candidate's canonical title and number live here, not in the agent echo.
+	gh := &fakePlanGH{by: map[string][]ghio.Issue{
+		readyLabel: {{Number: 7, Title: "Fix the Whatsit!", Body: "x"}, {Number: 2, Title: "b", Body: "y"}},
+	}}
+	// The agent echoes a stale title and a bogus branch; selectBatch must ignore
+	// both and re-derive them from the candidate via slugBranch, so the branch has
+	// one source of truth shared with the implement flow.
+	run := fakePlanRunner(new(map[string]string), []planItem{
+		{Number: 7, Title: "wrong echo", Branch: "garbage-branch"},
+	}, nil)
+
+	got, err := selectBatch(context.Background(), t.TempDir(), gh, run)
+	if err != nil {
+		t.Fatalf("selectBatch returned error: %v", err)
+	}
+
+	want := planItem{Number: 7, Title: "Fix the Whatsit!", Branch: slugBranch(7, "Fix the Whatsit!")}
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("items = %+v, want %+v (title+branch from the candidate, not the agent echo)", got, want)
+	}
+}
+
+func TestSelectBatchDropsUnknownSelectedNumber(t *testing.T) {
+	t.Parallel()
+
+	gh := &fakePlanGH{by: map[string][]ghio.Issue{
+		readyLabel: {{Number: 1, Title: "a", Body: "x"}},
+	}}
+	// The agent picks #1 (a real candidate) and #99 (invented). The invention is
+	// dropped rather than trusted.
+	run := fakePlanRunner(new(map[string]string), []planItem{
+		{Number: 1, Title: "a"},
+		{Number: 99, Title: "hallucinated"},
+	}, nil)
+
+	got, err := selectBatch(context.Background(), t.TempDir(), gh, run)
+	if err != nil {
+		t.Fatalf("selectBatch returned error: %v", err)
+	}
+
+	want := planItem{Number: 1, Title: "a", Branch: slugBranch(1, "a")}
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("items = %+v, want exactly %+v (the invented #99 dropped)", got, want)
+	}
+}
+
+func TestSelectBatchReturnsNonNilEmptyAndSkipsRunner(t *testing.T) {
+	t.Parallel()
+
+	gh := &fakePlanGH{
+		by:     map[string][]ghio.Issue{readyLabel: {{Number: 1, Title: "a", Body: "Blocked by #5"}}},
+		states: map[int]string{5: "OPEN"},
+	}
+	var called bool
+	run := recordingPlanRunner(&called, []planItem{{Number: 1, Title: "a", Branch: "agent/issue-1-a"}})
+
+	got, err := selectBatch(context.Background(), t.TempDir(), gh, run)
+	if err != nil {
+		t.Fatalf("selectBatch returned error: %v", err)
+	}
+
+	if called {
+		t.Error("plan agent was run, want it skipped when no candidate is eligible")
+	}
+	if got == nil {
+		t.Error("items is nil, want a non-nil empty slice so json.Marshal yields []")
+	}
+	if len(got) != 0 {
+		t.Errorf("items = %v, want an empty slice", got)
+	}
+}
+
+func TestSelectBatchPropagatesListError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("gh list boom")
+	gh := &fakePlanGH{
+		by:    map[string][]ghio.Issue{readyLabel: {{Number: 1, Title: "a", Body: "x"}}},
+		errBy: map[string]error{readyLabel: wantErr},
+	}
+	var captured map[string]string
+	run := fakePlanRunner(&captured, nil, nil)
+
+	_, err := selectBatch(context.Background(), t.TempDir(), gh, run)
+	if err == nil {
+		t.Fatal("selectBatch returned nil, want a list error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("error = %v, want it to wrap %v", err, wantErr)
+	}
+	if !strings.HasPrefix(err.Error(), "list ready issues: ") {
+		t.Errorf("error = %q, want it to start with %q", err.Error(), "list ready issues: ")
 	}
 }
 

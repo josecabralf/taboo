@@ -24,12 +24,16 @@ const readyLabel = "ready-for-agent"
 // is never re-selected.
 const inProgressLabel = "agent:in-progress"
 
-// planItem is one issue the plan agent selected for the next parallel batch. It
-// is the element type decoded from the agent's <result> JSON array by
-// taboo.RunWorkflowAs[[]planItem].
+// planItem is one issue selected for the next parallel batch. The agent emits
+// number and title in its <result> JSON array (decoded by
+// taboo.RunWorkflowAs[[]planItem]); selectBatch then canonicalizes each item
+// against the candidate it names, filling Branch via slugBranch so the branch
+// name has a single source of truth shared with the implement flow.
 type planItem struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
+	// Branch is derived by the orchestrator (slugBranch), not emitted by the
+	// agent; it is part of the JSON the plan subcommand and loop dry-run print.
 	Branch string `json:"branch"`
 }
 
@@ -47,53 +51,98 @@ type planGH interface {
 // hand-encoding a <result> block.
 type planRunner func(ctx context.Context, startDir, workflow string, vars map[string]string, ov taboo.PlanOverrides, cmd taboo.Commander) ([]planItem, taboo.OrchestratedResult, error)
 
-// plan is the testable core of the plan subcommand: list the open
-// ready-for-agent issues, hand them to the plan workflow agent (which selects a
-// parallel-safe batch and emits a <result> JSON array decoded into []planItem by
-// the bridge), and print that selection as JSON to out. The gh and taboo seams
-// are injected so tests drive the full sequence with fakes.
-func plan(ctx context.Context, startDir string, out io.Writer, gh planGH, runPlan planRunner) error {
+// selectBatch is the testable core of the plan sequence: list the open
+// ready-for-agent issues, drop those already in progress or with an unresolved
+// "Blocked by #N" dependency, hand the survivors to the plan workflow agent
+// (which selects a parallel-safe subset and emits it as a <result> JSON array
+// decoded into []planItem by the bridge), then canonicalize each pick against the
+// candidate it names — taking title and the slugBranch-derived branch from the
+// candidate, not the agent's echo, so the branch has one source of truth — and
+// return that batch. When nothing is eligible it returns a non-nil empty slice
+// and skips the agent run, so a caller can marshal it to [] (never null) and skip
+// wasted work. The gh and taboo seams are injected so tests drive the full
+// sequence with fakes.
+func selectBatch(ctx context.Context, startDir string, gh planGH, runPlan planRunner) ([]planItem, error) {
 	ready, err := gh.ListOpenIssuesByLabel(ctx, readyLabel)
 	if err != nil {
-		return fmt.Errorf("list ready issues: %w", err)
+		return nil, fmt.Errorf("list ready issues: %w", err)
 	}
 
 	inProgress, err := gh.ListOpenIssuesByLabel(ctx, inProgressLabel)
 	if err != nil {
-		return fmt.Errorf("list in-progress issues: %w", err)
+		return nil, fmt.Errorf("list in-progress issues: %w", err)
 	}
 
 	candidates, err := unblockedCandidates(ctx, gh, excludeInProgress(ready, inProgress))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// With nothing eligible, running the plan agent would be wasted work (and it
-	// could hallucinate). Emit an empty selection and skip the run, mirroring
-	// review's graceful short-circuit.
+	// could hallucinate). Return an empty selection and skip the run, mirroring
+	// review's graceful short-circuit. The slice is non-nil so json.Marshal
+	// yields [] rather than null.
 	if len(candidates) == 0 {
 		fmt.Fprintln(os.Stderr, "afk: no eligible ready-for-agent issues to plan")
-		if _, err := fmt.Fprintln(out, "[]"); err != nil {
-			return fmt.Errorf("write selection: %w", err)
-		}
-		return nil
+		return []planItem{}, nil
 	}
 
 	candidatesJSON, err := json.MarshalIndent(candidates, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal candidates: %w", err)
+		return nil, fmt.Errorf("marshal candidates: %w", err)
 	}
 
 	vars := map[string]string{
 		"CANDIDATES": string(candidatesJSON),
 	}
 
-	items, _, err := runPlan(ctx, startDir, "plan", vars, taboo.PlanOverrides{
+	selected, _, err := runPlan(ctx, startDir, "plan", vars, taboo.PlanOverrides{
 		Stdout: os.Stderr,
 		Stderr: os.Stderr,
 	}, taboo.NewExecCommander())
 	if err != nil {
-		return fmt.Errorf("run plan agent: %w", err)
+		return nil, fmt.Errorf("run plan agent: %w", err)
+	}
+	return canonicalBatch(candidates, selected), nil
+}
+
+// canonicalBatch rebuilds the agent's selection from the candidate issues the
+// orchestrator already holds, keyed by the number the agent picked. Title and
+// branch come from the candidate — the branch via slugBranch, the same function
+// the implement flow uses — not from the agent's echo, so the branch has a single
+// source of truth. A picked number that is not among the candidates (an agent
+// invention) is dropped with a stderr notice rather than trusted. The returned
+// slice is non-nil so it marshals to [] rather than null.
+func canonicalBatch(candidates []ghio.Issue, selected []planItem) []planItem {
+	byNum := make(map[int]ghio.Issue, len(candidates))
+	for _, c := range candidates {
+		byNum[c.Number] = c
+	}
+
+	batch := make([]planItem, 0, len(selected))
+	for _, it := range selected {
+		cand, ok := byNum[it.Number]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "afk: skipping #%d: not among the planned candidates\n", it.Number)
+			continue
+		}
+		batch = append(batch, planItem{
+			Number: cand.Number,
+			Title:  cand.Title,
+			Branch: slugBranch(cand.Number, cand.Title),
+		})
+	}
+	return batch
+}
+
+// plan is the plan subcommand: it delegates the listing, filtering, and
+// agent-run logic to selectBatch and writes the resulting selection as a JSON
+// array to out (an empty selection prints as []). The gh and taboo seams are
+// injected so tests drive the full sequence with fakes.
+func plan(ctx context.Context, startDir string, out io.Writer, gh planGH, runPlan planRunner) error {
+	items, err := selectBatch(ctx, startDir, gh, runPlan)
+	if err != nil {
+		return err
 	}
 
 	data, err := json.Marshal(items)

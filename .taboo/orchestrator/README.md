@@ -17,6 +17,11 @@ earlier bash-around-`taboo run` workflows (PRs #65, #79). See
   resolves the named workflow, and drives the run.
 - `review.go` — the `review` subcommand wiring the review flow end-to-end,
   through the typed bridge `taboo.RunWorkflowAs[reviewResult]`.
+- `loop.go` — the `loop` subcommand, the master orchestrator: it drains the
+  ready-for-agent issues in bounded-parallel waves via `taboo.Pool`, planning a
+  parallel-safe batch and fanning the implement flow out across it each wave, and
+  drives every issue through the `agent:in-progress` / `agent:blocked` label state
+  machine.
 - `internal/ghio` — GitHub/git I/O (`gh issue view`, `git push`, draft-PR
   create, label add, `gh pr diff`, and `gh api` PR-review POST) behind a fakeable
   `Exec` seam.
@@ -28,6 +33,7 @@ earlier bash-around-`taboo run` workflows (PRs #65, #79). See
 ```
 afk implement --issue N
 afk review --pr N
+afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 ```
 
 `implement` drives one issue end-to-end:
@@ -50,6 +56,24 @@ afk review --pr N
    (`internal/diffmap`), logging a notice for each — never an error.
 4. **Post** one PR review via `gh api`; an empty review (no summary, no in-diff
    comments) is skipped rather than posted, so GitHub never 422s.
+
+`loop` is the master orchestrator — where `implement` drives one issue, `loop`
+drains the whole `ready-for-agent` backlog wave by wave:
+
+1. **Plan** the next parallel-safe batch (the same selection `plan` emits). An
+   empty batch means the queue is drained, so the loop stops.
+2. **Claim** every issue in the batch, removing `ready-for-agent` and adding
+   `agent:in-progress`, so a later wave's planner can never re-select one already
+   in flight.
+3. **Fan out** the `implement` workflow across the batch through `taboo.Pool`,
+   bounded by `--parallelism` (default 3) concurrent runs per wave.
+4. **Settle** each run: a success releases `agent:in-progress`; a failure also
+   adds `agent:blocked` plus a diagnostic comment, taking the issue out of the
+   ready pool until a human re-adds the label.
+
+It repeats up to `--max-iterations` (default 10) waves — a safety bound against a
+queue that never empties. `--dry-run` plans and prints the first batch without
+claiming, running, or touching any label, so an operator can preview the wave.
 
 All GitHub I/O is in Go; none of it is workflow bash.
 
