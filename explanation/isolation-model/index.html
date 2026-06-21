@@ -1448,7 +1448,8 @@ repo-not-under-<code>/tmp</code> constraint, which already existed for the git-c
 <h2 id="teardown-is-not-on-the-run-path">Teardown is not on the run path<a class="headerlink" href="#teardown-is-not-on-the-run-path" title="Permanent link">&para;</a></h2>
 <p>Setup creates a worktree; nothing on the run path removes it. <code>Runner.Run</code>,
 <code>Setup</code>, <code>Exec</code>, the orchestrator loop, and <code>Pool.Run</code> all leave the worktree on
-disk after they return, and <code>RunResult.WorktreePath</code> keeps pointing at it. This is
+disk after they return, and the <code>RunResult</code>'s worktree handle keeps pointing at
+it (read its files with <code>res.Artifact(relpath)</code>). This is
 deliberate: the commit lives in the shared <code>.git</code>, so a finished run has nothing
 left to extract from the working directory, but the directory itself is not
 reaped. A long-running session, a daemon, or a <code>Pool</code> that fans many runs out
