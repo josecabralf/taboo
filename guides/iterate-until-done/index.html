@@ -1248,34 +1248,63 @@ iteration count is reached, then read why the loop stopped.</p>
 second look at the test output, a refactor that converges over a few passes.
 taboo prepares the worktree once and re-execs the agent into it, so each pass
 continues from the previous pass's commit.</p>
+<div class="admonition abstract">
+<p class="admonition-title">What you'll do</p>
+<p>Set <code>max-iterations</code> and a <code>completion-signal</code> in <code>taboo.yaml</code>, run the loop
+from Go, then read <code>StopReason</code> and <code>Iterations</code> off the result to learn
+whether the agent signalled done or the loop hit its cap.</p>
+</div>
 <h2 id="how-the-loop-works">How the loop works<a class="headerlink" href="#how-the-loop-works" title="Permanent link">&para;</a></h2>
 <p>A run loops when its resolved plan has a <code>MaxIterations</code> above 1. taboo prepares
 the worktree once, then re-runs the agent into that same worktree. Every
 iteration shares one worktree and the agent commits in place, so each pass
 continues from the previous pass's commit.</p>
 <p>The loop stops on the first of two conditions:</p>
-<ul>
-<li>The agent's stdout contains the completion signal. The loop stops early and
-  <code>StopReason</code> is <code>StopSignal</code> (the string <code>"signal"</code>).</li>
-<li>The loop has run <code>MaxIterations</code> times. <code>StopReason</code> is <code>StopMaxIterations</code>
-  (the string <code>"max-iterations"</code>).</li>
-</ul>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th><code>StopReason</code></th>
+<th>String value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The agent's stdout contains the completion signal</td>
+<td><code>StopSignal</code></td>
+<td><code>"signal"</code></td>
+</tr>
+<tr>
+<td>The loop has run <code>MaxIterations</code> times</td>
+<td><code>StopMaxIterations</code></td>
+<td><code>"max-iterations"</code></td>
+</tr>
+</tbody>
+</table>
 <p><code>MaxIterations</code> below 1 means a single run. An empty completion signal disables
 the early stop, so the loop always runs the full <code>MaxIterations</code>.</p>
 <h2 id="configure-the-loop-in-tabooyaml">Configure the loop in taboo.yaml<a class="headerlink" href="#configure-the-loop-in-tabooyaml" title="Permanent link">&para;</a></h2>
-<p>The loop knobs live on the workflow (or in <code>defaults</code>) of your <code>taboo.yaml</code>, so
-the one-call bridge picks them up without extra Go code:</p>
+<p>The loop knobs live in your <code>taboo.yaml</code>, so the one-call bridge picks them up
+without extra Go code. <code>max-iterations</code> can sit on a workflow or in <code>defaults</code>;
+<code>completion-signal</code> is a <code>defaults</code>-only key:</p>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">workshop</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">base</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu@24.04</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">repo</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/me/repos/demo</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nt">agent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opencode</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openrouter/qwen/qwen3-coder-plus</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">workflows</span><span class="p">:</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">iterate</span><span class="p">:</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Fix</span><span class="nv"> </span><span class="s">the</span><span class="nv"> </span><span class="s">failing</span><span class="nv"> </span><span class="s">tests.</span><span class="nv"> </span><span class="s">Print</span><span class="nv"> </span><span class="s">DONE</span><span class="nv"> </span><span class="s">when</span><span class="nv"> </span><span class="s">all</span><span class="nv"> </span><span class="s">tests</span><span class="nv"> </span><span class="s">pass.&quot;</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">max-iterations</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">completion-signal</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">DONE</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">defaults</span><span class="p">:</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">completion-signal</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">DONE</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nt">workflows</span><span class="p">:</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">iterate</span><span class="p">:</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Fix</span><span class="nv"> </span><span class="s">the</span><span class="nv"> </span><span class="s">failing</span><span class="nv"> </span><span class="s">tests.</span><span class="nv"> </span><span class="s">Print</span><span class="nv"> </span><span class="s">DONE</span><span class="nv"> </span><span class="s">when</span><span class="nv"> </span><span class="s">all</span><span class="nv"> </span><span class="s">tests</span><span class="nv"> </span><span class="s">pass.&quot;</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">max-iterations</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
 </span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title"><code>completion-signal</code> is <code>defaults</code>-only</p>
+<p><code>taboo.yaml</code> is parsed with unknown keys rejected. A workflow has no
+<code>completion-signal</code> field, so putting it under <code>workflows.iterate</code> makes
+<code>LoadConfig</code> fail with <code>ErrConfigParse</code>. Set it under <code>defaults</code>.</p>
+</div>
 <p><code>RunWorkflow</code> locates this config above the start directory, resolves the
 <code>iterate</code> workflow into a plan, and runs the loop over a <code>Commander</code>:</p>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
@@ -1304,8 +1333,11 @@ the one-call bridge picks them up without extra Go code:</p>
 </span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;branch %s at %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">Branch</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">Commit</span><span class="p">)</span>
 </span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>This program needs a workshop host: <code>RunWorkflow</code> launches a workshop and execs
-the agent. The rest of the page describes the values it returns.</p>
+<div class="admonition note">
+<p class="admonition-title">Prerequisite</p>
+<p>This program needs a workshop host: <code>RunWorkflow</code> launches a workshop and
+execs the agent. The rest of the page describes the values it returns.</p>
+</div>
 <p><code>PlanOverrides</code> is the per-call override layer: a non-zero field wins over the
 config. To raise the iteration count for one call without touching <code>taboo.yaml</code>,
 set <code>taboo.PlanOverrides{Branch: "taboo/iterate", MaxIterations: 8}</code>.</p>
@@ -1386,9 +1418,13 @@ decode never discards the agent's commit. A failed extraction returns
 <h2 id="do-not-combine-fork-with-a-loop">Do not combine fork with a loop<a class="headerlink" href="#do-not-combine-fork-with-a-loop" title="Permanent link">&para;</a></h2>
 <p><code>RunRequest</code> has a <code>Fork</code> field that forks a resumed session. A looped run
 re-execs the same request every iteration, so a fork would re-fork the source
-session on every pass rather than continuing one fork. taboo rejects this before
-any setup: a plan whose <code>Fork</code> is set and <code>MaxIterations</code> is greater than 1
-returns <code>ErrForkLoop</code> before any workshop is launched.</p>
+session on every pass rather than continuing one fork.</p>
+<div class="admonition warning">
+<p class="admonition-title">Fork plus a loop is rejected</p>
+<p>A plan whose <code>Fork</code> is set and <code>MaxIterations</code> is greater than 1 returns
+<code>ErrForkLoop</code> before any setup runs — taboo rejects the combination up
+front, so no workshop or worktree is provisioned.</p>
+</div>
 <p>A single-iteration fork (<code>MaxIterations</code> at or below 1) is allowed, and a
 multi-iteration plain resume (<code>ResumeSession</code> set, <code>Fork</code> false) is allowed.</p>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>

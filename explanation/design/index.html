@@ -1250,8 +1250,9 @@ types and signatures, see the
 <a href="../../reference/library-api/">library API reference</a>. The architecture decisions
 themselves live under <a href="https://github.com/josecabralf/taboo/tree/main/docs/adr">docs/adr/</a>.</p>
 <h2 id="the-library-is-the-primary-contract">The library is the primary contract<a class="headerlink" href="#the-library-is-the-primary-contract" title="Permanent link">&para;</a></h2>
-<p>CONTEXT.md states the stance directly: "The primary deliverable is a Go module
-(<code>pkg/taboo</code>)." It continues: "A CLI may follow but is not the primary contract."</p>
+<p>CONTEXT.md states the stance directly: "The primary deliverable is a Go module."
+It continues: the CLI "is a thin consumer of the library, not the primary
+contract."</p>
 <p>The audience is engineers building agent pipelines in Go who want to express
 fan-out, review loops, and custom orchestration in code, not through flags. So the
 library carries the full surface, and the <code>cli/</code> module is a thin consumer of it.
@@ -1310,7 +1311,7 @@ canonical names so it can suggest a correction on a typo. ADR 0005
 that <code>internal/agent/registry.go</code> holds an explicit slice of registrations rather than
 self-registering agents through <code>init()</code>. The public surface is
 <code>NewProfile(name AgentName, model string) (AgentProfile, error)</code>, which returns the wrapped
-<code>ErrUnknownAgent</code> sentinel on a miss, and <code>AgentNames() []AgentName</code>, sorted, for the
+<code>ErrUnknownAgent</code> sentinel on a miss, and <code>AgentNames() []string</code>, sorted, for the
 candidate set.</p>
 <p>The registry is keyed by each profile's own <code>Name()</code>, so there is no second name
 literal to drift out of sync. The choice is about visibility. An <code>init()</code>-based
@@ -1320,7 +1321,9 @@ edit to add an agent, which is the point. The fuzzy "did you mean" match lives i
 the CLI, not the registry; the registry only supplies the candidate set. The
 model-format hint lives beside each agent rather than as a method on the four-method
 <code>AgentProfile</code> interface, so <code>validate</code> can read it from a name alone, before
-anything is constructed. ADR 0008 covers the hint and the fuzzy match.</p>
+anything is constructed. ADR 0008
+(<a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0008-model-format-hint-and-fuzzy-agent-match.md">the model-format hint and fuzzy match</a>)
+covers the hint and the fuzzy match.</p>
 <h2 id="structured-output-is-the-callers-struct">Structured output is the caller's struct<a class="headerlink" href="#structured-output-is-the-callers-struct" title="Permanent link">&para;</a></h2>
 <p>taboo extracts a typed result from an agent's stdout: a delimited
 <code>&lt;result&gt;{...}&lt;/result&gt;</code> block whose JSON payload becomes a typed Go value. The seam

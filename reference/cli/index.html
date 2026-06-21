@@ -1220,19 +1220,28 @@
 
 
 <h1 id="taboo-cli-reference">taboo CLI reference<a class="headerlink" href="#taboo-cli-reference" title="Permanent link">&para;</a></h1>
-<p>The <code>taboo</code> binary wraps the common library paths. The root command is
-<code>taboo</code> ("taboo orchestrates agent runs inside workshop environments",
-<code>cmd/taboo/main.go</code>). It registers six subcommands: <code>doctor</code>, <code>init</code>,
-<code>validate</code>, <code>run</code>, <code>list</code>, <code>clean</code> (<code>cmd/taboo/main.go</code>, <code>newRootCmd</code>).</p>
+<p>The <code>taboo</code> binary wraps the common library paths. The thin <code>cli/main.go</code>
+entrypoint delegates to the application package <code>cli/internal/app</code>. The root
+command is <code>taboo</code> ("taboo orchestrates agent runs inside workshop
+environments", <code>cli/internal/app/main.go</code>). It registers six subcommands:
+<code>doctor</code>, <code>init</code>, <code>validate</code>, <code>run</code>, <code>list</code>, <code>clean</code>
+(<code>cli/internal/app/main.go</code>, <code>newRootCmd</code>).</p>
 <p>Every command exits <code>0</code> on success and <code>1</code> on failure. The process exits
-non-zero whenever a command returns an error; <code>cmd/taboo/main.go</code> maps any
-returned error to <code>os.Exit(1)</code>. The root sets <code>SilenceErrors</code> and
-<code>SilenceUsage</code>, so cobra does not print usage on failure.</p>
+non-zero whenever a command returns an error; <code>Execute</code> in
+<code>cli/internal/app/main.go</code> maps any returned error to <code>os.Exit(1)</code>. The root
+sets <code>SilenceErrors</code> and <code>SilenceUsage</code>, so cobra does not print usage on
+failure.</p>
+<div class="admonition info">
+<p class="admonition-title">Where these facts come from</p>
+<p>Every command, flag, and message below is read from the source named in
+each section (under <code>cli/internal/app/</code>). The flag tables mirror the
+<code>cobra</code> definitions verbatim — run <code>taboo &lt;command&gt; --help</code> to confirm.</p>
+</div>
 <p>For the <code>taboo.yaml</code> schema that <code>run</code>, <code>validate</code>, <code>list</code>, and <code>clean</code> read,
 see <a href="../taboo-yaml/">taboo-yaml.md</a>. For agent names and credential keys, see
 <a href="../agents/">agents.md</a>.</p>
 <h2 id="init">init<a class="headerlink" href="#init" title="Permanent link">&para;</a></h2>
-<p>Scaffold a <code>.taboo/</code> project into a repository (<code>cmd/taboo/init.go</code>,
+<p>Scaffold a <code>.taboo/</code> project into a repository (<code>cli/internal/app/init.go</code>,
 <code>newInitCmd</code>). It writes <code>taboo.yaml</code>, <code>.gitignore</code>, and <code>.env.example</code>, seeds
 the example workflow prompt files unless opted out, and optionally scaffolds a
 Go <code>main.go</code> and <code>go.mod</code>. It never launches a workshop.</p>
@@ -1261,7 +1270,7 @@ Go <code>main.go</code> and <code>go.mod</code>. It never launches a workshop.</
 <tr>
 <td><code>--base</code></td>
 <td><code>ubuntu@24.04</code></td>
-<td>Workshop base image (<code>defaultBase</code> in <code>cmd/taboo/init.go</code>).</td>
+<td>Workshop base image (<code>defaultBase</code> in <code>cli/internal/app/init.go</code>).</td>
 </tr>
 <tr>
 <td><code>--repo</code></td>
@@ -1272,6 +1281,11 @@ Go <code>main.go</code> and <code>go.mod</code>. It never launches a workshop.</
 <td><code>--workshop</code></td>
 <td>derived from the repo directory name</td>
 <td>Workshop name; slugified from the repo base name by <code>deriveWorkshopName</code>.</td>
+</tr>
+<tr>
+<td><code>--source-definition</code></td>
+<td><code>""</code></td>
+<td>Named <code>.workshop/*.yaml</code> definition to derive from. Required (non-interactively) only when the repo has more than one.</td>
 </tr>
 <tr>
 <td><code>--workflows</code></td>
@@ -1296,14 +1310,17 @@ Go <code>main.go</code> and <code>go.mod</code>. It never launches a workshop.</
 </tbody>
 </table>
 <p>When stdin is a real TTY and <code>--agent</code> or <code>--model</code> is missing, <code>init</code> runs an
-interactive <code>huh</code> wizard (<code>cmd/taboo/init.go</code>, <code>runInitCmd</code>). When stdin is not
+interactive <code>huh</code> wizard (<code>cli/internal/app/init.go</code>, <code>runInitCmd</code>). When stdin is not
 a TTY (a pipe, redirect, or <code>&lt; /dev/null</code>), a missing required flag fails fast
 naming every missing flag: <code>missing required flags: ... (pass them or run init
 interactively)</code>. A fully flagged invocation skips the wizard even at a TTY.</p>
 <p><code>init</code> refuses to overwrite an existing <code>.taboo</code> directory unless <code>--force</code> is
 set: <code>.taboo already exists at PATH; pass --force to regenerate its scaffold
 files</code> (<code>ensureWritable</code>). An unknown agent is reported with the valid set:
-<code>unknown agent "X"; valid agents: claude-code, github-copilot, opencode</code>.</p>
+<code>unknown agent "X"; valid agents: claude-code, github-copilot, opencode</code>
+(<code>resolveProfile</code>, sorted from <code>taboo.AgentNames()</code>). A multi-definition repo
+with no <code>--source-definition</code> selected is rejected non-interactively:
+<code>multiple workshop definitions (...): pass --source-definition to pick one</code>.</p>
 <p>Output routing: progress, the scaffold confirmation, and next steps go to
 stdout (<code>printNextSteps</code>); errors go to stderr prefixed with <code>Error:</code>. A
 <code>--dry-run</code> invocation prints <code>taboo init (dry run) — would write:</code> followed by
@@ -1313,11 +1330,19 @@ flag.</p>
 template, a refused overwrite, or a write failure.</p>
 <h2 id="run">run<a class="headerlink" href="#run" title="Permanent link">&para;</a></h2>
 <p>Run a workflow (or an ad-hoc prompt) end-to-end on a fresh branch
-(<code>cmd/taboo/run.go</code>, <code>newRunCmd</code>). It loads <code>taboo.yaml</code>, selects what to run,
-resolves the run parameters into a <code>Plan</code>, runs a host preflight, and drives the
-plan through the library's <code>(*Plan).Run</code> looped run on a new per-run branch.</p>
+(<code>cli/internal/app/run.go</code>, <code>newRunCmd</code>). It loads <code>taboo.yaml</code>, selects what to
+run, resolves the run parameters into a <code>Plan</code> through the library's config→run
+bridge, runs a host preflight, and drives the plan through the library's
+<code>(*Plan).Run</code> looped run on a new per-run branch.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>taboo run [workflow] [flags]
 </span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title"><code>run</code> takes a workflow name, not a path</p>
+<p>The positional argument is a workflow <strong>name</strong> defined in <code>taboo.yaml</code>
+(e.g. <code>taboo run fix</code>), not a directory or file path. A bare <code>taboo run</code>
+uses the configured <code>default-workflow</code>; <code>--prompt</code> runs ad-hoc with no
+workflow.</p>
+</div>
 <p>Positional arguments: an optional <code>workflow</code> name (<code>cobra.MaximumNArgs(1)</code>). A
 bare <code>run</code> with no positional argument runs the configured <code>default-workflow</code>,
 or, when <code>--prompt</code>/<code>--prompt-file</code> is set, an ad-hoc run off the top-level
@@ -1342,6 +1367,16 @@ config. With neither a positional workflow, a prompt flag, nor a
 <td><code>--prompt-file</code></td>
 <td><code>""</code></td>
 <td>File whose contents are the run instruction, resolved relative to the <code>.taboo</code> directory (absolute paths used verbatim).</td>
+</tr>
+<tr>
+<td><code>--vars-file</code></td>
+<td><code>""</code></td>
+<td>JSON file of <code>{"VAR":"value"}</code> pairs substituted literally into <code>{{VAR}}</code> placeholders in the prompt (no shell expansion). Path resolved relative to the <code>.taboo</code> directory.</td>
+</tr>
+<tr>
+<td><code>--var</code></td>
+<td>none</td>
+<td>Repeatable <code>KEY=VALUE</code> template variable substituted literally into <code>{{KEY}}</code>. Overrides a matching <code>--vars-file</code> key.</td>
 </tr>
 <tr>
 <td><code>--agent</code></td>
@@ -1374,6 +1409,11 @@ config. With neither a positional workflow, a prompt flag, nor a
 <td>Branch name for this run. The default is composed of the prefix, the workflow (or <code>adhoc</code>), and a timestamp.</td>
 </tr>
 <tr>
+<td><code>--from</code></td>
+<td><code>""</code></td>
+<td>The workshop definition to derive the agent workshop from; overrides <code>taboo.yaml</code>'s source-definition for this run.</td>
+</tr>
+<tr>
 <td><code>--dry-run</code></td>
 <td><code>false</code></td>
 <td>Resolve and print the plan without running anything.</td>
@@ -1391,16 +1431,18 @@ config. With neither a positional workflow, a prompt flag, nor a
 </tbody>
 </table>
 <p>Parameter precedence: a CLI flag overrides the workflow block, which overrides
-the top-level config and the <code>defaults:</code> block (<code>cmd/taboo/run.go</code>,
-<code>resolvePlan</code> and the <code>resolve*</code> helpers; <code>orElse</code> applies
-flag-then-workflow-then-top-level to agent and model). The prompt chain is flag
-inline, flag file, workflow inline, workflow file, defaults inline, defaults
-file (<code>resolvePrompt</code>). The completion signal has no workflow level: it resolves
-flag-then-defaults only (<code>resolveSignal</code>).</p>
+the top-level config and the <code>defaults:</code> block (<code>cli/internal/app/run.go</code>
+packs the flags into <code>taboo.PlanOverrides</code>; the library bridge applies
+flag-then-workflow-then-top-level to agent, model, and the rest). Template
+variables are layered last: <code>--var KEY=VALUE</code> flags override matching
+<code>--vars-file</code> keys, and the merged map is substituted into the resolved
+prompt's <code>{{VAR}}</code> placeholders (<code>resolveVars</code>). A malformed <code>--var</code> (not
+<code>KEY=VALUE</code>) or an unreadable/invalid <code>--vars-file</code> fails fast before the run.</p>
 <p>Preflight (<code>runPreflight</code>): <code>workshop --version</code> must report at least
-<code>minWorkshopVersion</code> (<code>0.9.1</code>, <code>cmd/taboo/version.go</code>), then the run-scoped
-config-correctness checks run (the <code>validate</code> set minus whole-config prompt-file
-existence). On any error check, the preflight report is written to stderr and
+<code>minWorkshopVersion</code> (<code>0.9.1</code>, <code>cli/internal/app/version.go</code>), then the run-scoped
+config-correctness checks run (<code>runConfigChecks</code>: the <code>validate</code> set with the
+whole-config prompt-file and derive checks omitted, since <code>cfg.Plan</code> already
+resolved the one prompt and workshop this run consumes). On any error check, the preflight report is written to stderr and
 the run is refused with <code>errRunFailed</code>. At a TTY without <code>--yes</code>, <code>run</code> then
 prints a one-line summary to stderr and reads a <code>y/N</code> answer from stdin; a blank
 line, EOF, or anything but <code>y</code>/<code>yes</code> declines and prints <code>Aborted.</code>
@@ -1409,9 +1451,9 @@ without prompting. A <code>--dry-run</code> invocation prints the resolved plan 
 reaches the preflight.</p>
 <p>Output routing: live agent output (both the agent's stdout and stderr) and all
 progress stream to stderr, so the machine result on stdout stays clean
-(<code>executePlan</code> routes <code>Stdout</code> and <code>Stderr</code> of the <code>RunRequest</code> to
-<code>env.Stderr</code>). The machine result goes to stdout. The plain form is two lines
-(<code>writeRunResult</code>):</p>
+(<code>planOverrides</code> points the plan's <code>Stdout</code> and <code>Stderr</code> at <code>env.Stderr</code>, and
+<code>executeRun</code> drives the plan). The machine result goes to stdout. The plain
+form is two lines (<code>writeRunResult</code>):</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>branch: taboo/fix-20260617-101500-000000001
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>commit: 1f3c9ab
 </span></code></pre></div>
@@ -1434,10 +1476,11 @@ With <code>--json</code>, stdout carries an indented JSON object (<code>jsonRunR
 (<code>errRunFailed</code>), or a failure inside the run. A declined confirmation returns
 zero (nothing ran).</p>
 <h2 id="validate">validate<a class="headerlink" href="#validate" title="Permanent link">&para;</a></h2>
-<p>Validate the project's <code>taboo.yaml</code> for correctness (<code>cmd/taboo/validate.go</code>,
-<code>newValidateCmd</code>). It discovers and strict-decodes the config, then runs the
-agent, model, prompt-file, and repo correctness checks. It does not probe host
-tooling; that is <code>doctor</code>.</p>
+<p>Validate the project's <code>taboo.yaml</code> for correctness
+(<code>cli/internal/app/validate.go</code>, <code>newValidateCmd</code>). It discovers and
+strict-decodes the config, then runs the agent, model, prompt-file, repo, and
+workshop-derive correctness checks. It does not probe host tooling; that is
+<code>doctor</code>.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>taboo validate [flags]
 </span></code></pre></div>
 <p>Positional arguments: none (<code>cobra.NoArgs</code>).</p>
@@ -1474,16 +1517,20 @@ tooling; that is <code>doctor</code>.</p>
   to the config file's directory (<code>promptFileChecks</code>).</li>
 <li><code>repo</code>/<code>repo-path</code>/<code>repo-git</code>: the repo must be set, on persistent storage
   (not under <code>/tmp</code> or <code>/run</code>), and a git work tree (<code>repoValidateChecks</code>).</li>
+<li><code>source-definition</code>/<code>derive</code>: a <code>&lt;repo&gt;/workshop.yaml</code> source must exist, and
+  the agent workshop must derive cleanly from it. The derivation is dry-run in
+  memory (no launch, no FS writes); a malformed source is a hard <code>derive</code> error
+  (<code>deriveChecks</code>).</li>
 </ul>
 <p>Output routing: the report goes to stdout (<code>renderReport</code>). The human form
 prints one line per check as <code>[STATUS] NAME MESSAGE</code> and a <code>result: OK</code> or
 <code>result: FAIL</code> footer (<code>writeHuman</code>). With <code>--json</code>, stdout carries
-<code>{"ok": bool, "checks": [{"name", "status", "message"}]}</code> (<code>writeJSON</code>,
-<code>report.go</code>), where <code>status</code> is <code>ok</code>, <code>warn</code>, or <code>error</code>.</p>
+<code>{"ok": bool, "checks": [{"name", "status", "message"}]}</code> (<code>writeJSON</code> in
+<code>cli/internal/app/report.go</code>), where <code>status</code> is <code>ok</code>, <code>warn</code>, or <code>error</code>.</p>
 <p>Exit behaviour: non-zero (<code>errValidateFailed</code>) when any check is an <code>error</code>. A
 <code>warn</code> does not fail the command.</p>
 <h2 id="doctor">doctor<a class="headerlink" href="#doctor" title="Permanent link">&para;</a></h2>
-<p>Check host readiness for running taboo (<code>cmd/taboo/doctor.go</code>,
+<p>Check host readiness for running taboo (<code>cli/internal/app/doctor.go</code>,
 <code>newDoctorCmd</code>). It runs the always-on host checks and, inside a taboo project,
 config-aware checks.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>taboo doctor [flags]
@@ -1505,7 +1552,7 @@ config-aware checks.</p>
 </tr>
 </tbody>
 </table>
-<p>Host checks (<code>hostChecks</code> in <code>cmd/taboo/host.go</code>), all <code>error</code> on failure:</p>
+<p>Host checks (<code>hostChecks</code> in <code>cli/internal/app/host.go</code>), all <code>error</code> on failure:</p>
 <ul>
 <li><code>workshop</code>: <code>workshop --version</code> is runnable and reports at least
   <code>minWorkshopVersion</code> (<code>0.9.1</code>). A failure or too-old version names the install
@@ -1517,23 +1564,26 @@ config-aware checks.</p>
 <li><code>go</code>: <code>go version</code>. A missing Go toolchain is a <code>warn</code>, not an error (it is
   only needed to scaffold or run <code>main.go</code>).</li>
 </ul>
-<p>Config-aware checks (<code>configChecks</code> in <code>cmd/taboo/config.go</code>), only when a
-<code>taboo.yaml</code> is discoverable from the working directory:</p>
+<p>Config-aware checks (<code>configChecks</code> in <code>cli/internal/app/config.go</code>), only when
+a <code>taboo.yaml</code> is discoverable from the working directory:</p>
 <ul>
 <li><code>config</code>: the config loads through <code>taboo.LoadConfig</code>.</li>
 <li><code>credentials/&lt;agent&gt;</code>: a <code>warn</code> per referenced agent that has none of its
   credential env keys set (<code>credentialChecks</code>).</li>
 <li><code>repo-path</code>/<code>repo-git</code>: the configured repo is on persistent storage and is a
   git work tree (<code>repoChecks</code>).</li>
+<li><code>workshop-project</code>: the configured repo has a <code>&lt;repo&gt;/workshop.yaml</code>. This is a
+  presence-only check (it does not derive the workshop — that is <code>validate</code>'s
+  job) and is an <code>error</code> when the file is missing (<code>workshopProjectChecks</code>).</li>
 </ul>
 <p>Output routing: the report goes to stdout, same human/<code>--json</code> shapes as
 <code>validate</code>.</p>
 <p>Exit behaviour: non-zero (<code>errChecksFailed</code>) when any check is an <code>error</code>.
 Warnings (a missing Go toolchain, missing credentials) do not fail the command.</p>
 <h2 id="list">list<a class="headerlink" href="#list" title="Permanent link">&para;</a></h2>
-<p>List the project's workshops, worktrees, and branches (<code>cmd/taboo/list.go</code>,
-<code>newListCmd</code>). Read-only: it loads the config, probes the host through the
-command seam, and mutates nothing.</p>
+<p>List the project's workshops, worktrees, and branches
+(<code>cli/internal/app/list.go</code>, <code>newListCmd</code>). Read-only: it loads the config,
+probes the host through the command seam, and mutates nothing.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>taboo list [flags]
 </span></code></pre></div>
 <p>Positional arguments: none (<code>cobra.NoArgs</code>).</p>
@@ -1574,7 +1624,8 @@ the three sections, each falling back to <code>(none)</code> when empty
 workshop-info probe error is not fatal (it reports <code>not provisioned</code>).</p>
 <h2 id="clean">clean<a class="headerlink" href="#clean" title="Permanent link">&para;</a></h2>
 <p>Tear down the project's taboo-managed worktrees, workshops, and branches
-(<code>cmd/taboo/clean.go</code>, <code>newCleanCmd</code>). By default it removes only the worktrees.</p>
+(<code>cli/internal/app/clean.go</code>, <code>newCleanCmd</code>). By default it removes only the
+worktrees.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>taboo clean [flags]
 </span></code></pre></div>
 <p>Positional arguments: none (<code>cobra.NoArgs</code>).</p>
@@ -1621,8 +1672,11 @@ workshop-info probe error is not fatal (it reports <code>not provisioned</code>)
 </table>
 <p>Scope (<code>buildCleanPlan</code>): worktrees are removed with <code>git worktree remove</code>;
 <code>--workshops</code> switches to tearing down the derived workshops (<code>workshop remove</code>)
-instead; <code>--all</code> does both. <code>--prune-branches</code> deletes the prefix branches with
-<code>git branch -D</code>. <code>--prune-branches</code> requires a configured <code>branch-prefix</code>;
+instead; <code>--all</code> does both. Tearing down workshops also removes any in-project
+SDK quarantine symlinks under <code>&lt;projectDir&gt;/.workshop/</code> (only confirmed
+symlinks, never their targets — <code>discoverSDKLinks</code>). <code>--prune-branches</code> deletes
+the prefix branches with <code>git branch -D</code>. <code>--prune-branches</code> requires a
+configured <code>branch-prefix</code>;
 without one it refuses (<code>--prune-branches needs a configured branch-prefix;
 without one every branch would match</code>). Unmerged branches are refused without
 <code>--force</code>: <code>refusing to prune N unmerged branch(es) without --force: ...</code>.</p>
@@ -1632,8 +1686,8 @@ a <code>y/N</code> answer before any destructive action; declining prints <code>
 <code>taboo clean (dry run) — would:</code> and never mutates anything (<code>printCleanPlan</code>).</p>
 <p>Output routing: <code>--dry-run</code> and the <code>Nothing to clean.</code> message go to stdout;
 per-artifact progress (<code>removed worktree ...</code>, <code>tore down workshop ...</code>,
-<code>deleted branch ...</code>) and warnings go to stderr (<code>executeClean</code>). There is no
-<code>--json</code> flag.</p>
+<code>removed SDK link ...</code>, <code>deleted branch ...</code>) and warnings go to stderr
+(<code>executeClean</code>). There is no <code>--json</code> flag.</p>
 <p>Exit behaviour: teardown is best-effort. A failure on one artifact warns and
 continues; every failure is joined into the returned error so the command still
 exits non-zero (<code>executeClean</code>). A refused prune or an unset <code>branch-prefix</code>

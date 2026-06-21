@@ -261,25 +261,22 @@
 
         <!-- Hero proof: code -> result, the whole story at a glance -->
         <div class="hero__proof" data-reveal style="--i:4" role="img"
-             aria-label="A Go program calls taboo.RunWorkflow; the terminal shows the agent landing commit a1c39f2 on the main branch with the working tree untouched.">
+             aria-label="A Go program calls taboo.RunWorkflow; the terminal shows the agent landing commit a1c39f2 on a fresh taboo/implement branch with the working tree untouched.">
           <div class="window">
             <div class="window__bar">
               <span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span>
               <span class="window__name">main.go</span>
             </div>
-            <pre class="code" aria-hidden="true"><code><span class="c-kw">result</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(ctx, taboo.Workflow{
-    Agent:  taboo.<span class="c-cn">ClaudeCode</span>,
-    Branch: <span class="c-st">"main"</span>,
-    Task:   <span class="c-st">"Add retries to the HTTP client"</span>,
-})
-<span class="c-cm">// result.Commits are now on your branch</span></code></pre>
+            <pre class="code" aria-hidden="true"><code><span class="c-kw">res</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(ctx, <span class="c-st">"."</span>, <span class="c-st">"implement"</span>,
+    vars, taboo.PlanOverrides{}, taboo.<span class="c-fn">NewExecCommander</span>())
+<span class="c-cm">// res.Commit is the agent's commit on res.Branch</span></code></pre>
             <div class="window__run" aria-hidden="true">
               <span class="window__rundot"></span> go&nbsp;run&nbsp;.
             </div>
             <pre class="term" aria-hidden="true"><code><span class="t-line" style="--t:0"><span class="t-ok">✓</span> <span class="t-key">workshop</span>  isolated sandbox ready  </span>
 <span class="t-line" style="--t:1"><span class="t-ok">✓</span> <span class="t-key">agent</span>     claude · plan → edit → test</span>
 <span class="t-line" style="--t:2"><span class="t-ok">✓</span> <span class="t-key">verify</span>    go test ./...  ok  <span class="t-dim">(4.2s)</span></span>
-<span class="t-line t-land" style="--t:3"><span class="t-sig">●</span> <span class="t-key">landed</span>    <span class="t-hash">a1c39f2</span> on <span class="t-sig-t">main</span> · working tree untouched</span></code></pre>
+<span class="t-line t-land" style="--t:3"><span class="t-sig">●</span> <span class="t-key">landed</span>    <span class="t-hash">a1c39f2</span> on <span class="t-sig-t">taboo/implement</span> · working tree untouched</span></code></pre>
           </div>
         </div>
       </div>
@@ -300,14 +297,13 @@
           <li class="step" data-reveal style="--i:0">
             <div class="step__no" aria-hidden="true">01</div>
             <h3 class="step__title">Define the run</h3>
-            <p class="step__text">Describe the agent, the branch, and the task. The Go types are the contract.</p>
+            <p class="step__text">Name a workflow in taboo.yaml — its agent, prompt, and limits. The config is the contract.</p>
             <div class="window window--sm">
-              <div class="window__bar"><span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window__name">workflow.go</span></div>
-              <pre class="code"><code>wf := taboo.Workflow{
-    Agent:  taboo.<span class="c-cn">ClaudeCode</span>,
-    Branch: <span class="c-st">"main"</span>,
-    Task:   <span class="c-st">"Add retries"</span>,
-}</code></pre>
+              <div class="window__bar"><span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window__name">taboo.yaml</span></div>
+              <pre class="code"><code><span class="c-cn">workflows</span>:
+  <span class="c-cn">implement</span>:
+    <span class="c-cn">agent</span>: claude-code
+    <span class="c-cn">prompt</span>: <span class="c-st">Implement the issue.</span></code></pre>
             </div>
           </li>
 
@@ -317,7 +313,7 @@
             <p class="step__text">taboo starts a fresh Canonical workshop and runs the agent inside it.</p>
             <div class="window window--sm">
               <div class="window__bar"><span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window__name">terminal</span></div>
-              <pre class="term"><code><span class="t-dim">$</span> taboo run ./workflow
+              <pre class="term"><code><span class="t-dim">$</span> taboo run implement
 <span class="t-ok">✓</span> <span class="t-key">workshop</span>  ubuntu 24.04
 <span class="t-run">◐</span> <span class="t-key">agent</span>     plan → edit → test
 <span class="t-run">◐</span> <span class="t-key">verify</span>    go test ./...
@@ -328,10 +324,10 @@
           <li class="step" data-reveal style="--i:2">
             <div class="step__no" aria-hidden="true">03</div>
             <h3 class="step__title">Land verified commits</h3>
-            <p class="step__text">After the tests pass, taboo merges the commits onto your branch.</p>
+            <p class="step__text">After the agent commits, the branch ref lands in your repo — visible to git right away.</p>
             <div class="window window--sm">
               <div class="window__bar"><span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window__name">git log</span></div>
-              <pre class="term"><code><span class="t-sig">●</span> <span class="t-hash">a1c39f2</span>  <span class="t-sig-t">(main)</span>
+              <pre class="term"><code><span class="t-sig">●</span> <span class="t-hash">a1c39f2</span>  <span class="t-sig-t">(taboo/implement)</span>
 <span class="t-dim">│</span> http: add backoff
 <span class="t-dim">│</span> retries to client
 <span class="t-dim">│</span> 2 files · +38 −4 <span class="t-ok">✓</span>
@@ -357,15 +353,16 @@
                 <span class="path__kind">Go library</span>
                 <h3 class="path__title">Call taboo from your own code</h3>
               </div>
-              <p class="path__text">Run agents from CI jobs, internal platforms, or batch refactors. Typed workflows go in, commits come out.</p>
+              <p class="path__text">Run agents from CI jobs, internal platforms, or batch refactors. One call resolves a workflow and runs it; a commit comes back.</p>
               <a class="path__link" href="./reference/library-api/">Library reference<span aria-hidden="true">→</span></a>
             </div>
             <div class="window window--sm path__code">
               <div class="window__bar"><span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window__name">import</span></div>
               <pre class="code"><code><span class="c-kw">import</span> <span class="c-st">"github.com/josecabralf/taboo"</span>
 
-res, _ := taboo.<span class="c-fn">RunWorkflow</span>(ctx, wf)
-log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %d commits"</span>, <span class="c-kw">len</span>(res.Commits))</code></pre>
+res, _ := taboo.<span class="c-fn">RunWorkflow</span>(ctx, <span class="c-st">"."</span>, <span class="c-st">"implement"</span>,
+    vars, taboo.PlanOverrides{}, taboo.<span class="c-fn">NewExecCommander</span>())
+log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.Commit)</code></pre>
             </div>
           </article>
 
@@ -421,7 +418,7 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %d commits"</spa
           </div>
           <div class="reason" data-reveal style="--i:2">
             <h3 class="reason__title">Contract-first and deterministic</h3>
-            <p class="reason__text">The Go types are the spec. The same workflow and the same inputs produce the same run, whether you start it from your editor or from CI.</p>
+            <p class="reason__text">The taboo.yaml workflow is the spec, read the same way by the CLI and Go callers. The same workflow and the same inputs produce the same run, whether you start it from your editor or from CI.</p>
           </div>
         </div>
       </div>

@@ -1265,13 +1265,16 @@
 
 <h1 id="tabooyaml-reference">taboo.yaml reference<a class="headerlink" href="#tabooyaml-reference" title="Permanent link">&para;</a></h1>
 <p><code>taboo.yaml</code> is the parsed project config read by both the CLI and Go callers
-that drive runs through <code>pkg</code>. The schema is defined by <code>ProjectConfig</code>
+that drive runs through the <code>taboo</code> library
+(<code>github.com/josecabralf/taboo</code>). The schema is defined by <code>ProjectConfig</code>
 in <code>internal/config/config.go</code>. <code>taboo.LoadConfig(path)</code> reads it, decodes it
 strictly, and resolves the agent and model of the top level and of every
 workflow into an <code>AgentProfile</code>.</p>
-<p>The CLI discovers the file by ascending from the working directory: either the
-directory holds <code>taboo.yaml</code>, or an ancestor holds <code>.taboo/taboo.yaml</code>
-(<code>cmd/taboo/config.go</code>, <code>findConfig</code>). <code>taboo init</code> writes it under <code>.taboo/</code>.</p>
+<p>The CLI discovers the file by ascending from the working directory: at each
+directory it probes <code>taboo.yaml</code> first, then <code>.taboo/taboo.yaml</code>, returning the
+first hit (<code>taboo.FindConfig</code>, <code>internal/config/plan.go</code>; the CLI's own
+<code>findConfig</code> in <code>cli/internal/app/config.go</code> mirrors it). <code>taboo init</code> writes it
+under <code>.taboo/</code>.</p>
 <p>For the commands that read this file, see <a href="../cli/">cli.md</a>. For agent names and
 the model each expects, see <a href="../agents/">agents.md</a>.</p>
 <h2 id="top-level-keys">Top-level keys<a class="headerlink" href="#top-level-keys" title="Permanent link">&para;</a></h2>
@@ -1324,6 +1327,12 @@ row.</p>
 <td>Branch-strategy seam; accepts any value for forward compatibility.</td>
 </tr>
 <tr>
+<td><code>source-definition</code></td>
+<td>string</td>
+<td><code>""</code></td>
+<td>Names the workshop definition to derive from when the repo carries several named <code>.workshop/*.yaml</code> definitions; empty selects the sole definition.</td>
+</tr>
+<tr>
 <td><code>defaults</code></td>
 <td>mapping (<code>RunDefaults</code>)</td>
 <td>omitted (nil)</td>
@@ -1349,6 +1358,9 @@ an agent is set; an empty agent leaves the resolved <code>Profile</code> nil wit
 Enforcing a required agent is the <code>validate</code> command's job, not the loader's.</p>
 <p><code>Profile</code> (the resolved top-level profile) is not serialized (<code>yaml:"-"</code>). It is
 populated by <code>LoadConfig</code>, not read from the file.</p>
+<p><code>source-definition</code> is only meaningful when the project's repo holds several
+named <code>.workshop/*.yaml</code> definitions; a single definition needs no selection.
+<code>taboo run --from</code> and <code>taboo init --source-definition</code> override it.</p>
 <h2 id="defaults">defaults<a class="headerlink" href="#defaults" title="Permanent link">&para;</a></h2>
 <p>The <code>defaults:</code> block is <code>RunDefaults</code> (<code>internal/config/config.go</code>): scalar-only run
 settings applied when a workflow or flag does not override them. The whole block
@@ -1468,30 +1480,45 @@ nil (<code>resolveProfiles</code>). Like the top level, <code>Profile</code> is 
 (<code>yaml:"-"</code>).</p>
 <h2 id="default-workflow">default-workflow<a class="headerlink" href="#default-workflow" title="Permanent link">&para;</a></h2>
 <p><code>default-workflow</code> (string) names the workflow <code>taboo run</code> selects when given no
-positional workflow and no prompt flag (<code>cmd/taboo/run.go</code>, <code>selectRun</code>). When
-it names a workflow that is not defined, <code>run</code> errors. When it is empty and no
-workflow is named, a bare <code>run</code> errors listing the available workflows.</p>
+positional workflow and no prompt flag (<code>cli/internal/app/run.go</code>, <code>selectRun</code>).
+When it names a workflow that is not defined, <code>run</code> errors. When it is empty and
+no workflow is named, a bare <code>run</code> errors listing the available workflows.</p>
 <h2 id="precedence-chain">Precedence chain<a class="headerlink" href="#precedence-chain" title="Permanent link">&para;</a></h2>
-<p>For a run, each scalar parameter resolves through three layers, highest first
-(<code>cmd/taboo/run.go</code>, the <code>resolve*</code> helpers):</p>
+<p>The CLI does not resolve run parameters itself; it packs its flags into a
+<code>PlanOverrides</code> and hands them to <code>(*ProjectConfig).Plan</code>, which resolves every
+scalar (<code>internal/config/plan.go</code>). For most parameters resolution is a
+<code>cmp.Or</code> over three layers, first non-zero wins, highest first:</p>
 <ol>
-<li>The CLI flag (<code>--prompt</code>, <code>--model</code>, <code>--agent</code>, <code>--timeout</code>, <code>--iterations</code>,
-   <code>--signal</code>, <code>--branch</code>).</li>
+<li>The CLI flag, carried as a <code>PlanOverrides</code> field (<code>--model</code>, <code>--agent</code>,
+   <code>--timeout</code>, <code>--iterations</code>).</li>
 <li>The selected workflow block.</li>
 <li>The top-level config and the <code>defaults:</code> block.</li>
 </ol>
-<p>Two parameters resolve through fewer layers because they have no workflow field:</p>
+<p>So <code>model</code> is <code>cmp.Or(ov.Model, wf.Model, c.Model)</code>, <code>agent</code> is
+<code>cmp.Or(ov.Agent, wf.Agent, c.Agent)</code>, <code>timeout</code> is
+<code>cmp.Or(ov.Timeout, wf.Timeout, defaults.Timeout)</code>, and <code>max-iterations</code> is
+<code>cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)</code>.</p>
+<p>Some parameters resolve through fewer or different layers:</p>
 <ul>
-<li><code>completion-signal</code> resolves flag-then-defaults only (<code>resolveSignal</code>).</li>
+<li><code>completion-signal</code> has no workflow field, so it is <code>cmp.Or(ov.CompletionSignal, defaults.CompletionSignal)</code> — flag then defaults only.</li>
 <li><code>branch-prefix</code> lives only in <code>defaults</code> and feeds the auto-generated branch
   name (<code>resolveBranch</code>); <code>--branch</code> overrides the whole name verbatim.</li>
+<li><code>source-definition</code> is <code>cmp.Or(ov.From, c.SourceDefinition)</code> — the <code>--from</code>
+  flag then the top-level config.</li>
 </ul>
 <p>The prompt resolves through six layers, first non-empty wins: flag inline, flag
 file, workflow inline, workflow file, defaults inline, defaults file
 (<code>resolvePrompt</code>). A prompt-file path is read relative to the config file's
-directory unless it is absolute.</p>
-<p>Agent and model also apply this chain when resolving the run's profile: flag,
-then workflow, then top level (<code>effectiveAgent</code>, <code>resolveModel</code>, via <code>orElse</code>).</p>
+directory unless it is absolute. When <code>--var</code>/<code>--vars-file</code> supply template
+variables, <code>Plan</code> then substitutes <code>{{VAR}}</code> placeholders in the resolved
+prompt.</p>
+<div class="admonition note">
+<p class="admonition-title">Where the layers come from</p>
+<p>The flag layer is the <code>runOptions</code> parsed in <code>cli/internal/app/run.go</code>,
+packed into <code>PlanOverrides</code> by <code>planOverrides</code>. A Go caller fills the same
+<code>PlanOverrides</code> directly (see <a href="../library-api/">library-api.md</a>). The
+resolution itself is identical for both — it lives entirely in <code>Plan</code>.</p>
+</div>
 <h2 id="strict-decode">Strict decode<a class="headerlink" href="#strict-decode" title="Permanent link">&para;</a></h2>
 <p><code>LoadConfig</code> decodes the document strictly (<code>decodeStrict</code>,
 <code>internal/config/config.go</code>):</p>
@@ -1507,10 +1534,10 @@ then workflow, then top level (<code>effectiveAgent</code>, <code>resolveModel</
 <p>An empty document decodes to the zero config without error through
 <code>LoadConfig</code>. The <code>validate</code> command decodes the same struct itself and instead
 treats an empty document as an error (<code>config is empty</code>, <code>decodeValidate</code> in
-<code>cmd/taboo/validate.go</code>).</p>
+<code>cli/internal/app/validate.go</code>).</p>
 <h2 id="seeded-example">Seeded example<a class="headerlink" href="#seeded-example" title="Permanent link">&para;</a></h2>
 <p><code>taboo init</code> writes this <code>taboo.yaml</code> when seeding the example workflows
-(<code>cmd/taboo/scaffold.go</code>, <code>renderTabooYAML</code>). The <code>workshop</code>, <code>repo</code>, and
+(<code>cli/internal/app/scaffold.go</code>, <code>renderTabooYAML</code>). The <code>workshop</code>, <code>repo</code>, and
 <code>model</code> values are filled from the flags or wizard answers.</p>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># taboo.yaml — generated by `taboo init`.</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># This is the single source of truth for this taboo project.</span>
@@ -1530,10 +1557,10 @@ treats an empty document as an error (<code>config is empty</code>, <code>decode
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="nt">default-workflow</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fix</span>
 </span></code></pre></div>
 <p><code>taboo init</code> marshals this through <code>yaml.v3</code>, which indents nested mappings by
-four spaces. The seeded <code>.taboo/.gitignore</code> lists <code>worktrees/</code>, <code>.workshop/</code>, <code>.env</code>, and
-<code>logs/</code> (<code>renderGitignore</code>). The <code>.env.example</code> header names the chosen agent
-and lists one <code>KEY=</code> line per credential env key the agent reads
-(<code>renderEnvExample</code>).</p>
+four spaces. The seeded <code>.taboo/.gitignore</code> lists six entries — <code>worktrees/</code>,
+<code>.workshop/</code>, <code>/workshop.yaml</code>, <code>/workshop.fingerprint</code>, <code>.env</code>, and <code>logs/</code>
+(<code>renderGitignore</code>). The <code>.env.example</code> header names the chosen agent and lists
+one <code>KEY=</code> line per credential env key the agent reads (<code>renderEnvExample</code>).</p>
 <h2 id="minimal-example">Minimal example<a class="headerlink" href="#minimal-example" title="Permanent link">&para;</a></h2>
 <p>The smallest config the loader and <code>validate</code> accept names an agent, a model, a
 repo, and one workflow.</p>

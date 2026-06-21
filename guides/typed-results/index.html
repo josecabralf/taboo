@@ -650,10 +650,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#attach-the-extractor-to-an-orchestrated-run" class="md-nav__link">
+  <a href="#attach-the-extractor-to-a-real-run" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Attach the extractor to an orchestrated run
+        Attach the extractor to a real run
       
     </span>
   </a>
@@ -1189,10 +1189,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#attach-the-extractor-to-an-orchestrated-run" class="md-nav__link">
+  <a href="#attach-the-extractor-to-a-real-run" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Attach the extractor to an orchestrated run
+        Attach the extractor to a real run
       
     </span>
   </a>
@@ -1297,9 +1297,8 @@ JSON payload inside:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>I checked the code and fixed two issues.
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>&lt;result&gt;{&quot;passed&quot;: true, &quot;issues&quot;: 2}&lt;/result&gt;
 </span></code></pre></div>
-<p><code>JSONResult[T]</code> (<code>pkg/taboo/result.go</code>) finds that block, decodes the JSON into
-<code>T</code>, and returns it. Your struct is the schema: the JSON keys map to fields by
-their <code>json</code> tags.</p>
+<p><code>taboo.JSONResult[T]</code> finds that block, decodes the JSON into <code>T</code>, and returns
+it. Your struct is the schema: the JSON keys map to fields by their <code>json</code> tags.</p>
 <h2 id="decode-a-block">Decode a block<a class="headerlink" href="#decode-a-block" title="Permanent link">&para;</a></h2>
 <p><code>JSONResult[T]</code> returns a <code>ResultExtractor</code>. Its <code>Extract</code> method takes the agent
 output and returns <code>any</code>, which you type-assert to <code>T</code>.</p>
@@ -1335,18 +1334,52 @@ output and returns <code>any</code>, which you type-assert to <code>T</code>.</p
 </span></code></pre></div>
 <p>This program runs without a workshop host. <code>Extract</code> is a pure function over the
 output string.</p>
-<h2 id="attach-the-extractor-to-an-orchestrated-run">Attach the extractor to an orchestrated run<a class="headerlink" href="#attach-the-extractor-to-an-orchestrated-run" title="Permanent link">&para;</a></h2>
-<p>Set the extractor on an <code>OrchestratedRequest</code> and the orchestrator runs it over
-the final iteration's output, exposing the value on <code>OrchestratedResult.Result</code>:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">orch</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">OrchestratedRequest</span><span class="p">{</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">RunRequest</span><span class="p">:</span><span class="w">      </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">RunRequest</span><span class="p">{</span><span class="nx">Branch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;taboo/review&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">Prompt</span><span class="p">:</span><span class="w"> </span><span class="nx">prompt</span><span class="p">},</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">ResultExtractor</span><span class="p">:</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">JSONResult</span><span class="p">[</span><span class="nx">review</span><span class="p">](),</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">})</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">}</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">Result</span><span class="p">.(</span><span class="nx">review</span><span class="p">)</span>
+<h2 id="attach-the-extractor-to-a-real-run">Attach the extractor to a real run<a class="headerlink" href="#attach-the-extractor-to-a-real-run" title="Permanent link">&para;</a></h2>
+<p>When you run a workflow, the orchestrator runs the extractor over the final
+iteration's output and exposes the value on <code>OrchestratedResult.Result</code>. There
+are two public ways to wire it in.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Inspect, then run</label><label for="__tabbed_1_2">One typed call</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p>Resolve a <code>Plan</code>, set the extractor on <code>Plan.Request.ResultExtractor</code>, then
+<code>Plan.Run</code>. The decoded value lands on <code>OrchestratedResult.Result</code> as <code>any</code>,
+so you type-assert it:</p>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nx">plan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">cfg</span><span class="p">.</span><span class="nx">Plan</span><span class="p">(</span><span class="nx">dir</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;review&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">vars</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">PlanOverrides</span><span class="p">{</span><span class="nx">Branch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;taboo/review&quot;</span><span class="p">})</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nx">plan</span><span class="p">.</span><span class="nx">Request</span><span class="p">.</span><span class="nx">ResultExtractor</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">JSONResult</span><span class="p">[</span><span class="nx">review</span><span class="p">]()</span><span class="w"> </span><span class="c1">// (1)!</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">plan</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">NewExecCommander</span><span class="p">())</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">Result</span><span class="p">.(</span><span class="nx">review</span><span class="p">)</span><span class="w"> </span><span class="c1">// (2)!</span>
 </span></code></pre></div>
+<ol>
+<li><code>Plan.Request</code> is an <code>OrchestratedRequest</code>; <code>ResultExtractor</code> is the seam
+   the orchestrator reads after the loop.</li>
+<li><code>Result</code> is <code>any</code>. Type-assert it to the same <code>T</code> you decoded into.</li>
+</ol>
+</div>
+<div class="tabbed-block">
+<p><code>RunWorkflowAs[T]</code> does the locate-load-plan-run pipeline and threads a
+<code>JSONResult[T]</code> extractor in for you, so it returns a statically typed <code>T</code>
+with no assertion:</p>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nx">r</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">RunWorkflowAs</span><span class="p">[</span><span class="nx">review</span><span class="p">](</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">dir</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;review&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">vars</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">PlanOverrides</span><span class="p">{</span><span class="nx">Branch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;taboo/review&quot;</span><span class="p">},</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">NewExecCommander</span><span class="p">(),</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="p">)</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">}</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1">// r is already a review; res.Result carries the same value as any.</span>
+</span></code></pre></div>
+</div>
+</div>
+</div>
+<p><code>RunWorkflowAs[T]</code> accepts no extractor options, so reach for the inspect-then-run
+path when you need <code>WithStrictFields</code>, <code>WithDelimiters</code>, or a custom extractor.</p>
 <p>See <a href="../iterate-until-done/">Iterate until the agent signals done</a> for the loop
 that drives this.</p>
 <h2 id="the-last-complete-block-wins">The last complete block wins<a class="headerlink" href="#the-last-complete-block-wins" title="Permanent link">&para;</a></h2>
@@ -1361,35 +1394,35 @@ block at all.</p>
 chatty and a stray key should not fail an otherwise-correct result. Pass
 <code>WithStrictFields()</code> to reject a payload that carries unknown fields
 (<code>DisallowUnknownFields</code>):</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">JSONResult</span><span class="p">[</span><span class="nx">review</span><span class="p">](</span><span class="nx">taboo</span><span class="p">.</span><span class="nx">WithStrictFields</span><span class="p">())</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">JSONResult</span><span class="p">[</span><span class="nx">review</span><span class="p">](</span><span class="nx">taboo</span><span class="p">.</span><span class="nx">WithStrictFields</span><span class="p">())</span>
 </span></code></pre></div>
 <p>With strict fields on, a payload like <code>{"passed": true, "issues": 2, "extra": 1}</code>
 returns <code>ErrInvalidResult</code> because <code>extra</code> is not a field of <code>review</code>.</p>
 <h2 id="change-the-delimiters-with-withdelimiters">Change the delimiters with WithDelimiters<a class="headerlink" href="#change-the-delimiters-with-withdelimiters" title="Permanent link">&para;</a></h2>
 <p>The default delimiters are <code>&lt;result&gt;</code> and <code>&lt;/result&gt;</code>. Override them with
 <code>WithDelimiters(open, close)</code> when those tags collide with the agent's content:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">JSONResult</span><span class="p">[</span><span class="nx">review</span><span class="p">](</span><span class="nx">taboo</span><span class="p">.</span><span class="nx">WithDelimiters</span><span class="p">(</span><span class="s">&quot;&lt;&lt;json&gt;&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&lt;&lt;/json&gt;&gt;&quot;</span><span class="p">))</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">JSONResult</span><span class="p">[</span><span class="nx">review</span><span class="p">](</span><span class="nx">taboo</span><span class="p">.</span><span class="nx">WithDelimiters</span><span class="p">(</span><span class="s">&quot;&lt;&lt;json&gt;&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&lt;&lt;/json&gt;&gt;&quot;</span><span class="p">))</span>
 </span></code></pre></div>
 <h2 id="validate-the-decoded-value">Validate the decoded value<a class="headerlink" href="#validate-the-decoded-value" title="Permanent link">&para;</a></h2>
 <p>For checks beyond well-formed JSON (a required field, an enum, a range),
 implement the <code>Validator</code> interface on <code>T</code>:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Validator</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nx">Validate</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="p">}</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Validator</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="nx">Validate</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>If <code>T</code> implements <code>Validate</code>, the extractor calls it after decoding and treats a
 non-nil error as an invalid result:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">review</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="nx">Passed</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;passed&quot;`</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nx">Issues</span><span class="w"> </span><span class="kt">int</span><span class="w">  </span><span class="s">`json:&quot;issues&quot;`</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">review</span><span class="p">)</span><span class="w"> </span><span class="nx">Validate</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Issues</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;issues cannot be negative: %d&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Issues</span><span class="p">)</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="p">}</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">review</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="nx">Passed</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;passed&quot;`</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nx">Issues</span><span class="w"> </span><span class="kt">int</span><span class="w">  </span><span class="s">`json:&quot;issues&quot;`</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">review</span><span class="p">)</span><span class="w"> </span><span class="nx">Validate</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Issues</span><span class="w"> </span><span class="p">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;issues cannot be negative: %d&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Issues</span><span class="p">)</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>A non-nil <code>Validate</code> error returns <code>ErrInvalidResult</code>, with the underlying detail
 preserved in the message. A value or pointer receiver works.</p>
@@ -1402,18 +1435,18 @@ preserved in the message. A value or pointer receiver works.</p>
   decode or validate: empty, malformed JSON, type-mismatched, an unknown field
   under strict mode, or rejected by <code>Validate</code>.</li>
 </ul>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ext</span><span class="p">.</span><span class="nx">Extract</span><span class="p">(</span><span class="nx">output</span><span class="p">)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">switch</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">case</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">Is</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">ErrNoResult</span><span class="p">):</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="c1">// agent emitted no result block</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">case</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">Is</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">ErrInvalidResult</span><span class="p">):</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="c1">// block found but payload rejected</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="k">case</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="p">:</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="c1">// other error</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="k">default</span><span class="p">:</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">v</span><span class="p">.(</span><span class="nx">review</span><span class="p">)</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">}</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nx">v</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ext</span><span class="p">.</span><span class="nx">Extract</span><span class="p">(</span><span class="nx">output</span><span class="p">)</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">switch</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">case</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">Is</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">ErrNoResult</span><span class="p">):</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="c1">// agent emitted no result block</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="k">case</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">Is</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">ErrInvalidResult</span><span class="p">):</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="c1">// block found but payload rejected</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="k">case</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="p">:</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="c1">// other error</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="k">default</span><span class="p">:</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">v</span><span class="p">.(</span><span class="nx">review</span><span class="p">)</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="p">}</span>
 </span></code></pre></div>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>

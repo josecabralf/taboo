@@ -1356,12 +1356,15 @@ clears the label. On either side a failure adds <code>agent:blocked</code> and a
 comment; re-adding the trigger label retries.</p>
 <p>The chain from implement to review — and CI on the resulting PR — is automatic,
 but only because the implement flow applies the <code>agent:review</code> label with a
-personal access token rather than the default <code>GITHUB_TOKEN</code>. An event created
-with <code>GITHUB_TOKEN</code> does not trigger another workflow — GitHub suppresses that to
-prevent recursive runs. So the cascade depends on <code>secrets.AGENT_PAT</code>; without it
-the PR is opened and labelled but nothing downstream fires — neither the PR's CI
-nor the review workflow wakes up. This is the single non-obvious wiring fact in
-the whole loop, and the one-time setup below calls it out.</p>
+personal access token rather than the default <code>GITHUB_TOKEN</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">The single non-obvious wiring fact in the whole loop</p>
+<p>An event created with <code>GITHUB_TOKEN</code> does not trigger another workflow —
+GitHub suppresses that to prevent recursive runs. So the cascade depends on
+<code>secrets.AGENT_PAT</code>; without it the PR is opened and labelled but nothing
+downstream fires — neither the PR's CI nor the review workflow wakes up. The
+<a href="#human-one-time-setup">one-time setup</a> below calls it out.</p>
+</div>
 <p><code>afk loop</code> is the same machine run autonomously. Where <code>implement</code> drives one
 issue, <code>loop</code> drains the whole <code>ready-for-agent</code> backlog wave by wave: each wave
 it plans the next parallel-safe batch, <em>claims</em> every issue in it (removing
@@ -1471,14 +1474,16 @@ The issue was vetted by the maintainer who labelled it; the diff was produced by
 our own implement agent on a branch we control. The review workflow consumes them
 with write-scoped tokens because it has to post a review, and it does so trusting
 that a maintainer's label vouched for them.</p>
-<p>This is <strong>not hardened for untrusted public forks.</strong> The review and finalize
-workflows use <code>pull_request_target</code>, which runs with the base repository's
-secrets even for a fork's PR. On a repository that accepts drive-by fork PRs, a
-labeller could be tricked into running agent code with access to the agent
-credential (<code>CLAUDE_CODE_OAUTH_TOKEN</code>) those jobs expose — the classic
-<code>pull_request_target</code> secret-exfiltration footgun. The loop assumes a
-trusted-contributor repository where everyone who can label is already trusted
-with secrets. Hardening it for open public contribution (forks,
+<div class="admonition danger">
+<p class="admonition-title">Not hardened for untrusted public forks</p>
+<p>The review and finalize workflows use <code>pull_request_target</code>, which runs with
+the base repository's secrets even for a fork's PR. On a repository that
+accepts drive-by fork PRs, a labeller could be tricked into running agent
+code with access to the agent credential (<code>CLAUDE_CODE_OAUTH_TOKEN</code>) those
+jobs expose — the classic <code>pull_request_target</code> secret-exfiltration footgun.</p>
+</div>
+<p>The loop assumes a trusted-contributor repository where everyone who can label is
+already trusted with secrets. Hardening it for open public contribution (forks,
 sandboxed review of untrusted diffs, scoped-down tokens) is a separate project,
 not part of this loop.</p>
 <h2 id="human-one-time-setup">Human one-time setup<a class="headerlink" href="#human-one-time-setup" title="Permanent link">&para;</a></h2>

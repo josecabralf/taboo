@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#injecting-template-variables-into-a-run-prompt" class="md-skip">
+        <a href="#run-variables-var-substitution" class="md-skip">
           Skip to content
         </a>
       
@@ -851,6 +851,28 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#the-placeholder-grammar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The placeholder grammar
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#supplying-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supplying values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#precedence" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -873,10 +895,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#paths-and-resolution" class="md-nav__link">
+  <a href="#every-supplied-placeholder-must-resolve" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Paths and resolution
+        Every supplied placeholder must resolve
       
     </span>
   </a>
@@ -884,10 +906,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#once-a-var-is-supplied-every-placeholder-must-resolve" class="md-nav__link">
+  <a href="#failure-modes-cli" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Once a var is supplied, every placeholder must resolve
+        Failure modes (CLI)
       
     </span>
   </a>
@@ -899,6 +921,17 @@
     <span class="md-ellipsis">
       
         Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
       
     </span>
   </a>
@@ -1123,6 +1156,28 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#the-placeholder-grammar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The placeholder grammar
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#supplying-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supplying values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#precedence" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1145,10 +1200,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#paths-and-resolution" class="md-nav__link">
+  <a href="#every-supplied-placeholder-must-resolve" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Paths and resolution
+        Every supplied placeholder must resolve
       
     </span>
   </a>
@@ -1156,10 +1211,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#once-a-var-is-supplied-every-placeholder-must-resolve" class="md-nav__link">
+  <a href="#failure-modes-cli" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Once a var is supplied, every placeholder must resolve
+        Failure modes (CLI)
       
     </span>
   </a>
@@ -1171,6 +1226,17 @@
     <span class="md-ellipsis">
       
         Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
       
     </span>
   </a>
@@ -1197,68 +1263,136 @@
   
 
 
-<h1 id="injecting-template-variables-into-a-run-prompt">Injecting template variables into a run prompt<a class="headerlink" href="#injecting-template-variables-into-a-run-prompt" title="Permanent link">&para;</a></h1>
-<p><code>taboo run</code> can fill <code>{{VAR}}</code> placeholders in the resolved prompt with
-caller-supplied values, so one workflow prompt serves many concrete runs
-(a GitHub issue, a PR diff, a ticket id) without editing <code>taboo.yaml</code>.</p>
-<p>Two flags supply the values:</p>
-<ul>
-<li><code>--vars-file &lt;path&gt;</code> — a JSON object of <code>{"VAR": "value"}</code> pairs.</li>
-<li><code>--var KEY=VALUE</code> — a single variable inline; repeatable.</li>
-</ul>
-<p>Both substitute their values into the prompt's <code>{{VAR}}</code> placeholders: a
-<code>{{ISSUE_TITLE}}</code> in the prompt is replaced by the <code>ISSUE_TITLE</code> value.</p>
+<h1 id="run-variables-var-substitution">Run variables: <code>{{VAR}}</code> substitution<a class="headerlink" href="#run-variables-var-substitution" title="Permanent link">&para;</a></h1>
+<p>A resolved prompt may contain <code>{{VAR}}</code> placeholders. Caller-supplied values
+fill those placeholders before the prompt reaches the agent, so one workflow
+prompt serves many concrete runs (a GitHub issue, a PR diff, a ticket id)
+without editing <code>taboo.yaml</code>.</p>
+<p>Substitution is performed by <code>taboo.Substitute</code> (the <code>internal/prompt.Substitute</code>
+function, re-exported on the public facade). Both the CLI and the library route
+through it.</p>
+<h2 id="the-placeholder-grammar">The placeholder grammar<a class="headerlink" href="#the-placeholder-grammar" title="Permanent link">&para;</a></h2>
+<p>A placeholder is <code>{{</code> <code>VAR</code> <code>}}</code>, where <code>VAR</code> is an identifier: a leading letter
+or underscore, then letters, digits, or underscores (the regexp
+<code>[A-Za-z_][A-Za-z0-9_]*</code>). Text that does not match — <code>{{ VAR }}</code> with inner
+spaces, <code>{{1ST}}</code>, <code>{{a-b}}</code> — is not a placeholder and is left untouched.</p>
+<p>There are <strong>no built-in variables</strong>. Every value is caller-supplied; nothing is
+auto-populated from the environment, the run, or the config. A placeholder with
+no supplied value is an error (see <a href="#every-supplied-placeholder-must-resolve">Every supplied placeholder must
+resolve</a>).</p>
+<h2 id="supplying-values">Supplying values<a class="headerlink" href="#supplying-values" title="Permanent link">&para;</a></h2>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Library</label><label for="__tabbed_1_2">CLI</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p>Pass a <code>map[string]string</code> of <code>{VAR: value}</code> to the call that resolves the
+prompt — <code>RunWorkflow</code>, <code>RunWorkflowAs[T]</code>, or <code>(*ProjectConfig).Plan</code>. Each
+key fills the matching <code>{{key}}</code> placeholder.</p>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nx">vars</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;ISSUE_TITLE&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Parser drops trailing comments&quot;</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="s">&quot;ISSUE_BODY&quot;</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;Lines after a // comment are silently truncated.&quot;</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">}</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">RunWorkflow</span><span class="p">(</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;triage&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">vars</span><span class="p">,</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">PlanOverrides</span><span class="p">{},</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">NewExecCommander</span><span class="p">(),</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span>
+</span></code></pre></div>
+<p><code>Substitute</code> is also exported directly for callers that hold the template
+themselves:</p>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nx">filled</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">Substitute</span><span class="p">(</span><span class="s">&quot;Title: {{ISSUE_TITLE}}&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">vars</span><span class="p">)</span>
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Two flags on <code>taboo run</code> build the variable map:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Value</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--vars-file &lt;path&gt;</code></td>
+<td>A JSON object of <code>{"VAR": "value"}</code> pairs.</td>
+<td>Relative paths resolve against the <code>.taboo</code> config directory; absolute paths are used as given.</td>
+</tr>
+<tr>
+<td><code>--var KEY=VALUE</code></td>
+<td>A single variable inline.</td>
+<td>Repeatable. Overrides a matching <code>--vars-file</code> key.</td>
+</tr>
+</tbody>
+</table>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>taboo<span class="w"> </span>run<span class="w"> </span>triage<span class="w"> </span>--vars-file<span class="w"> </span>vars.json<span class="w"> </span>--var<span class="w"> </span><span class="nv">ISSUE_TITLE</span><span class="o">=</span><span class="s2">&quot;Parser drops comments&quot;</span>
+</span></code></pre></div>
+</div>
+</div>
+</div>
 <h2 id="precedence">Precedence<a class="headerlink" href="#precedence" title="Permanent link">&para;</a></h2>
-<p>Variable injection happens <em>after</em> the prompt itself is resolved. The normal
-prompt precedence chain runs first — <code>--prompt</code>/<code>--prompt-file</code> flag &gt; 
-workflow &gt; defaults — and whichever prompt wins is the text the placeholders
-are filled into.</p>
-<p>Among the variables themselves, <code>--var</code> overrides <code>--vars-file</code>: a
+<p>Substitution happens <em>after</em> the prompt itself is resolved. The prompt
+precedence chain runs first — inline <code>--prompt</code>/<code>--prompt-file</code> over the
+workflow over the <code>defaults:</code> block — and the winning text is what the
+placeholders are filled into.</p>
+<p>Among the variables themselves (CLI only), <code>--var</code> overrides <code>--vars-file</code>: a
 <code>--var NAME=x</code> wins over a <code>"NAME"</code> key in the file, so a file of defaults can be
 overridden one key at a time on the command line.</p>
 <h2 id="values-are-literal-never-expanded">Values are literal, never expanded<a class="headerlink" href="#values-are-literal-never-expanded" title="Permanent link">&para;</a></h2>
-<p>Injected values are inserted <strong>verbatim</strong>. Substitution is a single pass, so a
-value that itself contains <code>$(...)</code>, backticks, <code>$VAR</code>, or another <code>{{X}}</code> is
-placed into the prompt as-is and is <strong>never</strong> evaluated, shell-expanded, or
-re-substituted. <code>taboo run</code> fills the values with a single literal pass
-(<code>taboo.Substitute</code>) and hands the prompt to the agent through argv/stdin (see
-<code>docs/adr/0001-agentprofile-argv-stdin-command-contract.md</code>) — not through a
-shell. So there is no shell to expand the injected values.</p>
-<p>This is what makes injection safe for untrusted text — a GitHub issue body, a PR
-diff, an arbitrary comment — that may contain shell metacharacters or look like a
-placeholder. It lands in the prompt as plain text.</p>
-<h2 id="paths-and-resolution">Paths and resolution<a class="headerlink" href="#paths-and-resolution" title="Permanent link">&para;</a></h2>
-<p>A relative <code>--vars-file</code> path resolves against the <code>.taboo</code> config directory
-(the same base as <code>--prompt-file</code>), so the same invocation works from any
-subdirectory of the project. An absolute path is used as given. A missing file,
-malformed JSON, or a <code>--var</code> without an <code>=</code> aborts the run before anything
-executes.</p>
-<h2 id="once-a-var-is-supplied-every-placeholder-must-resolve">Once a var is supplied, every placeholder must resolve<a class="headerlink" href="#once-a-var-is-supplied-every-placeholder-must-resolve" title="Permanent link">&para;</a></h2>
-<p>With no vars given the prompt is passed through untouched, so a prompt that
-legitimately contains <code>{{...}}</code> is left alone. But as soon as <em>any</em> var is
+<p>Supplied values are inserted <strong>verbatim</strong> in a single pass. A value that itself
+contains <code>$(...)</code>, backticks, <code>$VAR</code>, or another <code>{{X}}</code> is placed into the
+prompt as-is — it is never evaluated, shell-expanded, or re-substituted. taboo
+hands the prompt to the agent through argv or stdin
+(<a href="https://github.com/josecabralf/taboo/blob/main/docs/adr/0001-agentprofile-argv-stdin-command-contract.md">ADR 0001 — the argv + stdin command contract</a>),
+not through a shell, so there is no shell to expand the injected values.</p>
+<div class="admonition info">
+<p class="admonition-title">Why a single literal pass matters</p>
+<p>This is what makes substitution safe for untrusted text — a GitHub issue
+body, a PR diff, an arbitrary comment — that may contain shell
+metacharacters or look like a placeholder. It lands in the prompt as plain
+text.</p>
+</div>
+<h2 id="every-supplied-placeholder-must-resolve">Every supplied placeholder must resolve<a class="headerlink" href="#every-supplied-placeholder-must-resolve" title="Permanent link">&para;</a></h2>
+<p>With no variables supplied, the prompt is passed through untouched, so a prompt
+that legitimately contains <code>{{...}}</code> is left alone. As soon as <em>any</em> variable is
 supplied, <strong>every</strong> <code>{{VAR}}</code> in the prompt must have a matching value — an
-unresolved placeholder fails the run fast rather than sending a half-filled
-prompt to the agent.</p>
+unresolved placeholder fails the run fast (the error names the missing
+variable) rather than sending a half-filled prompt to the agent.</p>
+<h2 id="failure-modes-cli">Failure modes (CLI)<a class="headerlink" href="#failure-modes-cli" title="Permanent link">&para;</a></h2>
+<p>Each of the following aborts the run before anything executes:</p>
+<ul>
+<li>a <code>--vars-file</code> that does not exist, or that it cannot read;</li>
+<li>a <code>--vars-file</code> whose contents are not a JSON object of string values;</li>
+<li>a <code>--var</code> without an <code>=</code>, or with an empty key;</li>
+<li>a supplied set of variables that leaves any <code>{{VAR}}</code> in the prompt unresolved.</li>
+</ul>
 <h2 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h2>
 <p><code>.taboo/vars.json</code>:</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;ISSUE_TITLE&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Parser drops trailing comments&quot;</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;ISSUE_BODY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Lines after a // comment are silently truncated.&quot;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">}</span>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;ISSUE_TITLE&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Parser drops trailing comments&quot;</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;ISSUE_BODY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Lines after a // comment are silently truncated.&quot;</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>A workflow prompt in <code>taboo.yaml</code>:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">workflows</span><span class="p">:</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">triage</span><span class="p">:</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="no">Title: {{ISSUE_TITLE}}</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">      </span><span class="no">{{ISSUE_BODY}}</span>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">workflows</span><span class="p">:</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">triage</span><span class="p">:</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="no">Title: {{ISSUE_TITLE}}</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="no">{{ISSUE_BODY}}</span>
 </span></code></pre></div>
 <p>Run it, overriding one value inline:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>taboo<span class="w"> </span>run<span class="w"> </span>triage<span class="w"> </span>--vars-file<span class="w"> </span>vars.json<span class="w"> </span>--var<span class="w"> </span><span class="nv">ISSUE_TITLE</span><span class="o">=</span><span class="s2">&quot;Parser drops comments&quot;</span>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>taboo<span class="w"> </span>run<span class="w"> </span>triage<span class="w"> </span>--vars-file<span class="w"> </span>vars.json<span class="w"> </span>--var<span class="w"> </span><span class="nv">ISSUE_TITLE</span><span class="o">=</span><span class="s2">&quot;Parser drops comments&quot;</span>
 </span></code></pre></div>
-<p>The agent receives the prompt with both placeholders filled, the title taken
+<p>The agent receives the prompt with both placeholders filled: the title taken
 from the <code>--var</code> override and the body from the file.</p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../reference/taboo-yaml/"><code>taboo.yaml</code> reference</a> — where workflow prompts and
+  the <code>defaults:</code> prompt are configured.</li>
+<li><a href="../reference/cli/">CLI reference</a> — the full <code>run</code> flag set and resolution
+  order.</li>
+<li><a href="../reference/library-api/">Library API reference</a> — <code>RunWorkflow</code>,
+  <code>(*ProjectConfig).Plan</code>, and <code>Substitute</code>.</li>
+</ul>
 
 
 

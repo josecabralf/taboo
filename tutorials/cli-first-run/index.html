@@ -527,10 +527,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-to-go-next" class="md-nav__link">
+  <a href="#next-steps" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where to go next
+        Next steps
       
     </span>
   </a>
@@ -1211,10 +1211,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-to-go-next" class="md-nav__link">
+  <a href="#next-steps" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where to go next
+        Next steps
       
     </span>
   </a>
@@ -1242,6 +1242,10 @@
 
 
 <h1 id="run-your-first-workflow-with-the-cli">Run your first workflow with the CLI<a class="headerlink" href="#run-your-first-workflow-with-the-cli" title="Permanent link">&para;</a></h1>
+<div class="admonition abstract">
+<p class="admonition-title">What you'll build</p>
+<p>A real taboo project in a git repository, scaffolded and validated, ending in one agent run that commits to a fresh branch in your repo. Every step is concrete and runs in order.</p>
+</div>
 <p>By the end of this tutorial you will have installed the <code>taboo</code> binary, scaffolded a taboo project into a git repository, set one credential, checked that your host is ready, and run the seeded <code>fix</code> workflow. The <code>taboo</code> CLI wraps the library: <code>init</code> scaffolds the project (<code>cli/internal/app/init.go</code>, <code>cli/internal/app/scaffold.go</code>), <code>doctor</code> checks the host (<code>cli/internal/app/doctor.go</code>), and <code>run</code> drives a workflow end-to-end on a fresh branch (<code>cli/internal/app/run.go</code>).</p>
 <p>This tutorial uses the <code>opencode</code> agent. For why runs are isolated and commit in place, read <a href="../../explanation/isolation-model/">the isolation model</a> afterwards.</p>
 <h2 id="install-the-cli">Install the CLI<a class="headerlink" href="#install-the-cli" title="Permanent link">&para;</a></h2>
@@ -1258,70 +1262,85 @@
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/demo-repo&quot;</span><span class="w"> </span>commit<span class="w"> </span>--allow-empty<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;initial commit&quot;</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">cd</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/demo-repo&quot;</span>
 </span></code></pre></div>
+<p>The repository must also be a <em>workshop project</em>: it needs a <code>workshop.yaml</code> that names the workshop and its base toolchain. taboo derives each agent's workshop from this definition, so <code>init</code> (and <code>doctor</code>) refuse a repo without one (<code>cli/internal/app/init.go</code>, <code>requireWorkshopProject</code>). Write a minimal one at the repo root:</p>
+<div class="language-yaml highlight"><span class="filename">workshop.yaml</span><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo-repo</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">base</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu@24.04</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">sdks</span><span class="p">:</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">go</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">channel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.26/stable</span>
+</span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This <code>workshop.yaml</code> is the project's own toolchain definition, distinct from the <code>.taboo/taboo.yaml</code> that <code>init</code> writes next. taboo seeds the agent's SDK on top of it; you do not author the agent definition yourself.</p>
+</div>
 <h2 id="scaffold-the-project">Scaffold the project<a class="headerlink" href="#scaffold-the-project" title="Permanent link">&para;</a></h2>
 <p>Run <code>taboo init</code>. Passing <code>--agent</code> and <code>--model</code> scaffolds without prompting. (Run <code>taboo init</code> with neither flag in a terminal and it walks you through an interactive wizard instead.)</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>taboo<span class="w"> </span>init<span class="w"> </span>--agent<span class="w"> </span>opencode<span class="w"> </span>--model<span class="w"> </span>openrouter/qwen/qwen3-coder-plus
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>taboo<span class="w"> </span>init<span class="w"> </span>--agent<span class="w"> </span>opencode<span class="w"> </span>--model<span class="w"> </span>openrouter/qwen/qwen3-coder-plus
 </span></code></pre></div>
 <p>This writes a <code>.taboo/</code> directory into the repository. With no <code>--workflows none</code> flag it seeds the example <code>fix</code> and <code>refactor</code> workflows and their prompt files. It writes:</p>
 <ul>
 <li><code>.taboo/taboo.yaml</code> — the project config (shown below).</li>
-<li><code>.taboo/.gitignore</code> — ignores <code>worktrees/</code>, <code>.workshop/</code>, <code>.env</code>, and <code>logs/</code>.</li>
+<li><code>.taboo/.gitignore</code> — ignores the runtime state taboo writes: <code>worktrees/</code>, <code>.workshop/</code>, the derived <code>/workshop.yaml</code> and <code>/workshop.fingerprint</code>, <code>.env</code>, and <code>logs/</code>.</li>
 <li><code>.taboo/.env.example</code> — one <code>KEY=</code> line per credential the chosen agent reads.</li>
 <li><code>.taboo/prompts/fix.md</code> and <code>.taboo/prompts/refactor.md</code> — the seeded workflow prompts.</li>
 </ul>
 <p><code>init</code> never launches a workshop. It prints the next steps and offers to run <code>doctor</code>.</p>
 <p>The seeded <code>.taboo/taboo.yaml</code> looks like this. The <code>workshop</code>, <code>repo</code>, and <code>model</code> values are filled from your flags or wizard answers; the values below are examples:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># taboo.yaml — generated by `taboo init`.</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># This is the single source of truth for this taboo project.</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># Edit it directly; run `taboo doctor` to validate your changes.</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nt">workshop</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-project</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nt">base</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu@24.04</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="nt">repo</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/you/my-project</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="nt">agent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opencode</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openrouter/qwen/qwen3-coder-plus</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="nt">strategy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">branch</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="nt">workflows</span><span class="p">:</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">    </span><span class="nt">fix</span><span class="p">:</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">        </span><span class="nt">prompt-file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/fix.md</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="nt">refactor</span><span class="p">:</span>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">        </span><span class="nt">prompt-file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/refactor.md</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="nt">default-workflow</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fix</span>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># taboo.yaml — generated by `taboo init`.</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># This is the single source of truth for this taboo project.</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># Edit it directly; run `taboo doctor` to validate your changes.</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nt">workshop</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-project</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nt">base</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu@24.04</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="nt">repo</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/you/my-project</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="nt">agent</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opencode</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openrouter/qwen/qwen3-coder-plus</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="nt">strategy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">branch</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="nt">workflows</span><span class="p">:</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="nt">fix</span><span class="p">:</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">        </span><span class="nt">prompt-file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/fix.md</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">    </span><span class="nt">refactor</span><span class="p">:</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">        </span><span class="nt">prompt-file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/refactor.md</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="nt">default-workflow</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fix</span>
 </span></code></pre></div>
 <p><code>taboo init</code> marshals this through <code>yaml.v3</code>, which indents nested mappings by four spaces. <code>workshop</code> defaults to a slug of the repository directory name. <code>repo</code> is the absolute path to the repository you ran <code>init</code> in. <code>default-workflow: fix</code> is what a bare <code>taboo run</code> selects.</p>
 <h2 id="set-the-one-credential">Set the one credential<a class="headerlink" href="#set-the-one-credential" title="Permanent link">&para;</a></h2>
-<p><code>init</code> writes <code>.env.example</code> but not <code>.env</code>. Copy it and fill in the credential the agent uses. For <code>opencode</code> that is <code>OPENROUTER_API_KEY</code> (<code>pkg/taboo/agent_opencode.go</code>):</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>cp<span class="w"> </span>.taboo/.env.example<span class="w"> </span>.taboo/.env
+<p><code>init</code> writes <code>.env.example</code> but not <code>.env</code>. Copy it and fill in the credential the agent uses. For <code>opencode</code> that is <code>OPENROUTER_API_KEY</code> (<code>internal/agent/agent_opencode.go</code>):</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>cp<span class="w"> </span>.taboo/.env.example<span class="w"> </span>.taboo/.env
 </span></code></pre></div>
 <p>Edit <code>.taboo/.env</code> so the line reads your key, for example:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>OPENROUTER_API_KEY=your-openrouter-key
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>OPENROUTER_API_KEY=your-openrouter-key
 </span></code></pre></div>
 <p>You only set the one credential you hold. taboo forwards just the keys present in the environment when it runs, so unset keys are dropped.</p>
 <p>Load the file into your shell so taboo can forward the value:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">set</span><span class="w"> </span>-a<span class="p">;</span><span class="w"> </span><span class="nb">source</span><span class="w"> </span>.taboo/.env<span class="p">;</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>+a
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">set</span><span class="w"> </span>-a<span class="p">;</span><span class="w"> </span><span class="nb">source</span><span class="w"> </span>.taboo/.env<span class="p">;</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>+a
 </span></code></pre></div>
 <h2 id="check-the-host">Check the host<a class="headerlink" href="#check-the-host" title="Permanent link">&para;</a></h2>
 <p>Run <code>doctor</code> from inside the project so it checks both the host tooling and the resolved config:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>taboo<span class="w"> </span>doctor
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>taboo<span class="w"> </span>doctor
 </span></code></pre></div>
-<p><code>doctor</code> reports an error if the <code>workshop</code> snap is missing or older than <code>0.9.1</code> (the floor <code>minWorkshopVersion</code> in <code>cmd/taboo/version.go</code>), if LXD is missing or unreachable, or if <code>git</code> is absent. Inside a <code>.taboo/</code> project it also checks that the config loads, the <code>repo</code> path exists and is a git repository. It warns (without failing) when the Go toolchain is missing or the agent's credentials are not set. Install anything it flags as an error:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>sudo<span class="w"> </span>snap<span class="w"> </span>install<span class="w"> </span>workshop
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>sudo<span class="w"> </span>snap<span class="w"> </span>install<span class="w"> </span>lxd
+<p><code>doctor</code> reports an error if the <code>workshop</code> snap is missing or older than <code>0.9.1</code> (the floor <code>minWorkshopVersion</code> in <code>cli/internal/app/version.go</code>), if LXD is missing or unreachable, or if <code>git</code> is absent. Inside a <code>.taboo/</code> project it also checks that the config loads, the <code>repo</code> path is on persistent storage and is a git repository, and that the repo is a workshop project (has a <code>workshop.yaml</code>). It warns (without failing) when the Go toolchain is missing or the agent's credentials are not set. Install anything it flags as an error:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>sudo<span class="w"> </span>snap<span class="w"> </span>install<span class="w"> </span>workshop
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>sudo<span class="w"> </span>snap<span class="w"> </span>install<span class="w"> </span>lxd
 </span></code></pre></div>
 <p>Re-run <code>taboo doctor</code> until it reports no errors.</p>
 <h2 id="run-the-fix-workflow">Run the fix workflow<a class="headerlink" href="#run-the-fix-workflow" title="Permanent link">&para;</a></h2>
-<p>This step launches a real workshop and runs the agent, so it is untested here, verify on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it.</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>taboo<span class="w"> </span>run<span class="w"> </span>fix
+<div class="admonition warning">
+<p class="admonition-title">This step launches a real workshop</p>
+<p><code>taboo run</code> starts a workshop and runs the agent for real, so it is not exercised in this repo's tests — run it on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it. At a terminal <code>run</code> prints a one-line summary and asks for confirmation before it starts; pass <code>--yes</code> to skip the prompt.</p>
+</div>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>taboo<span class="w"> </span>run<span class="w"> </span>fix
 </span></code></pre></div>
 <p><code>run fix</code> resolves the <code>fix</code> workflow's prompt from <code>prompts/fix.md</code>, creates a fresh branch, launches or reuses the workshop, and runs the agent. The live agent output streams to stderr. The machine result is written to stdout as two lines:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>branch: &lt;branch-name&gt;
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>commit: &lt;commit-hash&gt;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>branch: &lt;branch-name&gt;
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>commit: &lt;commit-hash&gt;
 </span></code></pre></div>
 <p>The branch name is generated from the workflow name and a timestamp. The commit is the branch HEAD after the agent ran. The agent committed in place, so the commit is already on that branch in your repository:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>git<span class="w"> </span>log<span class="w"> </span>--oneline<span class="w"> </span>&lt;branch-name&gt;
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>git<span class="w"> </span>log<span class="w"> </span>--oneline<span class="w"> </span>&lt;branch-name&gt;
 </span></code></pre></div>
 <p>A bare <code>taboo run</code> runs <code>default-workflow</code> (here, <code>fix</code>). To run the other seeded workflow, name it: <code>taboo run refactor</code>.</p>
-<h2 id="where-to-go-next">Where to go next<a class="headerlink" href="#where-to-go-next" title="Permanent link">&para;</a></h2>
+<h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
+<p><a class="md-button md-button--primary" href="../../reference/cli/">CLI reference</a> <a class="md-button" href="../../reference/taboo-yaml/">taboo.yaml reference</a></p>
 <ul>
 <li>For every command, flag, and output shape, see the <a href="../../reference/cli/">CLI reference</a>.</li>
 <li>For every config key and the precedence rules, see the <a href="../../reference/taboo-yaml/">taboo.yaml reference</a>.</li>

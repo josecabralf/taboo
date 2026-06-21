@@ -1297,8 +1297,11 @@ workshop runner input: build one directly, or take it from a resolved plan's
 </span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>This program needs a workshop host: <code>pool.Run</code> launches workshops and execs
-agents. The rest of the page describes its behaviour.</p>
+<div class="admonition note">
+<p class="admonition-title">This program needs a workshop host</p>
+<p><code>pool.Run</code> launches workshops and execs agents, so a configured LXD-backed
+workshop host is required. The rest of the page describes its behaviour.</p>
+</div>
 <h2 id="results-come-back-in-input-order">Results come back in input order<a class="headerlink" href="#results-come-back-in-input-order" title="Permanent link">&para;</a></h2>
 <p><code>results[i]</code> corresponds to <code>reqs[i]</code>. The pool runs requests concurrently but
 returns them in the order they were submitted, so you can match each result to

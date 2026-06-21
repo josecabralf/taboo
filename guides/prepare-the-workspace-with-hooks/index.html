@@ -1203,6 +1203,14 @@ example <code>go mod download</code> or installing a linter the agent will call.
 <p>Use hooks when the agent needs a prepared environment: dependencies fetched, a
 tool installed, a fixture in place. The hook runs in the same worktree the agent
 sees, so its effects are visible to the agent.</p>
+<div class="admonition note">
+<p class="admonition-title">Before you start</p>
+<p>This guide uses the inspect-then-run path, so it assumes you can already
+drive a run from Go. If you have not yet, work through
+<a href="../../tutorials/library-first-run/">the library first run</a>. You also need a
+<code>taboo.yaml</code> in the target repository and a workshop host installed
+(<code>plan.Run</code> launches a workshop).</p>
+</div>
 <h2 id="attach-a-hook-to-a-run">Attach a hook to a run<a class="headerlink" href="#attach-a-hook-to-a-run" title="Permanent link">&para;</a></h2>
 <p>Hooks live on <code>RunRequest.Hooks</code>. The one hook point is <code>OnWorkshopReady</code>, a
 slice of <code>Hook</code>. Each <code>Hook</code> has a <code>Command</code> (the executable and its arguments)
@@ -1247,31 +1255,74 @@ one. The <code>taboo.yaml</code> supplies the workshop, agent, and repo.</p>
 </span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>This program needs a workshop host: <code>plan.Run</code> launches a workshop and runs the
-hook inside it.</p>
+<p>Here <code>InWorkshop: true</code> means <code>plan.Run</code> runs <code>go mod download</code> inside the
+launched workshop, against the worktree it just mounted.</p>
 <h2 id="when-and-how-often-hooks-run">When and how often hooks run<a class="headerlink" href="#when-and-how-often-hooks-run" title="Permanent link">&para;</a></h2>
-<p><code>OnWorkshopReady</code> hooks run after the workshop starts with the run's worktree
-mounted, and before the agent execs. They run on every run, not once per
-workshop, because the worktree is swapped in per run. Keep them idempotent and
-cheap. A hook like <code>go mod download</code> is safe to repeat; do not model expensive
-one-time provisioning here.</p>
+<p><code>OnWorkshopReady</code> hooks run at the end of <code>Setup</code>: after the workshop is started
+with the run's worktree mounted, and before the agent first execs. Setup prepares
+the worktree once, so the hooks fire <strong>once per worktree</strong>, not once per agent
+iteration. A looped run (<code>MaxIterations &gt; 1</code>) reuses the same worktree across
+iterations and does not re-run the hooks between them.</p>
+<p>The long-lived workshop is reused across separate runs, but each run mounts a
+fresh worktree through Setup, so the hooks run again every time. Keep them
+idempotent and cheap.</p>
+<div class="admonition warning">
+<p class="admonition-title">Hooks are not one-time provisioning</p>
+<p>Because Setup runs on every fresh run, treat <code>OnWorkshopReady</code> as per-run
+preparation, not one-time setup. A hook like <code>go mod download</code> is safe to
+repeat; do not model expensive one-time provisioning here.</p>
+</div>
 <p>Hooks run in order. A hook failure stops the sequence and fails the run before
-the agent execs, with an error naming the offending hook (<code>hook &lt;i&gt; &lt;command&gt;</code>).
-A <code>Hook</code> with an empty <code>Command</code> is skipped.</p>
+the agent execs; <code>Setup</code> returns an error of the form
+<code>on-workshop-ready hook: hook &lt;i&gt; [&lt;command&gt;]: ...</code>, naming the offending hook by
+its index and command (for example <code>hook 0 [go mod download]</code>). A <code>Hook</code> with an
+empty <code>Command</code> is skipped.</p>
 <p>Hook output (stdout and stderr) goes to the run's <code>Stderr</code> writer, so set
-<code>RunRequest.Stderr</code> to see what a hook printed when it fails.</p>
+<code>Stderr</code> on the run — through <code>PlanOverrides{Stderr: ...}</code> when resolving the
+plan, as the example does — to see what a hook printed when it fails.</p>
 <h2 id="host-hooks-versus-in-workshop-hooks">Host hooks versus in-workshop hooks<a class="headerlink" href="#host-hooks-versus-in-workshop-hooks" title="Permanent link">&para;</a></h2>
 <p><code>InWorkshop</code> decides where the command runs:</p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th><code>InWorkshop: false</code> (default)</th>
+<th><code>InWorkshop: true</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Where it runs</td>
+<td>On the host</td>
+<td>Inside the workshop via <code>workshop exec</code></td>
+</tr>
+<tr>
+<td>Working directory</td>
+<td>The run's worktree</td>
+<td><code>/taboo/workspace</code></td>
+</tr>
+<tr>
+<td>Credential env keys</td>
+<td>No</td>
+<td>Yes (the agent's)</td>
+</tr>
+<tr>
+<td>Session-dir redirect</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
 <ul>
 <li><code>InWorkshop: false</code> (the default) runs the command on the host, in the run's
   worktree directory. Use this for host-side preparation that writes into the
   worktree before it is handed to the agent.</li>
 <li><code>InWorkshop: true</code> runs the command inside the workshop through
-  <code>workshop exec</code>, with the working directory <code>/taboo/workspace</code>. The in-workshop hook
-  sees the same mounts and the agent's credential env keys, so it runs with the
-  agent's environment. Use this for commands that need the workshop's toolchain,
-  for example fetching dependencies into the in-workshop module cache the agent
-  will use.</li>
+  <code>workshop exec</code>, with the working directory <code>/taboo/workspace</code>. The in-workshop
+  hook sees the same mounts and the agent's credential env keys, so it runs with
+  the agent's environment. Use this for commands that need the workshop's
+  toolchain, for example fetching dependencies into the in-workshop module cache
+  the agent will use.</li>
 </ul>
 <p>A host hook does not get the credential env keys or the session-dir redirect,
 because those are workshop paths. Pick <code>InWorkshop: true</code> when the command must

@@ -1067,6 +1067,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#teardown-is-not-on-the-run-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Teardown is not on the run path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#push-is-denied-the-host-owns-integration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1244,6 +1255,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#teardown-is-not-on-the-run-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Teardown is not on the run path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#push-is-denied-the-host-owns-integration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1297,8 +1319,9 @@ a run, see the <a href="../../tutorials/library-first-run/">library</a> and
 provisioned by the <code>workshop</code> snap. taboo does not import workshop's Go client or
 speak its REST socket; it shells out to the <code>workshop</code> binary, driving everything
 through <code>Cmd{Name: "workshop", ...}</code> over the <code>Commander</code> seam in
-<code>internal/exec/commander.go</code>. The verbs it uses are <code>launch</code>, <code>stop</code>, <code>start</code>,
-<code>info</code>, <code>remount</code>, and <code>exec</code>, assembled in <code>internal/workshop/workshop.go</code>.</p>
+<code>internal/exec/commander.go</code>. On the run path the verbs it uses are <code>info</code>,
+<code>launch</code>, <code>refresh</code>, <code>stop</code>, <code>remount</code>, <code>start</code>, and <code>exec</code>, assembled in
+<code>internal/workshop/workshop.go</code>; <code>clean</code> adds <code>remove</code>.</p>
 <p>A workshop is expensive to stand up. The LXD container has to be created and the
 agent CLI installed into its rootfs, which takes minutes. That cost shapes the
 rest of the model: taboo provisions a workshop once and reuses it across many
@@ -1362,8 +1385,8 @@ plug at a new host source.</p>
 as the current one. A worktree is a non-empty directory, so the swap cannot be
 live. <code>Runner.Setup</code> does it as <code>stop</code>, then <code>remount</code> for <code>workspace</code> and
 <code>gitcommon</code> (and <code>sessions</code> for a session-capable agent), then <code>start</code>. The
-ordering is visible in the code: <code>verbArgs(proj, "stop", ws)</code>, the <code>remountArgs</code>
-calls, then <code>verbArgs(proj, "start", ws)</code>.</p>
+ordering is visible in the code: <code>workshop.VerbArgs(proj, "stop", ws)</code>, the
+<code>workshop.RemountArgs</code> calls, then <code>workshop.VerbArgs(proj, "start", ws)</code>.</p>
 <p>This stop, remount, start, exec cycle takes seconds. The expensive work, creating
 the container and installing the agent CLI, already happened at launch and is not
 repeated. That is the whole point of reusing the workshop: the minutes-long launch
@@ -1408,7 +1431,11 @@ justify it.</p>
 <p>A run's worktree path is derived by <code>Runner.worktreePath</code> as
 <code>&lt;ProjectDir&gt;/worktrees/&lt;branch&gt;</code>, with slashes in the branch name replaced by
 hyphens. The CLI sets <code>ProjectDir</code> to <code>&lt;repo&gt;/.taboo</code>, so worktrees nest at
-<code>&lt;repo&gt;/.taboo/worktrees/&lt;branch&gt;</code>, inside the repository and git-ignored.</p>
+<code>&lt;repo&gt;/.taboo/worktrees/&lt;branch&gt;</code>, inside the repository and git-ignored. Under
+<code>Pool</code>, each slot gets its own <code>ProjectDir</code> (<code>&lt;ProjectDir&gt;/slot-&lt;N&gt;</code>), so a
+fan-out run's worktree lands one level deeper, at
+<code>&lt;ProjectDir&gt;/slot-&lt;N&gt;/worktrees/&lt;branch&gt;</code>. The layout is deterministic and
+private; it is the same knowledge <code>clean</code> uses to find what to tear down.</p>
 <p>Nesting a worktree under the same repository whose <code>.git</code> is the second mount looks
 risky, but it changes only the host path of the <code>/taboo/workspace</code> source. The two mounts
 themselves are untouched: the worktree still goes to <code>/taboo/workspace</code>, and <code>&lt;repo&gt;/.git</code>
@@ -1418,13 +1445,42 @@ worktree physically sits. ADR 0007 records that this nested arrangement was veri
 on workshop 0.9.1 and LXD 6.8, and that the out-of-repo layout remains a sound
 fallback. The only host-side cost the nested layout inherits is the
 repo-not-under-<code>/tmp</code> constraint, which already existed for the git-common mount.</p>
+<h2 id="teardown-is-not-on-the-run-path">Teardown is not on the run path<a class="headerlink" href="#teardown-is-not-on-the-run-path" title="Permanent link">&para;</a></h2>
+<p>Setup creates a worktree; nothing on the run path removes it. <code>Runner.Run</code>,
+<code>Setup</code>, <code>Exec</code>, the orchestrator loop, and <code>Pool.Run</code> all leave the worktree on
+disk after they return, and <code>RunResult.WorktreePath</code> keeps pointing at it. This is
+deliberate: the commit lives in the shared <code>.git</code>, so a finished run has nothing
+left to extract from the working directory, but the directory itself is not
+reaped. A long-running session, a daemon, or a <code>Pool</code> that fans many runs out
+therefore accumulates worktrees until something clears them.</p>
+<p>That something is the <code>clean</code> command. It probes the host for the project's
+taboo-managed artifacts and tears them down: <code>git worktree remove</code> for each
+worktree, <code>workshop remove</code> for each workshop, and <code>git branch -D</code> for the run
+branches under the configured prefix when asked. It is the only teardown path, and
+it is interactive by design — <code>--dry-run</code> prints the plan and a confirmation
+prompt gates the mutation. See the <a href="../../reference/cli/">CLI reference</a> for the
+flag matrix.</p>
+<div class="admonition warning">
+<p class="admonition-title">The library has no programmatic teardown</p>
+<p><code>clean</code> lives in the CLI, not the facade. A Go program embedding taboo gets
+no <code>Dispose()</code> or equivalent; it must remove worktrees itself, with the layout
+knowledge above, or shell out to <code>git worktree remove</code>. The orchestrator
+sidesteps this because CI hands it a fresh, ephemeral checkout per run and
+throws the whole tree away afterward. A client on a persistent checkout — a
+web service, a daemon, a <code>loop</code> — inherits the disk leak with no built-in
+escape. Closing that gap (result-side read operations plus a <code>defer</code>-able
+<code>Dispose</code> handle that reuses the safe teardown <code>clean</code> already encodes) is an
+open design question, not yet a shipped API.</p>
+</div>
 <h2 id="push-is-denied-the-host-owns-integration">Push is denied; the host owns integration<a class="headerlink" href="#push-is-denied-the-host-owns-integration" title="Permanent link">&para;</a></h2>
-<p>Agents run headless, with no interactive approver, and commit autonomously. Every
-supported profile denies <code>git push</code> from inside the workshop by default (Claude
-Code via <code>--disallowedTools "Bash(git push *)"</code>, Copilot via
-<code>--deny-tool=shell(git push)</code>; see <a href="../../reference/agents/">agents.md</a>). The deny is
-deliberate. A linked worktree shares the host repository's object store and refs, so
-a push from inside the workshop, forced or not, could mutate host branches directly.</p>
+<p>Agents run headless, with no interactive approver, and commit autonomously. The
+two profiles that expose a tool-permission flag wire in a hard <code>git push</code> deny by
+default — Claude Code via <code>--disallowedTools "Bash(git push *)"</code>, Copilot via
+<code>--deny-tool=shell(git push)</code> — while OpenCode runs its tools freely and leans on
+the workshop itself as the boundary (see <a href="../../reference/agents/">agents.md</a>). The
+deny is deliberate. A linked worktree shares the host repository's object store and
+refs, so a push from inside the workshop, forced or not, could mutate host branches
+directly.</p>
 <p>taboo's contract is to commit in place and let the host own integration. The agent
 never needs to push, because its commits are already on the host branch the moment
 it makes them. A workflow that does need to publish a branch or open a pull request
