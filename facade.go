@@ -207,6 +207,9 @@ const StopMaxIterations = run.StopMaxIterations
 // NewPool returns a Pool that fans runs out across at most limit concurrent workshops.
 func NewPool(cfg Config, limit int, cmd Commander) *Pool { return run.NewPool(cfg, limit, cmd) }
 
+// NewResultWithWorktree returns a RunResult whose Artifact reads from an existing worktree directory.
+func NewResultWithWorktree(worktree string) RunResult { return run.NewResultWithWorktree(worktree) }
+
 // ErrForkLoop is returned when a forked run is given more than one iteration.
 var ErrForkLoop = run.ErrForkLoop
 

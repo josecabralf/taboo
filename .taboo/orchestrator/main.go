@@ -300,7 +300,13 @@ func implement(ctx context.Context, startDir string, issue int, gh ghClient, run
 		return fmt.Errorf("push branch: %w", err)
 	}
 
-	body := prBody(iss.Number, readPlan(filepath.Join(res.WorktreePath, planFile)))
+	// A missing or unreadable plan file is non-fatal: Artifact yields "" and
+	// prBody renders its no-plan fallback (preserving the old readPlan behavior).
+	plan, err := res.Artifact(planFile)
+	if err != nil {
+		plan = ""
+	}
+	body := prBody(iss.Number, plan)
 
 	url, err := gh.CreateDraftPR(ctx, branch, prTitle(iss.Title), body)
 	if err != nil {
@@ -361,15 +367,4 @@ func prTitle(title string) string {
 		return string(rs[:256])
 	}
 	return title
-}
-
-// readPlan returns the contents of the plan file, or "" if it is absent/unreadable.
-func readPlan(path string) string {
-	// The path is derived from the trusted run's worktree plus a fixed filename,
-	// not from end-user input.
-	data, err := os.ReadFile(path) // #nosec G304
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }

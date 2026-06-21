@@ -178,6 +178,32 @@ func TestPool_FansOutDistinctWorkshopsAndWorktrees(t *testing.T) {
 	}
 }
 
+// Every element of Pool.Run's slice must carry the artifact-reading handle
+// Setup populated, rooted at that element's own worktree. The handle flows
+// through r.Run (Setup+Exec) into results[idx] by value; this guards against a
+// future refactor that rebuilds the slice element and drops the handle.
+func TestPool_ResultsCarryHandle(t *testing.T) {
+	const n = 3
+	fc := &fakeCommander{}
+	p := NewPool(testConfig(t), n, fc)
+	reqs := poolRequests(n)
+
+	results, err := p.Run(context.Background(), reqs)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertInputOrder(t, results, reqs)
+	for i, res := range results {
+		if res.handle == nil {
+			t.Errorf("results[%d].handle = nil, want a non-nil worktree handle on every element", i)
+			continue
+		}
+		if res.handle.worktreePath != res.WorktreePath {
+			t.Errorf("results[%d].handle.worktreePath = %q, want %q", i, res.handle.worktreePath, res.WorktreePath)
+		}
+	}
+}
+
 func TestPool_BoundsConcurrency(t *testing.T) {
 	const limit, n = 2, 5
 	fc := &fakeCommander{
