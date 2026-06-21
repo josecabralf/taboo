@@ -15,11 +15,14 @@ import (
 // gate on non-empty. Stdout/Stderr are output sinks (nil = discard), not part of
 // the precedence chain.
 type PlanOverrides struct {
-	Agent, Model       string
-	Timeout            time.Duration
-	MaxIterations      int
-	CompletionSignal   string
-	Branch             string
+	Agent, Model     string
+	Timeout          time.Duration
+	MaxIterations    int
+	CompletionSignal string
+	Branch           string
+	// BaseRef is threaded straight onto RunRequest.BaseRef (a per-call concern with
+	// no config/workflow layer); see that field for the behavior. Empty = default.
+	BaseRef            string
 	From               string
 	Prompt, PromptFile string
 	Stdout, Stderr     io.Writer

@@ -86,6 +86,44 @@ func TestPlan_ResolvesNamedWorkflow(t *testing.T) {
 	}
 }
 
+// TestPlan_ThreadsBaseRef pins the #83 plumbing: a BaseRef on the overrides is
+// copied straight through onto the resolved Request (no precedence chain — it is
+// a per-call concern), so a run can start its worktree on an existing branch
+// fetched from origin. An unset BaseRef stays empty (the default off-HEAD path).
+func TestPlan_ThreadsBaseRef(t *testing.T) {
+	cfg := &ProjectConfig{
+		Agent: "opencode",
+		Model: "m",
+		Workflows: map[string]Workflow{
+			"update-branch": {Prompt: "merge main"},
+		},
+	}
+	configDir := filepath.Join(t.TempDir(), "repo", ".taboo")
+
+	t.Run("BaseRef threaded onto the request", func(t *testing.T) {
+		plan, err := cfg.Plan(configDir, "update-branch", nil, run.PlanOverrides{
+			Branch:  "agent/update-pr-12",
+			BaseRef: "origin/agent/update-pr-12",
+		})
+		if err != nil {
+			t.Fatalf("Plan: unexpected error: %v", err)
+		}
+		if plan.Request.BaseRef != "origin/agent/update-pr-12" {
+			t.Errorf("Request.BaseRef = %q, want %q", plan.Request.BaseRef, "origin/agent/update-pr-12")
+		}
+	})
+
+	t.Run("unset BaseRef stays empty", func(t *testing.T) {
+		plan, err := cfg.Plan(configDir, "update-branch", nil, run.PlanOverrides{Branch: "b"})
+		if err != nil {
+			t.Fatalf("Plan: unexpected error: %v", err)
+		}
+		if plan.Request.BaseRef != "" {
+			t.Errorf("Request.BaseRef = %q, want empty", plan.Request.BaseRef)
+		}
+	})
+}
+
 // TestPlan_OverridesBeatWorkflowAndTopLevel pins the full precedence ordering for
 // the per-call override layer: overrides beat the workflow, which beats
 // top-level/defaults. A single config sets values at every layer; the first

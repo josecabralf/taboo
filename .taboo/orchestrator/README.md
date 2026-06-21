@@ -23,8 +23,10 @@ earlier bash-around-`taboo run` workflows (PRs #65, #79). See
   drives every issue through the `agent:in-progress` / `agent:blocked` label state
   machine.
 - `internal/ghio` — GitHub/git I/O (`gh issue view`, `git push`, draft-PR
-  create, label add, `gh pr diff`, and `gh api` PR-review POST) behind a fakeable
-  `Exec` seam.
+  create, label add, `gh pr diff`, `gh api` PR-review POST, and — for
+  `update-branch` — `gh pr view` head-branch resolution, `git fetch`, an
+  up-to-date-with-main check, a non-force `git push`, and `gh pr comment`) behind a
+  fakeable `Exec` seam.
 - `internal/diffmap` — parses a unified diff into the addressable `path:line`
   positions a review comment may target (the new-side added/context lines).
 
@@ -33,6 +35,7 @@ earlier bash-around-`taboo run` workflows (PRs #65, #79). See
 ```
 afk implement --issue N
 afk review --pr N
+afk update-branch --pr N
 afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 ```
 
@@ -56,6 +59,33 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
    (`internal/diffmap`), logging a notice for each — never an error.
 4. **Post** one PR review via `gh api`; an empty review (no summary, no in-diff
    comments) is skipped rather than posted, so GitHub never 422s.
+
+`update-branch` brings a PR's branch up to date with `main`:
+
+1. **Resolve** PR N's head branch via `gh pr view` and **fetch** origin, so
+   `origin/main` and `origin/<branch>` are current (`internal/ghio`).
+2. **No-op gate**: if `origin/main` is already contained in the branch, do nothing
+   — no workshop, no commit, no push — and exit 0.
+3. **Run** the `update-branch` workflow on `pkg` with the run's worktree started at
+   the PR branch's current remote tip (`origin/<branch>`, via the `BaseRef`
+   capability): the agent merges `origin/main`, resolves conflicts, and validates
+   the merged tree in-workshop (`make lint test build`), reporting an
+   `{updated, validated, summary}` `<result>` decoded by
+   `taboo.RunWorkflowAs[updateBranchResult]`. The agent is git-**push-denied**.
+4. **Gate on validation**: if the agent reports validation failed, label the PR
+   `agent:blocked` with a diagnostic comment and **do not push**. If nothing was
+   merged (a race), report and exit. Otherwise **push** the branch — a non-force
+   fast-forward (`git push origin <branch>`), distinct from the implement flow's
+   force-push, so a remote branch that moved under us fails safely.
+
+Unlike the other flows, `update-branch` reuses the PR's branch name for its
+worktree (it is updating *that* branch), so a second run for the same PR in a
+persistent checkout fails on the existing local branch/worktree — the same
+worktree-collision every subcommand has, just reachable here because the branch
+name is fixed. In CI it does not arise as long as the workflow runs from a fresh
+checkout of `main` (no local `<branch>` exists yet), as the `implement` and
+`review` workflows do; locally — or in any checkout that already has the branch —
+`git worktree remove` the stale worktree before re-running.
 
 `loop` is the master orchestrator — where `implement` drives one issue, `loop`
 drains the whole `ready-for-agent` backlog wave by wave:

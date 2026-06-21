@@ -20,6 +20,12 @@ import (
 type RunRequest struct {
 	// Branch is the new branch created for this run's worktree.
 	Branch string
+	// BaseRef, when set, makes Setup fetch origin and start the run's worktree
+	// branch from this ref (e.g. "origin/feature-x") instead of the host repo's
+	// HEAD. The fetch updates the ref (and origin/main, which the agent may merge)
+	// before the worktree is added. Empty = the default: a fresh branch off HEAD,
+	// no fetch.
+	BaseRef string
 	// Prompt is the agent's instruction, delivered via Config.Agent's command
 	// (in argv or on stdin, per the agent).
 	Prompt string
@@ -178,9 +184,21 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	wt := r.worktreePath(req.Branch)
 	res.WorktreePath = wt
-	// A fresh linked worktree on req.Branch.
-	if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt}); err != nil {
-		return res, fmt.Errorf("add worktree: %w", err)
+	if req.BaseRef != "" {
+		// Update remote-tracking refs so BaseRef (and origin/main, which the agent
+		// may merge offline) are current, then start the worktree branch FROM
+		// BaseRef's tip rather than the host repo's HEAD.
+		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "fetch", "origin"}); err != nil {
+			return res, fmt.Errorf("fetch origin: %w", err)
+		}
+		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt, req.BaseRef}); err != nil {
+			return res, fmt.Errorf("add worktree from %s: %w", req.BaseRef, err)
+		}
+	} else {
+		// A fresh linked worktree on req.Branch, off the repo's current HEAD.
+		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt}); err != nil {
+			return res, fmt.Errorf("add worktree: %w", err)
+		}
 	}
 
 	// Swap the worktree + the repo's .git into the workshop. A worktree is a

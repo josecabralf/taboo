@@ -9,8 +9,13 @@
 // batch of them as JSON. The "write-pr" subcommand computes a branch's diff
 // against main, runs the write-pr workflow for a structured {title, body}
 // <result>, and opens a PR for the branch — updating the branch's existing open
-// PR instead of opening a duplicate when one is already present. The "loop"
-// subcommand is the master orchestrator: it drains the ready-for-agent backlog in
+// PR instead of opening a duplicate when one is already present. The
+// "update-branch" subcommand brings a PR's branch up to date with main: it
+// resolves the PR's head branch, fetches origin, no-ops if main is already
+// contained, else runs the update-branch workflow (its worktree started on the PR
+// branch) to merge origin/main and validate in-workshop, then pushes the branch
+// fast-forward — blocking the PR instead of pushing if validation fails. The
+// "loop" subcommand is the master orchestrator: it drains the ready-for-agent backlog in
 // bounded-parallel waves via taboo.Pool, planning a parallel-safe batch and
 // fanning the implement workflow out across it each wave, and driving every issue
 // through the agent:in-progress / agent:blocked label state machine. All
@@ -68,10 +73,10 @@ func main() {
 }
 
 // usage summarizes the orchestrator's subcommands.
-const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>] | afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run]"
+const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>] | afk update-branch --pr <n> | afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run]"
 
-// run dispatches to a subcommand: "implement", "review", "plan", "write-pr" or
-// "loop".
+// run dispatches to a subcommand: "implement", "review", "plan", "write-pr",
+// "update-branch" or "loop".
 func run(args []string) error {
 	if len(args) == 0 {
 		return errors.New(usage)
@@ -85,6 +90,8 @@ func run(args []string) error {
 		return runPlan(context.Background(), args[1:])
 	case "write-pr":
 		return runWritePR(context.Background(), args[1:])
+	case "update-branch":
+		return runUpdateBranch(context.Background(), args[1:])
 	case "loop":
 		return runLoop(context.Background(), args[1:])
 	default:
@@ -164,6 +171,28 @@ func runWritePR(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 	return writePR(ctx, startDir, *branch, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[prContent])
+}
+
+// runUpdateBranch parses the update-branch subcommand's flags, enforces --pr
+// before any I/O, and wires the production gh and taboo seams into updateBranch.
+// The typed bridge taboo.RunWorkflowAs[updateBranchResult] decodes the agent's
+// <result> block into an updateBranchResult in-loop.
+func runUpdateBranch(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("update-branch", flag.ContinueOnError)
+	pr := fs.Int("pr", 0, "GitHub pull-request number whose branch to update with main")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *pr <= 0 {
+		return errors.New("--pr is required")
+	}
+
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+
+	return updateBranch(ctx, startDir, *pr, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[updateBranchResult])
 }
 
 // runLoop parses the loop subcommand's flags and wires the production gh, plan,
