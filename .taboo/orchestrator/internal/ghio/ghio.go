@@ -278,6 +278,22 @@ func (c *Client) CreatePR(ctx context.Context, branch, title, body string) (stri
 	return strings.TrimSpace(out), nil
 }
 
+// CreateIssue opens an issue with the given title, body and labels via
+// `gh issue create`, returning the new issue's URL. Each label is applied with a
+// repeated --label flag and must already exist in the repo. The to-issues
+// subcommand uses it to materialize a PRD issue's child issues.
+func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []string) (string, error) {
+	args := []string{"issue", "create", "--title", title, "--body", body}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
+	out, err := c.exec.Run(ctx, "gh", args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // PRHeadBranch returns PR number's head branch name via `gh pr view`. The
 // update-branch subcommand uses it to resolve which branch to merge main into.
 func (c *Client) PRHeadBranch(ctx context.Context, number int) (string, error) {

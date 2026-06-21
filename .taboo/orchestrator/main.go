@@ -18,7 +18,11 @@
 // "loop" subcommand is the master orchestrator: it drains the ready-for-agent backlog in
 // bounded-parallel waves via taboo.Pool, planning a parallel-safe batch and
 // fanning the implement workflow out across it each wave, and driving every issue
-// through the agent:in-progress / agent:blocked label state machine. All
+// through the agent:in-progress / agent:blocked label state machine. The
+// "to-issues" subcommand fetches a PRD-style issue, runs the to-issues workflow
+// for a structured []childIssue <result>, and creates each vertical-slice child
+// with the ready-for-agent label, a back-link to the parent, and a "Blocked by
+// #N" line resolving the child's declared dependency order. All
 // GitHub/git I/O funnels through internal/ghio; the taboo runs go through the
 // taboo bridge one-liners taboo.RunWorkflow / taboo.RunWorkflowAs (config
 // discovery + resolution + run).
@@ -73,10 +77,10 @@ func main() {
 }
 
 // usage summarizes the orchestrator's subcommands.
-const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>] | afk update-branch --pr <n> | afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run]"
+const usage = "usage: afk implement --issue <n> | afk review --pr <n> | afk plan | afk write-pr [--branch <branch>] | afk update-branch --pr <n> | afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run] | afk to-issues --issue <n>"
 
 // run dispatches to a subcommand: "implement", "review", "plan", "write-pr",
-// "update-branch" or "loop".
+// "to-issues", "update-branch" or "loop".
 func run(args []string) error {
 	if len(args) == 0 {
 		return errors.New(usage)
@@ -90,6 +94,8 @@ func run(args []string) error {
 		return runPlan(context.Background(), args[1:])
 	case "write-pr":
 		return runWritePR(context.Background(), args[1:])
+	case "to-issues":
+		return runToIssues(context.Background(), args[1:])
 	case "update-branch":
 		return runUpdateBranch(context.Background(), args[1:])
 	case "loop":
@@ -171,6 +177,26 @@ func runWritePR(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 	return writePR(ctx, startDir, *branch, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[prContent])
+}
+
+// runToIssues parses the to-issues subcommand's flags, enforces --issue before
+// any I/O, and wires the production gh and taboo seams into toIssues. The typed
+// bridge taboo.RunWorkflowAs[[]childIssue] decodes the agent's <result> JSON
+// array into a []childIssue in-loop.
+func runToIssues(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("to-issues", flag.ContinueOnError)
+	issue := fs.Int("issue", 0, "GitHub PRD issue number to decompose into child issues")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *issue <= 0 {
+		return errors.New("--issue is required")
+	}
+	startDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+	return toIssues(ctx, startDir, *issue, os.Stdout, ghio.New(ghio.NewExec()), taboo.RunWorkflowAs[[]childIssue])
 }
 
 // runUpdateBranch parses the update-branch subcommand's flags, enforces --pr

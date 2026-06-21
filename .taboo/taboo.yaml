@@ -34,3 +34,6 @@ workflows:
   update-branch:
     prompt-file: prompts/update-branch.md
     model: claude-opus-4-8
+  to-issues:
+    prompt-file: prompts/to-issues.md
+    model: claude-opus-4-8
