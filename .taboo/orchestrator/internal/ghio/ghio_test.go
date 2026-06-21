@@ -3,10 +3,15 @@ package ghio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// errBoom is the canned error fakeExec returns so tests can assert a Client
+// method propagates the underlying exec failure unchanged.
+var errBoom = errors.New("boom")
 
 // fakeExec records the (name, args) of each call and returns canned stdout, so
 // tests can assert the exact argv built by the Client and feed it scripted
@@ -267,6 +272,96 @@ func TestAddLabelBuildsArgv(t *testing.T) {
 	wantArgs := []string{"pr", "edit", "https://github.com/o/r/pull/42", "--add-label", "afk"}
 	if !slices.Equal(fe.args, wantArgs) {
 		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
+func TestAddIssueLabelBuildsArgv(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.AddIssueLabel(context.Background(), 78, "in-progress"); err != nil {
+		t.Fatalf("AddIssueLabel returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"issue", "edit", "78", "--add-label", "in-progress"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
+func TestAddIssueLabelPropagatesError(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{err: errBoom}
+	c := New(fe)
+
+	if err := c.AddIssueLabel(context.Background(), 78, "in-progress"); !errors.Is(err, errBoom) {
+		t.Errorf("err = %v, want %v", err, errBoom)
+	}
+}
+
+func TestRemoveIssueLabelBuildsArgv(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.RemoveIssueLabel(context.Background(), 78, "ready-for-agent"); err != nil {
+		t.Fatalf("RemoveIssueLabel returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"issue", "edit", "78", "--remove-label", "ready-for-agent"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
+func TestRemoveIssueLabelPropagatesError(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{err: errBoom}
+	c := New(fe)
+
+	if err := c.RemoveIssueLabel(context.Background(), 78, "ready-for-agent"); !errors.Is(err, errBoom) {
+		t.Errorf("err = %v, want %v", err, errBoom)
+	}
+}
+
+func TestCommentIssueBuildsArgv(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{}
+	c := New(fe)
+
+	if err := c.CommentIssue(context.Background(), 78, "agent picked up this issue"); err != nil {
+		t.Fatalf("CommentIssue returned error: %v", err)
+	}
+
+	if fe.name != "gh" {
+		t.Errorf("ran %q, want %q", fe.name, "gh")
+	}
+	wantArgs := []string{"issue", "comment", "78", "--body", "agent picked up this issue"}
+	if !slices.Equal(fe.args, wantArgs) {
+		t.Errorf("args = %q, want %q", fe.args, wantArgs)
+	}
+}
+
+func TestCommentIssuePropagatesError(t *testing.T) {
+	t.Parallel()
+
+	fe := &fakeExec{err: errBoom}
+	c := New(fe)
+
+	if err := c.CommentIssue(context.Background(), 78, "agent picked up this issue"); !errors.Is(err, errBoom) {
+		t.Errorf("err = %v, want %v", err, errBoom)
 	}
 }
 

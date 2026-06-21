@@ -196,6 +196,27 @@ func (c *Client) AddLabel(ctx context.Context, prRef, label string) error {
 	return err
 }
 
+// AddIssueLabel adds a label to the issue via `gh issue edit`. The loop
+// subcommand uses it to advance an issue through its label state machine.
+func (c *Client) AddIssueLabel(ctx context.Context, number int, label string) error {
+	_, err := c.exec.Run(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--add-label", label)
+	return err
+}
+
+// RemoveIssueLabel removes a label from the issue via `gh issue edit`. The loop
+// subcommand uses it to clear a prior state as the issue advances.
+func (c *Client) RemoveIssueLabel(ctx context.Context, number int, label string) error {
+	_, err := c.exec.Run(ctx, "gh", "issue", "edit", strconv.Itoa(number), "--remove-label", label)
+	return err
+}
+
+// CommentIssue posts a comment on the issue via `gh issue comment`. The loop
+// subcommand uses it to record state transitions in the issue thread.
+func (c *Client) CommentIssue(ctx context.Context, number int, body string) error {
+	_, err := c.exec.Run(ctx, "gh", "issue", "comment", strconv.Itoa(number), "--body", body)
+	return err
+}
+
 // CurrentBranch returns the name of the branch currently checked out in the
 // working tree via `git rev-parse --abbrev-ref HEAD`. The write-pr subcommand
 // uses it to default --branch to the run's own branch.

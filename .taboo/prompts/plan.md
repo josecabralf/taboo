@@ -12,17 +12,17 @@ These are the open `ready-for-agent` issues, already filtered to remove the ones
 
 From the candidates above, select a subset that is **safe to run in parallel** — issues that do not touch the same files and whose changes will not conflict with one another. Prefer a smaller, clearly-independent batch over a larger speculative one; when in doubt, leave an issue out.
 
-For each issue you select, emit a branch name of the form `agent/issue-<number>-<slug>`, where the slug is the lowercased title with every run of non-alphanumeric characters collapsed to a single dash, leading and trailing dashes removed, and the result capped at 50 characters (matching the implement workflow's `slugBranch`).
+Emit only the number and title of each issue you select — the orchestrator derives the branch name and everything else. Your job is to choose *which* issues run together, not to produce their branches.
 
 When you are done, emit your selection as a single `<result>` block holding a JSON **array** (not an object) with this shape:
 
 ```
 <result>
-[ { "number": 0, "title": "...", "branch": "agent/issue-0-..." } ]
+[ { "number": 0, "title": "..." } ]
 </result>
 ```
 
-- Select only from the candidates above — do not invent numbers.
+- Select only from the candidates above — do not invent numbers; any number that is not a candidate is dropped.
 - Use `[]` if nothing is safe to parallelize.
 
 ## Boundaries (do not cross)
