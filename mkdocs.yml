@@ -1,0 +1,134 @@
+# taboo docs site — Material for MkDocs (#104, implementing #101).
+# Design: docs/design in the sandbox (#102 direction, #103 spec). Palette tokens
+# are AA-verified in both themes; source of truth ported to docs/assets/extra.css.
+# No content rewrite — the existing docs/ Markdown is the source.
+
+site_name: taboo
+site_description: Orchestrate AI coding agents from Go — an agent's commits land on your host branch.
+site_url: https://josecabralf.github.io/taboo/
+repo_url: https://github.com/josecabralf/taboo
+repo_name: josecabralf/taboo
+edit_uri: edit/main/docs/
+copyright: taboo · MIT-licensed
+
+theme:
+  name: material
+  custom_dir: overrides     # overrides/home.html — the bespoke landing
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  font:
+    text: Ubuntu       # Ubuntu Sans self-host is an optional later upgrade
+    code: Ubuntu Mono
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    # System preference is the default; the toggle cycles auto → light → dark.
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom    # neutral header (Signal Rule); orange is accent-only
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    # No navigation.tabs: the "Documentation" entry point is a homepage-only
+    # header link (overrides/partials/header.html), not a topbar tab. The docs
+    # section uses the left sidebar's "Documentation" group instead.
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+extra_css:
+  - assets/extra.css       # verified tokens → Material --md-* props + components
+  - assets/landing.css     # the bespoke dark landing ("the door"), scoped to .tbl
+
+extra_javascript:
+  - assets/extra.js        # landing-only: entrance reveals + copy chips
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true   # required for content.tabs.link
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+# Contributor/maintainer-only docs stay in the repo but are NOT published —
+# keeps the site user-facing and `mkdocs build --strict` green (no orphan pages).
+# Gitignore-style syntax: `#` is a comment only at the start of a line.
+exclude_docs: |
+  # contributor/maintainer-only
+  adr/
+  spikes/
+  RELEASING.md
+  # replaced on the site by the dedicated landing (index.md)
+  README.md
+  # this design folder is not part of the published site
+  design/
+
+# The landing (index.md) is deliberately kept out of the nav — home is reached
+# only via the topbar logo/name. Declaring it here keeps `build --strict` green.
+not_in_nav: |
+  index.md
+
+# Home (index.md) is intentionally NOT in the nav — it is reached only via the
+# topbar logo/name (see not_in_nav below). The four Diátaxis groups sit under a
+# single "Documentation" entry, which the left sidebar shows as collapsible
+# sections for progressive disclosure. The homepage links into it via the
+# header's "Documentation" link (overrides/partials/header.html).
+nav:
+  - Documentation:
+      - Tutorials:
+          - tutorials/library-first-run.md
+          - tutorials/cli-first-run.md
+      - How-to guides:
+          - guides/fan-out-runs.md
+          - guides/iterate-until-done.md
+          - guides/prepare-the-workspace-with-hooks.md
+          - guides/typed-results.md
+      - Reference:
+          - reference/library-api.md
+          - reference/cli.md
+          - reference/agents.md
+          - reference/taboo-yaml.md
+          - Run variables: run-vars.md
+          - "Go API ↗ (pkg.go.dev)": https://pkg.go.dev/github.com/josecabralf/taboo/pkg
+      - Explanation:
+          - explanation/design.md
+          - explanation/isolation-model.md
+          - explanation/dogfooding.md

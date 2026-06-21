@@ -15,9 +15,9 @@ Both substitute their values into the prompt's `{{VAR}}` placeholders: a
 ## Precedence
 
 Variable injection happens *after* the prompt itself is resolved. The normal
-prompt precedence chain runs first — `--prompt`/`--prompt-file` flag > workflow
-> defaults — and whichever prompt wins is the text the placeholders are filled
-into.
+prompt precedence chain runs first — `--prompt`/`--prompt-file` flag > 
+workflow > defaults — and whichever prompt wins is the text the placeholders
+are filled into.
 
 Among the variables themselves, `--var` overrides `--vars-file`: a
 `--var NAME=x` wins over a `"NAME"` key in the file, so a file of defaults can be

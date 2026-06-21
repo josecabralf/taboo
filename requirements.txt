@@ -1,0 +1,9 @@
+# Docs site (Material for MkDocs) build dependencies — used by
+# .github/workflows/docs.yml. Pinned for reproducible GitHub Pages builds.
+#
+# mkdocs-material already caps mkdocs at <2, so MkDocs 2.0 is never pulled in;
+# we also pin mkdocs explicitly here for a fully reproducible build.
+# To upgrade: `pip install -U mkdocs-material` locally, update these versions,
+# then re-run `mkdocs build --strict`.
+mkdocs-material==9.7.6
+mkdocs==1.6.1

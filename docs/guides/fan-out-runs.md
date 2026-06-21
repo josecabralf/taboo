@@ -128,7 +128,7 @@ Each workshop is an LXD instance, so the ceiling is the host's memory and CPU, n
 a fixed number. Start with a small limit (the example uses 4) and raise it while
 the host keeps up. There is no warm-clone fan-out: every slot launches its own
 workshop on its first request. See
-[Defer warm-clone fan-out](../adr/0006-defer-warm-fanout-single-repo-workshops.md)
+[Defer warm-clone fan-out](https://github.com/josecabralf/taboo/blob/main/docs/adr/0006-defer-warm-fanout-single-repo-workshops.md)
 for the reasoning.
 
 ## See also

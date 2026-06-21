@@ -60,7 +60,7 @@ path such as `/gitcommon`. That also lets the in-workshop commit succeed, but it
 breaks the worktree for host-side git, because the host would then read a pointer
 aimed at a path that does not exist outside the container. Keeping the path
 identical avoids any rewriting and keeps the worktree valid on both sides at once.
-ADR 0007 ([nested worktree placement](../adr/0007-nested-worktree-placement.md))
+ADR 0007 ([nested worktree placement](https://github.com/josecabralf/taboo/blob/main/docs/adr/0007-nested-worktree-placement.md))
 records the integration test that confirmed the commit lands on the host branch
 and the worktree's `.git` pointer still resolves for host-side git afterward.
 
@@ -131,7 +131,7 @@ not running `git gc` against the repository mid-run.
 
 A warmer fan-out, where each slot starts from a clone of an already-provisioned
 workshop, would save the per-slot provisioning cost, but it is deferred. ADR 0006
-([defer warm-clone fan-out](../adr/0006-defer-warm-fanout-single-repo-workshops.md))
+([defer warm-clone fan-out](https://github.com/josecabralf/taboo/blob/main/docs/adr/0006-defer-warm-fanout-single-repo-workshops.md))
 records that the `workshop` CLI exposes no clone or `launch --from` verb and
 neither does its Go client, so the win is unreachable inside taboo's
 shell-out-to-the-CLI contract until an upstream verb lands. The same ADR records
@@ -176,5 +176,5 @@ the agent to push from inside the workshop.
 
 - [Why the API is shaped this way](design.md)
 - [Library API reference](../reference/library-api.md)
-- [ADR 0006: defer warm-clone fan-out, one workshop per repo](../adr/0006-defer-warm-fanout-single-repo-workshops.md)
-- [ADR 0007: nested worktree placement](../adr/0007-nested-worktree-placement.md)
+- [ADR 0006: defer warm-clone fan-out, one workshop per repo](https://github.com/josecabralf/taboo/blob/main/docs/adr/0006-defer-warm-fanout-single-repo-workshops.md)
+- [ADR 0007: nested worktree placement](https://github.com/josecabralf/taboo/blob/main/docs/adr/0007-nested-worktree-placement.md)

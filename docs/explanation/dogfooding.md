@@ -68,7 +68,7 @@ declares exactly the variable set its workflow provides.
 
 The agent's workshop is not a bare rootfs carrying only the agent CLI. taboo
 derives it from the project's own `workshop.yaml`
-([ADR 0009](../adr/0009-derive-workshop-from-project-definition.md)), so the
+([ADR 0009](https://github.com/josecabralf/taboo/blob/main/docs/adr/0009-derive-workshop-from-project-definition.md)), so the
 derived definition inherits the project's toolchain — Go, `golangci-lint`, and
 the `make` action — the same environment humans and CI use. "The agent's
 sandbox is the dev's sandbox," which means the agent can run the project's checks
