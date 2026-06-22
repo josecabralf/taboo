@@ -16,14 +16,17 @@
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero__grid wrap">
         <div class="hero__copy">
-          <h1 class="hero__title" id="hero-title" data-reveal style="--i:0">taboo</h1>
+          <div class="hero__brand" data-reveal style="--i:0">
+            <span class="hero__logo" aria-hidden="true"><svg viewBox="0 0 100 100" role="img" aria-label="taboo"><rect width="100" height="100" fill="#E95420"/><path d="M19 50 L34 50 M66 50 L81 50" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/><circle cx="19" cy="50" r="3.9" fill="#fff"/><circle cx="81" cy="50" r="3.9" fill="#fff"/><rect x="34" y="34" width="32" height="32" rx="7.5" fill="none" stroke="#fff" stroke-width="4.5"/><path d="M41 42 H59 M50 42 V58" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="41" cy="42" r="3.4" fill="#fff"/><circle cx="59" cy="42" r="3.4" fill="#fff"/><circle cx="50" cy="58" r="3.4" fill="#fff"/></svg></span>
+            <h1 class="hero__title" id="hero-title">taboo</h1>
+          </div>
           <p class="hero__subtitle" data-reveal style="--i:1">
             Run coding agents in a sandbox. Land their commits on your&nbsp;branch.
           </p>
           <p class="hero__lead" data-reveal style="--i:2">
             taboo is a Go library and CLI. It runs AI coding agents inside isolated
-            Canonical&nbsp;workshops, then merges their commits onto your branch.
-            Nothing touches your working tree until the tests pass.
+            Canonical&nbsp;workshops and lands their commits on a fresh branch.
+            Nothing touches your working tree.
           </p>
 
           <div class="hero__actions" data-reveal style="--i:3">
@@ -52,7 +55,15 @@
               <span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span>
               <span class="window__name">main.go</span>
             </div>
-            <pre class="code" aria-hidden="true"><code><span class="c-kw">res</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(ctx, <span class="c-st">"."</span>, <span class="c-st">"implement"</span>,
+            <pre class="code" aria-hidden="true"><code class="code--wide"><span class="c-kw">res</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(
+    ctx,
+    <span class="c-st">"."</span>,
+    <span class="c-st">"implement"</span>,
+    vars,
+    taboo.PlanOverrides{},
+    taboo.<span class="c-fn">NewExecCommander</span>(),
+)
+<span class="c-cm">// res.Commit is the agent's commit on res.Branch</span></code><code class="code--narrow"><span class="c-kw">res</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(ctx, <span class="c-st">"."</span>, <span class="c-st">"implement"</span>,
     vars, taboo.PlanOverrides{}, taboo.<span class="c-fn">NewExecCommander</span>())
 <span class="c-cm">// res.Commit is the agent's commit on res.Branch</span></code></pre>
             <div class="window__run" aria-hidden="true">
@@ -74,7 +85,7 @@
           <h2 id="run-title" class="section-title">Three steps from prompt to commit</h2>
           <p class="section-lead">
             You describe the work in Go. taboo handles the sandbox, the agent loop, and the
-            merge. If the work fails, nothing reaches your branch.
+            fresh branch. The agent commits in place on that branch; your working tree is never touched.
           </p>
         </header>
 
@@ -199,7 +210,7 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
           </div>
           <div class="reason" data-reveal style="--i:1">
             <h3 class="reason__title">Commits, not loose diffs</h3>
-            <p class="reason__text">taboo runs the tests, then merges commits onto your branch. You review git history with passing tests, not a pile of unstaged edits.</p>
+            <p class="reason__text">The agent commits its work in place on a fresh branch, so you review real git history with proper commits, not a pile of unstaged edits.</p>
           </div>
           <div class="reason" data-reveal style="--i:2">
             <h3 class="reason__title">Contract-first and deterministic</h3>

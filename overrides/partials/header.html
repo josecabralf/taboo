@@ -1,10 +1,10 @@
 {#-
   taboo header override (of Material's partials/header.html).
-  Single change vs. upstream: the "Documentation" entry point is a HOMEPAGE-ONLY
-  link rendered into the header, just left of the theme switcher — replacing the
-  navigation.tabs bar (which is disabled in mkdocs.yml). In the docs themselves
-  there is no "Documentation" top nav; the left sidebar's section label carries
-  the grouping instead.
+  Single change vs. upstream: the nav drawer toggle wears the taboo logo instead
+  of a hamburger (styled in extra.css). On the landing that logo opens the door's
+  nav drawer at every width (landing.css), which is how the door reaches the
+  docs — there is no "Documentation" topbar tab (navigation.tabs stays disabled
+  in mkdocs.yml; the drawer/sidebar carries the Diátaxis grouping).
 -#}
 {% set class = "md-header" %}
 {% if "navigation.tabs.sticky" in features %}
@@ -17,9 +17,12 @@
     <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-header__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
       {% include "partials/logo.html" %}
     </a>
-    <label class="md-header__button md-icon" for="__drawer">
-      {% set icon = config.theme.icon.menu or "material/menu" %}
-      {% include ".icons/" ~ icon ~ ".svg" %}
+    {#- The drawer toggle wears the taboo logo instead of a hamburger (sized in
+        extra.css). On the docs it shows only below 76.25em; on the landing it
+        shows at every width and replaces the home-link logo (landing.css) —
+        the door is already home, so the mark just opens the nav drawer. -#}
+    <label class="md-header__button md-header__drawer" for="__drawer" aria-label="Open navigation">
+      {% include "partials/logo.html" %}
     </label>
     <div class="md-header__title" data-md-component="header-title">
       <div class="md-header__ellipsis">
@@ -39,9 +42,6 @@
         </div>
       </div>
     </div>
-    {% if page and page.is_homepage %}
-      <a href="{{ 'tutorials/library-first-run/' | url }}" class="md-header__docs-link">Documentation</a>
-    {% endif %}
     {% if config.theme.palette %}
       {% if not config.theme.palette is mapping %}
         {% include "partials/palette.html" %}

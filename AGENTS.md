@@ -20,7 +20,9 @@ the library via `replace`.
   profile; `internal/agent/registry.go` is the declarative roster.
 - `internal/workshop/sdk/<name>/` — agent SDKs, embedded via `//go:embed sdk`
   and seeded into the managed repo at runtime.
-- `internal/config/` — `taboo.yaml` parsing and the bridge/profile resolution.
+- `internal/config/` — `taboo.yaml` parsing and plan/profile resolution. The
+  one-call bridge (`RunWorkflow`/`RunWorkflowAs`) is `bridge.go` at the repo root,
+  not here.
 - `cli/` — the `taboo` CLI module (cobra + huh). A thin `cli/main.go` delegates
   to `cli/internal/app/` (`init`, `run`, `validate`, `doctor`, `list`, `clean`),
   which imports only the `taboo` facade.
@@ -46,6 +48,8 @@ make test    # go test ./... -count=1 -cover   in every module (also runs the go
   the suite in `internal/run/`) drives real `workshop` + LXD; host-only,
   never in the dev workshop or CI.
 - `make test-race` forces `CGO_ENABLED=1` (needs a C compiler).
+- `make fmt` formats, `make tidy` runs `go mod tidy` across modules, and
+  `make setup` installs the dev tools.
 
 ## Conventions
 
@@ -72,4 +76,6 @@ make test    # go test ./... -count=1 -cover   in every module (also runs the go
 - `README.md` — overview, install, library + CLI quickstarts, entry points.
 - `docs/` (Diátaxis; start at `docs/README.md`): `reference/` is the verified
   library/CLI/config surface; `adr/0001`–`0010` record load-bearing decisions.
-  Link here instead of re-deriving the API.
+  Link here instead of re-deriving the API. The published site excludes `adr/`,
+  `spikes/`, `RELEASING.md`, and `docs/README.md` (`mkdocs.yml` `exclude_docs`), so
+  those are repo-only.

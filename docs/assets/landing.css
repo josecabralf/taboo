@@ -11,10 +11,138 @@
    the reading chrome — the door supplies its own body and footer. The header
    and the page background both follow the light/dark toggle, so crossing into
    the docs is seamless in either theme. ------------------------------------- */
-body:has(.tbl) .md-main,
-body:has(.tbl) .md-footer,
-body:has(.tbl) .md-sidebar { display: none !important; }
+body:has(.tbl) .md-content,
+body:has(.tbl) .md-sidebar--secondary,
+body:has(.tbl) .md-footer { display: none !important; }
 body:has(.tbl) .md-container { display: block; }
+
+/* The primary nav stays reachable on the door: Material collapses it into the
+   slide-in drawer the header's taboo-logo button toggles (natively below
+   76.25em; at desktop too via the block below). That drawer lives inside
+   .md-main and slides in via `:checked ~ .md-container .md-sidebar--primary`, so
+   .md-main must stay in the layout — hiding it (as before) left the menu button
+   toggling only the scrim, with no drawer behind it. Keep .md-main present but
+   give it no footprint: drop the content gap so the empty main collapses
+   against the door's own footer. */
+body:has(.tbl) .md-main { display: block; }
+body:has(.tbl) .md-main__inner { margin-top: 0; }
+
+/* ---- The door keeps the slide-in drawer at desktop too --------------------
+   Material renders the primary nav as a drawer only below 76.25em; at/above it
+   switches to an in-flow accordion column and hides the toggle. The door has no
+   reading content for that column, so instead of hiding the nav we keep the
+   DRAWER at every width — by re-applying Material's own <76.234375em nav/sidebar
+   rules here, scoped to body:has(.tbl), and overriding the desktop rules that
+   fight them. Rules below the "lifted" markers are copied near-verbatim from
+   Material's mobile media block in main.*.min.css; RE-SYNC THEM ON A MATERIAL
+   UPGRADE. (We deliberately do NOT copy Material's stacked .md-nav__title rule —
+   extra.css already lays the drawer title out as an inline flex row at every
+   width — so here we only re-enable the back-arrow desktop hides.) */
+@media screen and (min-width: 76.25em) {
+  /* Header: the taboo mark opens the drawer (it no longer links home here). */
+  body:has(.tbl) .md-header__button.md-logo { display: none; }
+  body:has(.tbl) .md-header__button[for="__drawer"] { display: block; }
+
+  /* The scrim — Material gates the WHOLE .md-overlay (base + activation) to
+     mobile, so at desktop it's an unstyled, transparent, zero-size element.
+     Re-declare both so the dim backdrop + click-to-close (it's a <label
+     for=__drawer>) work at desktop too. (lifted) */
+  body:has(.tbl) .md-overlay {
+    position: fixed; top: 0; width: 0; height: 0; z-index: 5; opacity: 0;
+    background-color: #0000008a;
+    transition: width 0ms .25s, height 0ms .25s, opacity .25s;
+  }
+  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-overlay {
+    width: 100%; height: 100%; opacity: 1;
+    transition: width 0ms, height 0ms, opacity .25s;
+  }
+
+  /* The panel: fixed off-screen, slides in when #__drawer is checked. The three
+     !important values beat Material's Sidebar JS, which at desktop marks the
+     panel [hidden] and writes inline top/height (the door's hidden main makes it
+     compute a 0-height nav, so the drawer would slide in empty). (lifted) */
+  body:has(.tbl) .md-sidebar--primary {
+    position: fixed; top: 0 !important; left: -12.1rem;
+    width: 12.1rem; height: 100% !important; z-index: 5;
+    display: block !important;
+    background-color: var(--md-default-bg-color);
+    transform: translateX(0);
+    transition: transform .25s cubic-bezier(.4, 0, .2, 1), box-shadow .25s;
+  }
+  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary {
+    transform: translateX(12.1rem); box-shadow: var(--md-shadow-z3);
+  }
+  body:has(.tbl) .md-sidebar--primary .md-sidebar__scrollwrap {
+    position: absolute; inset: 0; height: 100% !important; margin: 0; overflow: hidden;
+  }
+
+  /* The nav: full-height stacked panels that slide (drill-down), not the desktop
+     grid accordion. (lifted) */
+  body:has(.tbl) .md-nav--primary,
+  body:has(.tbl) .md-nav--primary .md-nav {
+    position: absolute; inset: 0; z-index: 1;
+    display: flex; flex-direction: column;
+    background-color: var(--md-default-bg-color);
+    line-height: 1.5;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__list { flex: 1; padding-left: 0; }
+  body:has(.tbl) .md-nav--primary .md-nav__title ~ .md-nav__list {
+    overflow-y: auto;
+    box-shadow: 0 .05rem 0 var(--md-default-fg-color--lightest) inset;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__item {
+    border-top: .05rem solid var(--md-default-fg-color--lightest);
+  }
+  /* The first row's top separator is the list's inset shadow (below); drop its
+     border-top so the two semi-transparent --line layers don't stack into a
+     heavier/uneven line. Matches the <76.234375em drawer. (lifted) */
+  body:has(.tbl) .md-nav--primary .md-nav__title ~ .md-nav__list > :first-child {
+    border-top: 0;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__link { margin-top: 0; padding: .6rem .8rem; margin-right: 0 !important; }
+  /* Section-row "›" arrows: the mobile drawer sizes them to 1.2rem; the desktop
+     nav shrinks .md-nav__icon to .9rem. Restore 1.2rem for parity. (lifted) */
+  body:has(.tbl) .md-nav--primary .md-nav__link .md-nav__icon {
+    height: 1.2rem; width: 1.2rem; font-size: 1rem; margin-right: -.2rem;
+  }
+
+  /* Child panels slide in from the right when their section toggle is checked —
+     overrides the desktop grid-accordion on .md-nav__toggle ~ .md-nav. (lifted) */
+  body:has(.tbl) .md-nav__toggle ~ .md-nav {
+    display: flex; opacity: 0; transform: translateX(100%);
+    transition: transform .25s cubic-bezier(.8, 0, .6, 1), opacity 125ms 50ms;
+  }
+  body:has(.tbl) .md-nav__toggle:checked ~ .md-nav {
+    opacity: 1; transform: translateX(0);
+    transition: transform .25s cubic-bezier(.4, 0, .2, 1), opacity 125ms 125ms;
+  }
+
+  /* Top title bar wears the primary surface, like the mobile drawer's. (lifted) */
+  body:has(.tbl) .md-nav--primary .md-nav__title[for="__drawer"] {
+    background-color: var(--md-primary-fg-color);
+    color: var(--md-primary-bg-color);
+    font-weight: 700;
+  }
+  /* Drop Material's sticky-title halo (a bg-colored box-shadow) — it masks the
+     first nav item's top separator. The drawer's list scrolls in its own
+     overflow container, so the title never overlaps scrolling content here. */
+  body:has(.tbl) .md-nav--primary .md-nav__title { box-shadow: none; }
+
+  /* Re-show the "‹ Section" back-bar on drilled-in panels and its back arrow,
+     both of which the desktop nav hides. Layout stays extra.css's inline flex
+     row (display:flex, not block — see extra.css .md-nav__title). */
+  body:has(.tbl) .md-nav__item--nested > .md-nav > .md-nav__title { display: flex; }
+  body:has(.tbl) .md-nav--primary .md-nav__title .md-nav__icon {
+    display: block; height: 1.2rem; width: 1.2rem;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__title .md-nav__icon::after {
+    -webkit-mask-image: var(--md-nav-icon--prev); mask-image: var(--md-nav-icon--prev);
+  }
+
+  /* Drawer links follow the scheme fg, not the always-light code-window ink —
+     else they're white-on-white on the light door. */
+  body:has(.tbl) .md-sidebar--primary .md-nav__link { color: var(--md-default-fg-color); }
+}
 
 /* ============================ Tokens ============================ */
 /* The color palette (--bg, --surface-*, --ink*, --accent*, --line*, --focus)
@@ -166,6 +294,8 @@ body:has(.tbl) .md-container { display: block; }
 }
 .tbl .term { color: var(--ink-muted); }
 .tbl pre.code, .tbl pre.term { white-space: pre; margin: 0; }
+/* Hero proof renders args one-per-line on wide screens, compact below 960px. */
+.tbl pre.code .code--narrow { display: none; }
 
 .tbl .c-kw { color: oklch(0.78 0.11 300); }
 .tbl .c-fn { color: oklch(0.82 0.12 230); }
@@ -227,7 +357,10 @@ body:has(.tbl) .md-container { display: block; }
 .tbl .hero__copy, .tbl .hero__proof, .tbl .step, .tbl .path,
 .tbl .path--lead > *, .tbl .reason > * { min-width: 0; }
 .tbl .hero__copy { max-width: 36rem; }
-.tbl .hero__title { font-size: 3.5rem; letter-spacing: -0.04em; line-height: 1.0; margin-top: var(--s-4); margin-bottom: var(--s-2); }
+.tbl .hero__brand { display: flex; align-items: center; gap: 0.8rem; margin-top: var(--s-4); margin-bottom: var(--s-2); }
+.tbl .hero__logo { display: inline-flex; flex: none; line-height: 0; }
+.tbl .hero__logo svg { width: 2.7rem; height: 2.7rem; }
+.tbl .hero__title { font-size: 3.5rem; letter-spacing: -0.04em; line-height: 1.0; margin: 0; }
 .tbl .hero__subtitle {
   font-size: clamp(1.3rem, 1.05rem + 1.1vw, 1.9rem);
   font-weight: 600; line-height: 1.15; letter-spacing: -0.02em;
@@ -251,11 +384,31 @@ body:has(.tbl) .md-container { display: block; }
 .tbl .why { padding-top: clamp(2rem, 1.2rem + 2vw, 3rem); }
 
 /* ============================ Steps ============================ */
-.tbl .steps { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(1.2rem, 0.4rem + 2vw, 2.2rem); }
-.tbl .step { display: flex; flex-direction: column; position: relative; }
+/* The three steps share one set of row tracks so each band — number, title,
+   description, code window — lines up across columns. `.steps` defines the four
+   rows; each `.step` spans all four and re-uses them via `grid-template-rows:
+   subgrid`. The last row is 1fr, so every code window stretches to the tallest
+   one and the `pre` inside fills it — equal-height windows regardless of how
+   many lines of code/terminal each holds. */
+.tbl .steps {
+  list-style: none; padding: 0; display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: auto auto auto 1fr;
+  column-gap: clamp(1.2rem, 0.4rem + 2vw, 2.2rem);
+  row-gap: 0;
+}
+.tbl .step {
+  display: grid; grid-row: 1 / -1; grid-template-rows: subgrid;
+  row-gap: 0; position: relative;
+}
 .tbl .step__no { font-family: var(--mono); font-size: 0.95rem; font-weight: 700; color: var(--accent-text); letter-spacing: 0.08em; margin-bottom: var(--s-3); }
 .tbl .step__title { font-size: var(--step-h3); margin-bottom: var(--s-2); }
-.tbl .step__text { color: var(--ink-muted); font-size: 0.95rem; margin-bottom: var(--s-4); min-height: 2.85em; }
+.tbl .step__text { color: var(--ink-muted); font-size: 0.95rem; margin-bottom: var(--s-4); }
+/* The code window fills the shared 1fr row, and its `pre` fills the window
+   below the title bar — so both `pre.code` and `pre.term` end up the same
+   height across all three steps. */
+.tbl .step .window { display: flex; flex-direction: column; }
+.tbl .step .window .code, .tbl .step .window .term { flex: 1 1 auto; min-height: 0; }
 .tbl .window--sm .code, .tbl .window--sm .term { font-size: 0.8rem; padding: 0.85rem 0.95rem; line-height: 1.65; }
 
 /* ============================ Entry paths ============================ */
@@ -333,12 +486,15 @@ body:has(.tbl) .md-container { display: block; }
   .tbl .hero__grid { grid-template-columns: 1fr; }
   .tbl .hero__proof { order: 2; max-width: 38rem; }
   .tbl .hero__copy { max-width: none; }
-  .tbl .steps { grid-template-columns: 1fr; gap: var(--s-5); }
+  .tbl .steps { grid-template-columns: 1fr; grid-template-rows: none; gap: var(--s-5); }
+  .tbl .step { display: flex; flex-direction: column; grid-row: auto; }
   .tbl .step__text { max-width: none; }
   .tbl .step .window { margin-top: var(--s-2); }
   .tbl .paths__grid { grid-template-columns: 1fr; }
   .tbl .path--lead { grid-template-columns: 1fr; }
   .tbl .reason { grid-template-columns: 1fr; gap: var(--s-3); }
+  .tbl pre.code .code--wide { display: none; }
+  .tbl pre.code .code--narrow { display: block; }
 }
 @media (max-width: 620px) {
   .tbl .foot__grid { grid-template-columns: 1fr 1fr; }

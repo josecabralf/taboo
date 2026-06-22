@@ -172,21 +172,62 @@
 .md-typeset p { font-size: 1rem; }
 .md-typeset pre > code { font-size: 0.8rem; }
 
-/* ============================ Header "Documentation" link ============================ */
-/* Homepage-only entry point into the docs (overrides/partials/header.html),
-   sitting just left of the theme switcher. */
-.md-header__docs-link {
-  color: var(--md-primary-bg-color);
-  font-weight: 600;
-  font-size: 0.8rem;
-  padding: 0.4rem 0.6rem;
-  border-radius: var(--tb-radius-xs);
+/* ============================ Nav drawer toggle ============================ */
+/* The drawer toggle (overrides/partials/header.html) wears the taboo logo
+   instead of a hamburger. Match the real header logo's footprint so the mark
+   sits at the same size whether it links home (docs, desktop) or opens the
+   drawer (docs mobile; the landing at every width). */
+.md-header__drawer { line-height: 0; }
+.md-header__drawer img,
+.md-header__drawer svg { display: block; height: 1.2rem; width: auto; }
+
+/* ============================ Nav drawer header ============================ */
+/* Material's drawer header stacks the logo above the site name — the logo is
+   absolutely positioned full-width and the name pushed down by a 3rem top
+   pad. Lay them out on one line with a logo sized to the label instead. */
+/* Descendant (not `>`): this lays out BOTH the top-level site title and the
+   "back ‹ Section" title shown when a Diátaxis group is drilled into — Material
+   stacks both the same way (3rem top pad + absolute icon). */
+.md-nav--primary .md-nav__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: auto;
+  padding: 0.7rem 0.8rem;
+  line-height: 1.4;
   white-space: nowrap;
-  transition: color 0.2s ease, background 0.2s ease;
 }
-.md-header__docs-link:hover {
-  color: var(--accent-text);
-  background: color-mix(in oklab, var(--accent) 10%, transparent);
+/* The drilled-in title's back chevron is absolutely positioned by Material and
+   the label pushed below it by the top pad — the stacked look. Let it flow as
+   the flex row's first item instead. (Material hides it on the desktop sidebar
+   via display:none, which this leaves untouched.) */
+.md-nav--primary .md-nav__title .md-nav__icon {
+  position: static;
+  top: auto;
+  left: auto;
+  right: auto;
+  margin: 0;
+  flex: 0 0 auto;
+}
+/* Only neutralize the logo's absolute placement — leave its visibility to
+   Material (shown in the mobile drawer, hidden in the desktop docs sidebar so
+   it doesn't duplicate the header logo). The landing re-shows it at desktop in
+   landing.css, where the drawer is used at every width. */
+.md-nav--primary .md-nav__title .md-nav__button.md-logo {
+  position: static;
+  margin: 0;
+  padding: 0;
+  /* The site name now lives inside this link (overrides/partials/nav.html), so
+     the link — not the label — lays the mark and label out inline. */
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+}
+.md-nav--primary .md-nav__title .md-nav__button.md-logo img,
+.md-nav--primary .md-nav__title .md-nav__button.md-logo svg {
+  height: 1.3rem;
+  width: auto;
 }
 
 /* ============================ Code: the window ============================ */
@@ -213,9 +254,10 @@
   border-bottom: 1px solid var(--line);
   font-family: var(--md-code-font-family, monospace);
   font-weight: 400;
-  padding-left: 3.1rem;            /* room for the three dots */
+  padding-left: 4rem;            /* room for the three dots */
   position: relative;
   border-radius: var(--tb-radius) var(--tb-radius) 0 0;
+  font-size: 0.8rem;
 }
 .md-typeset .highlight span.filename::before {
   content: "";

@@ -18,9 +18,18 @@ The generated godoc is the rendered source of truth:
 | Claude Code | `claude-code` | `NewProfile(taboo.ClaudeCode, model)` | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | stdin | `CLAUDE_CONFIG_DIR` / `projects` | `a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet` | native (`--fork-session`) |
 | GitHub Copilot | `github-copilot` | `NewProfile(taboo.GitHubCopilot, model)` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | argv (value of `-p`) | `COPILOT_HOME` / `session-state` | none (never warns) | ignored |
 
-All three deny `git push` from inside the workshop. Credential env keys reach the
-agent via `workshop exec --env NAME`, which silently drops any key that is unset
-on the host, so a user forwards only the credential they hold.
+No agent can push from inside the workshop: `claude-code` and `github-copilot`
+deny `git push` at the command level, while `opencode` carries no command-level
+deny and relies on the workshop container as its only boundary. Credential env
+keys reach the agent via `workshop exec --env NAME`, which silently drops any key
+that is unset on the host, so a user forwards only the credential they hold.
+
+!!! warning "Session capture assumes env-based auth"
+    `Sessions()` relocates an agent's whole config/home directory onto the host
+    sessions mount. That is safe only because taboo authenticates each agent
+    through the credential env keys above. Do not pair it with an interactive
+    login (`claude /login`, `copilot login`): that would persist credentials into
+    the host-bound captured directory.
 
 ## OpenCode
 
@@ -46,8 +55,9 @@ The hint pattern is `^[^/]+/.+$`, so a value with no leading provider segment
 
 Fork: native. `--fork` applies only when continuing a session.
 
-Push deny: yes. OpenCode runs its tools freely inside the isolated workshop, and
-the workshop is the security boundary.
+Push deny: no command-level deny. OpenCode runs its tools freely inside the
+isolated workshop; its argv carries no `git push` deny, so the workshop container
+is the only boundary.
 
 ## Claude Code
 
@@ -82,7 +92,8 @@ Fork: native (`--fork-session`).
 
 Push deny: yes, via `--disallowedTools "Bash(git push *)"`. A deny outranks
 `--permission-mode auto`. The single `*` spans all arguments, so bare
-`git push`, `git push origin main`, and `--force` in any position are blocked.
+`git push`, `git push origin main`, and `--force`/`-f` in any position are
+blocked.
 
 ## GitHub Copilot
 
@@ -99,7 +110,9 @@ Prompt delivery: argv, as the value of `-p`. `BuildCommand` renders
 `copilot --model <model> --allow-all --deny-tool=shell(git push) --output-format
 text -s` and then appends `-p <prompt>`; `AgentCommand.Stdin` is empty. `-p` is
 always emitted, even when the prompt is empty. A resume id appends
-`--resume=<id>` before the `-p` prompt.
+`--resume=<id>` before the `-p` prompt. Copilot itself rejects an empty `-p`
+value, exiting 1 with `No prompt provided`, so a resume run must still supply a
+prompt.
 
 Sessions (`Sessions()`): `DirEnv` is `COPILOT_HOME`, `Subdir` is `session-state`,
 and the second return value is `true`. `COPILOT_HOME` is the only env var Copilot
@@ -111,8 +124,8 @@ Copilot proxies models from many providers. `taboo validate` never warns on a
 Copilot model, and `MatchModelFormat(taboo.GitHubCopilot, ...)` returns `expected` as `""`.
 
 Fork: ignored. Copilot has no native headless fork, so `CommandOptions.Fork` is
-not consulted in `BuildCommand`. A run that sets `Fork` degrades to worktree-only
-isolation.
+not consulted in `BuildCommand`. Setting `Fork` has no effect; the run proceeds
+as a non-forked resume (or a fresh run).
 
 Push deny: yes, via `--deny-tool=shell(git push)`. Denial rules take precedence
 over `--allow-all`, and Copilot approves shell commands on a first-level

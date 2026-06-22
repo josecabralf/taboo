@@ -28,6 +28,8 @@ Look-it-up facts about the API and the configuration surface.
 - [Agents](reference/agents.md) — the three supported agents, their credential env keys, prompt delivery, sessions, and model hints.
 - [CLI](reference/cli.md) — every `taboo` command, its flags, output, and exit behaviour.
 - [taboo.yaml](reference/taboo-yaml.md) — every config key, its type and default, and the precedence chain.
+- [afk orchestrator](reference/afk.md) — the dogfooding orchestrator's subcommands, flags, and label state machine.
+- [Run variables](run-vars.md) — the `{{VAR}}` substitution surface and the per-flow variables.
 
 ## Explanation
 
@@ -35,7 +37,7 @@ Why taboo is built the way it is.
 
 - [Isolation model](explanation/isolation-model.md) — workshops, the two-mount rule, the `/tmp` trap, and why commits land on the host branch with no extraction step.
 - [Design](explanation/design.md) — why the library is the primary contract, the single side-effecting `Commander` seam, and the agent registry.
-- [Dogfooding the agent loop](explanation/dogfooding.md) — how taboo runs its own issue-to-review loop with two label-driven Actions and `taboo run`, the label state machine, and the trust model.
+- [Dogfooding the agent loop](explanation/dogfooding.md) — how taboo runs its own issue-to-review loop with three label-driven Actions, the label state machine, and the trust model.
 
 ## Architecture decisions
 
@@ -50,4 +52,5 @@ The load-bearing decisions, one per file.
 - [ADR 0007 — nested worktree placement](adr/0007-nested-worktree-placement.md)
 - [ADR 0008 — model format hint and fuzzy agent match](adr/0008-model-format-hint-and-fuzzy-agent-match.md)
 - [ADR 0009 — derive the workshop from the project's definition](adr/0009-derive-workshop-from-project-definition.md)
+- [ADR 0010 — a Go orchestrator on the taboo library](adr/0010-go-orchestrator-on-pkg-taboo.md)
 - [Spike 0001 — warm workshops and fan-out](spikes/0001-warm-workshops-fanout.md)

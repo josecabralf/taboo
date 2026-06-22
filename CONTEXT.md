@@ -16,7 +16,7 @@ written in Go instead of TypeScript.
 For each agent run, taboo:
 
 1. Creates a git **worktree** on the host (one per run, for isolation).
-2. **Bind-mounts** that worktree into a workshop at a fixed path (`/workspace`).
+2. **Bind-mounts** that worktree into a workshop at a fixed path (`/taboo/workspace`).
 3. **Execs** the agent CLI inside the workshop, streaming its output.
 4. Lets the agent commit *in place* — because the worktree is a bind-mount, the
    commits land directly on the host worktree's branch. No extraction step.
@@ -56,10 +56,12 @@ exit-code and signal forwarding, and `--cwd` / `--env` / `--uid` / `--gid` /
 
 ### Interface: library-first
 
-The primary deliverable is a Go module (`pkg/taboo`). The audience is engineers
+The primary deliverable is the Go module `taboo` (import path
+`github.com/josecabralf/taboo`). The audience is engineers
 building agent pipelines in Go, who want to express fan-out, review loops, and
-custom orchestration in code. The CLI (`cmd/taboo`) is a thin consumer of the
-library, not the primary contract.
+custom orchestration in code. The CLI (`cli/`, module
+`github.com/josecabralf/taboo/cli`) is a thin consumer of the library, not the
+primary contract.
 
 ### Working directory & results: bind-mount, commit in place
 
@@ -81,7 +83,7 @@ open risk in PRD #19 (issue #35) — nesting the worktree under the repo whose `
 is the second mount — and is now **verified on real workshop 0.9.1 + LXD 6.8**
 (`TestIntegration_NestedWorktreeArrangement`): the commit lands on the host branch
 and the worktree's `.git` pointer resolves on both sides. Nesting works because
-placement changes only the host path of the `/workspace` source, never the two
+placement changes only the host path of the `/taboo/workspace` source, never the two
 mounts themselves; the out-of-repo layout remains a sound fallback. See ADR 0007.
 
 **Two mounts are required, not one.** A *linked* git worktree is **not
@@ -90,7 +92,7 @@ self-contained**: its `.git` is a pointer to the main repo's
 only the worktree's working dir yields `fatal: not a git repository` inside. So
 taboo bind-mounts **both**:
 
-1. the worktree → a fixed target (`/workspace`);
+1. the worktree → a fixed target (`/taboo/workspace`);
 2. the repo's main `.git` (the git *common dir*) → mounted at its **identical
    host absolute path** inside the workshop.
 
@@ -114,7 +116,7 @@ taboo owns the rendered `.taboo/workshop.yaml`, but **no longer authors it from
 scratch**: for a managed project it is *derived* from the project's own
 `workshop.yaml` by opaque-tree injection (see "Derive the workshop from the
 project's definition" below and ADR 0009). The relocatable mount targets
-(`/workspace`, `/sessions`) move under a reserved `/taboo/...` prefix so they
+(`/taboo/workspace`, `/taboo/sessions`) move under a reserved `/taboo/...` prefix so they
 cannot collide with the project's own mounts; the git-common target stays at the
 host `.git` path (the two-mount rule pins it there). Two `remount` caveats:
 
@@ -161,15 +163,16 @@ store-sourced dependency mechanism.
 rootfs from the declared SDKs. Since the per-run loop is `stop → remount → start`
 (the worktree swap above), any ad-hoc-installed agent would be erased before it
 ran. The agent therefore *must* be baked in via an SDK, not installed at runtime.
-Only bind-mounts (worktree, git-common, sessions, secrets) survive a
+Only bind-mounts (worktree, git-common, sessions) survive a
 `stop`/`refresh`.
 
-OpenCode is baked via an **in-project SDK** authored with `workshop sketch-sdk …
---eject --name opencode` (lives at `.workshop/opencode/`: `sdk.yaml` +
-`hooks/setup-base`). Its `setup-base` hook installs OpenCode (`curl -fsSL
+OpenCode is baked via an **in-project SDK**. The agent SDKs ship embedded under
+`internal/workshop/sdk/<agent>/` (each a `sdk.yaml` + `hooks/setup-base`). The
+OpenCode `setup-base` hook installs OpenCode (`curl -fsSL
 https://opencode.ai/install | bash`, then copies the binary to
-`/usr/local/bin`). taboo ships these files embedded (`//go:embed sdk`) and seeds
-them into each managed project dir. The in-project SDK is referenced as
+`/usr/local/bin`). taboo embeds these trees (`//go:embed sdk`) and seeds the
+configured agent's tree per run into `<ProjectDir>/.workshop/<agent>/` (i.e.
+`.taboo/.workshop/<agent>/`). The in-project SDK is referenced as
 **`project-opencode`** in the definition's `sdks:` list; workshop resolves it to
 the bare **`opencode`** used for the `remount <ws>/opencode:<plug>` qualifier and
 in `info`.
@@ -193,6 +196,11 @@ note above), so a `git push` from inside the workshop, forced or not, could
 mutate host branches. taboo's contract is **commit in place; the host owns
 integration** — the agent never needs to push.
 
+The argv-level deny is wired only for the Claude Code and GitHub Copilot profiles
+(`--disallowedTools "Bash(git push *)"` and `--deny-tool=shell(git push)`
+respectively). The OpenCode profile carries no in-argv push deny and relies
+solely on the workshop container as the boundary.
+
 A workflow automation that *does* need to publish (push a branch, open a PR) must
 add its own explicit `git push` stage on the host side, after the run — not rely
 on the agent to push from inside the workshop.
@@ -208,8 +216,8 @@ straight through to the host using the same bind-mount trick as the worktree.
 OpenCode resolves its data dir from `XDG_DATA_HOME` (via `xdg-basedir`); its
 store is a single **SQLite DB** (`opencode/opencode.db` + WAL sidecars), *not*
 loose per-session JSON. Setting `XDG_DATA_HOME` to the mount target redirects it
-through the bind-mount and survives the per-run swap. Session ids are captured
-from `opencode run --format json` stdout (`sessionID`), since the SQLite store is
+through the bind-mount and survives the per-run swap. Resume and fork thread a caller-supplied session id to the agent
+(`--session <id>` / `--fork`) and read the SQLite DB directly, since the store is
 opaque from the host. `AgentProfile.Sessions()` returns the env var + on-disk
 subpath per agent (`{XDG_DATA_HOME, "opencode"}` for OpenCode).
 

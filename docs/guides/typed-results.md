@@ -20,12 +20,16 @@ I checked the code and fixed two issues.
 `taboo.JSONResult[T]` finds that block, decodes the JSON into `T`, and returns
 it. Your struct is the schema: the JSON keys map to fields by their `json` tags.
 
+The agent only emits this block if its prompt tells it to. Instruct the agent to
+print it, for example: "End your reply with a `<result>{...}</result>` block
+whose JSON has the keys `passed` (bool) and `issues` (number)."
+
 ## Decode a block
 
 `JSONResult[T]` returns a `ResultExtractor`. Its `Extract` method takes the agent
 output and returns `any`, which you type-assert to `T`.
 
-```go
+```go title="main.go"
 package main
 
 import (
@@ -113,15 +117,16 @@ path when you need `WithStrictFields`, `WithDelimiters`, or a custom extractor.
 See [Iterate until the agent signals done](iterate-until-done.md) for the loop
 that drives this.
 
-## The last complete block wins
+## The last opening tag wins
 
 When the output holds several `<result>` blocks (an echoed example, a retry), the
-extractor pairs the last `<result>` opening tag with the first `</result>` that
-follows it. The last complete block wins. This tolerates the agent quoting an
-example block earlier in its output and emitting the real one at the end.
+extractor anchors on the **last** `<result>` opening tag, then takes the
+**first** `</result>` after it. This tolerates the agent quoting an example block
+earlier in its output and emitting the real one at the end.
 
-An opening tag with no following close tag yields `ErrNoResult`, the same as no
-block at all.
+If that last opening tag has no following close tag, extraction yields
+`ErrNoResult` even when an earlier block was complete, the same as no block at
+all.
 
 ## Reject unknown fields with WithStrictFields
 
@@ -185,7 +190,11 @@ preserved in the message. A value or pointer receiver works.
   tag after the last opening tag.
 - `ErrInvalidResult` means a block was found but its payload would not
   decode or validate: empty, malformed JSON, type-mismatched, an unknown field
-  under strict mode, or rejected by `Validate`.
+  under strict mode, or rejected by `Validate`. The payload is `TrimSpace`d
+  before decoding, so a block that is empty after trimming fails with
+  `taboo: result block invalid: empty payload`. For a decode or `Validate`
+  failure, `ErrInvalidResult` wraps the underlying detail, so the original error
+  text shows in `err.Error()`.
 
 ```go
 v, err := ext.Extract(output)

@@ -5,7 +5,9 @@ entrypoint delegates to the application package `cli/internal/app`. The root
 command is `taboo` ("taboo orchestrates agent runs inside workshop
 environments", `cli/internal/app/main.go`). It registers six subcommands:
 `doctor`, `init`, `validate`, `run`, `list`, `clean`
-(`cli/internal/app/main.go`, `newRootCmd`).
+(`cli/internal/app/main.go`, `newRootCmd`). There is no `version` subcommand and
+no `--version`/`-v` flag; the only version taboo surfaces is the workshop floor
+(`0.9.1`), reported by `doctor`.
 
 Every command exits `0` on success and `1` on failure. The process exits
 non-zero whenever a command returns an error; `Execute` in
@@ -43,20 +45,23 @@ Positional arguments: none (`cobra.NoArgs`).
 | `--repo` | current directory | Host repository path to scaffold into; resolved to an absolute path. |
 | `--workshop` | derived from the repo directory name | Workshop name; slugified from the repo base name by `deriveWorkshopName`. |
 | `--source-definition` | `""` | Named `.workshop/*.yaml` definition to derive from. Required (non-interactively) only when the repo has more than one. |
-| `--workflows` | seeds `fix` and `refactor` | Pass `none` to skip seeding the example workflows and their prompt files. |
+| `--workflows` | `""` (seeds `fix`, `refactor`) | Only the literal `none` skips seeding the example workflows and their prompt files; the empty default, or any other value, seeds them. |
 | `--template` | `none` | Go scaffold to write: `none`, `single`, or `fanout`. An unknown value is rejected before any side effect. |
 | `--force` | `false` | Regenerate the scaffold files in an existing `.taboo` directory. |
 | `--dry-run` | `false` | List the files `init` would write without writing them. |
 
 When stdin is a real TTY and `--agent` or `--model` is missing, `init` runs an
-interactive `huh` wizard (`cli/internal/app/init.go`, `runInitCmd`). When stdin is not
+interactive `huh` wizard (`cli/internal/app/wizard.go`, `runWizard`). When stdin is not
 a TTY (a pipe, redirect, or `< /dev/null`), a missing required flag fails fast
 naming every missing flag: `missing required flags: ... (pass them or run init
 interactively)`. A fully flagged invocation skips the wizard even at a TTY.
 
 `init` refuses to overwrite an existing `.taboo` directory unless `--force` is
 set: `.taboo already exists at PATH; pass --force to regenerate its scaffold
-files` (`ensureWritable`). An unknown agent is reported with the valid set:
+files` (`ensureWritable`). `--force` regenerates only the files `init` itself
+writes and leaves any other files under `.taboo/` untouched. If the path exists
+but is not a directory, `init` fails with `<dir> exists but is not a directory;
+remove it and re-run init`. An unknown agent is reported with the valid set:
 `unknown agent "X"; valid agents: claude-code, github-copilot, opencode`
 (`resolveProfile`, sorted from `taboo.AgentNames()`). A multi-definition repo
 with no `--source-definition` selected is rejected non-interactively:
@@ -113,14 +118,25 @@ config. With neither a positional workflow, a prompt flag, nor a
 | `--yes` | `false` | Skip the interactive pre-run confirmation. |
 | `--json` | `false` | Emit the run result as JSON. |
 
-Parameter precedence: a CLI flag overrides the workflow block, which overrides
-the top-level config and the `defaults:` block (`cli/internal/app/run.go`
-packs the flags into `taboo.PlanOverrides`; the library bridge applies
-flag-then-workflow-then-top-level to agent, model, and the rest). Template
-variables are layered last: `--var KEY=VALUE` flags override matching
-`--vars-file` keys, and the merged map is substituted into the resolved
-prompt's `{{VAR}}` placeholders (`resolveVars`). A malformed `--var` (not
-`KEY=VALUE`) or an unreadable/invalid `--vars-file` fails fast before the run.
+Parameter precedence is per field, not one blanket rule (`cli/internal/app/run.go`
+packs the flags into `taboo.PlanOverrides`; the library resolves each field
+independently):
+
+- `agent` and `model`: flag > workflow block > top-level config.
+- `--timeout` and `--iterations`: flag > workflow block > the `defaults:` block.
+- `--signal` (completion signal): flag > the `defaults:` block only. There is no
+  workflow-level completion signal.
+- `--from` (source-definition): flag > top-level `source-definition`.
+
+Template variables are layered last: `--var KEY=VALUE` flags override matching
+`--vars-file` keys, and the merged map is substituted into the resolved prompt's
+`{{VAR}}` placeholders (`resolveVars`). Substitution runs only when at least one
+variable is supplied: with no `--var`/`--vars-file`, `{{VAR}}` placeholders pass
+through verbatim and produce no error; once any variable is supplied, an
+unresolved placeholder is a hard error, `prompt template: undefined variable(s):
+<names>`. A malformed `--var` (`invalid --var "<kv>": want KEY=VALUE`) or an
+unreadable/invalid `--vars-file` (`read vars-file: <err>`, `parse vars-file
+<path>: <err>`) fails fast before the run.
 
 Preflight (`runPreflight`): `workshop --version` must report at least
 `minWorkshopVersion` (`0.9.1`, `cli/internal/app/version.go`), then the run-scoped
@@ -142,16 +158,17 @@ form is two lines (`writeRunResult`):
 
 ```
 branch: taboo/fix-20260617-101500-000000001
-commit: 1f3c9ab
+commit: 1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
 ```
 
+`commit` is the full 40-character branch HEAD (`res.Commit`), printed verbatim.
 The plain form omits the captured agent output (it already streamed to stderr).
 With `--json`, stdout carries an indented JSON object (`jsonRunResult`):
 
 ```json
 {
   "branch": "taboo/fix-20260617-101500-000000001",
-  "commit": "1f3c9ab",
+  "commit": "1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9",
   "output": "captured agent stdout",
   "iterations": 1,
   "stopReason": "max-iterations"
@@ -245,13 +262,17 @@ Host checks (`hostChecks` in `cli/internal/app/host.go`), all `error` on failure
   only needed to scaffold or run `main.go`).
 
 Config-aware checks (`configChecks` in `cli/internal/app/config.go`), only when
-a `taboo.yaml` is discoverable from the working directory:
+a `taboo.yaml` is discoverable from the working directory. Out of a project (no
+`taboo.yaml` found at all), `doctor` runs only the host checks above and reports
+no config checks; that absence is not an error.
 
 - `config`: the config loads through `taboo.LoadConfig`.
 - `credentials/<agent>`: a `warn` per referenced agent that has none of its
   credential env keys set (`credentialChecks`).
 - `repo-path`/`repo-git`: the configured repo is on persistent storage and is a
-  git work tree (`repoChecks`).
+  git work tree (`repoChecks`). These and `workshop-project` run only when a
+  top-level `repo:` is set; with `repo:` unset, `doctor` emits no repo or
+  workshop-project check (unlike `validate`, which hard-fails an unset repo).
 - `workshop-project`: the configured repo has a `<repo>/workshop.yaml`. This is a
   presence-only check (it does not derive the workshop — that is `validate`'s
   job) and is an `error` when the file is missing (`workshopProjectChecks`).

@@ -9,8 +9,10 @@ The repo's main `.git` is mounted at its identical host absolute path inside the
 workshop, so a linked worktree's `.git` pointer resolves the same on both sides
 (the two-mount rule). The agent edits and commits in place, and those commits
 land directly on the host branch
-with no extraction or sync step. `git push` is denied inside the workshop, so
-the host owns integration. The library is the primary contract; a thin CLI
+with no extraction or sync step. A `git push` from inside the workshop never
+reaches the host: the workshop container is the boundary, and the claude-code and
+github-copilot agents additionally hard-deny `git push` in their tool config. The
+host owns integration. The library is the primary contract; a thin CLI
 (`taboo`) wraps the common paths.
 
 ## Prerequisites
@@ -89,7 +91,7 @@ func main() {
 `RunWorkflow` prepares the workshop, adds a fresh worktree on the override branch,
 and runs the agent. The agent commits in place, so `res.Commit` is the branch HEAD
 on the host after the run. `res.Branch` names the worktree's branch and
-`res.Output` holds the captured agent stdout; read files the agent left behind
+`res.Output` holds the captured agent stdout (stderr is not retained; it streamed live); read files the agent left behind
 with `res.Artifact(relpath)`. The run itself needs a workshop host (workshop + LXD).
 
 `RunWorkflowAs[T]` is the typed variant: it decodes the agent's structured output
@@ -165,11 +167,13 @@ documented in [docs/reference/taboo-yaml.md](docs/reference/taboo-yaml.md).
 | Command | What it does |
 |---|---|
 | `taboo init` | Scaffold `.taboo/` (`taboo.yaml`, `.gitignore`, `.env.example`, optional `prompts/` and `main.go`). Never launches a workshop. |
-| `taboo run [workflow]` | Run a workflow or ad-hoc `--prompt` on a fresh branch. STDOUT is the machine result; STDERR streams agent output. |
+| `taboo run [workflow]` | Run a workflow or ad-hoc `--prompt` on a fresh branch. STDOUT is the machine result; STDERR streams agent output and diagnostics. |
 | `taboo validate` | Check `taboo.yaml` for config errors. |
 | `taboo doctor` | Check host readiness (`workshop`, `lxd`, `git`, and config-aware checks). |
 | `taboo list` | Read-only inventory of workshops, worktrees, and branches. |
 | `taboo clean` | Remove worktrees, and optionally workshops and branches. |
+
+Every command exits `0` on success and `1` on any failure; there are no per-error exit codes.
 
 ## Documentation
 
@@ -202,8 +206,10 @@ load-bearing decisions are recorded as ADRs:
 [multi-key credential env](docs/adr/0004-multi-key-credential-env.md),
 [declarative agent registry](docs/adr/0005-agent-registry-declarative-roster.md),
 [deferred warm fan-out](docs/adr/0006-defer-warm-fanout-single-repo-workshops.md),
-[nested worktree placement](docs/adr/0007-nested-worktree-placement.md), and
-[model-format hint and fuzzy agent match](docs/adr/0008-model-format-hint-and-fuzzy-agent-match.md).
+[nested worktree placement](docs/adr/0007-nested-worktree-placement.md),
+[model-format hint and fuzzy agent match](docs/adr/0008-model-format-hint-and-fuzzy-agent-match.md),
+[derive the workshop from the project definition](docs/adr/0009-derive-workshop-from-project-definition.md), and
+[a Go orchestrator on the library](docs/adr/0010-go-orchestrator-on-pkg-taboo.md).
 See [docs/explanation/design.md](docs/explanation/design.md) for the reasoning.
 
 ## Testing
@@ -221,7 +227,7 @@ make test-integration  # integration tests; requires workshop + LXD, build tag `
 ## taboo dogfoods itself
 
 taboo runs its own issue-to-review loop with a small Go orchestrator (`afk`,
-built on `pkg`), a pair of GitHub Actions, and some prompts and skills. There is
+built on the `taboo` library), three GitHub Actions, and some prompts and skills. There is
 no new GitHub or push machinery in taboo core; the loop is scaffolding layered
 around the library's single-run primitive.
 
@@ -234,8 +240,8 @@ opens a draft PR whose body is the agent's plan, and labels that PR
 `agent:review`. The label fires the second workflow (`agent-review.yml`), which
 runs `afk review` (Claude Code / Opus): it reads the PR diff and posts a single
 review with inline plus top-level comments. Throughout, the labels form a small state machine
-(`agent:implement` → `agent:in-progress` → `agent:review`, with `agent:blocked`
-on failure).
+(`agent:implement` → `agent:in-progress` → `agent:review`); a maintainer later
+applies `agent:finalize` to un-draft the PR, and `agent:blocked` marks a failure.
 
 The split is deliberate: the agent, inside its workshop, writes code and
 commits; the host workflow layer (`.github/`) owns every GitHub side effect —
