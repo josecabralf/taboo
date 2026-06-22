@@ -16,26 +16,132 @@ body:has(.tbl) .md-sidebar--secondary,
 body:has(.tbl) .md-footer { display: none !important; }
 body:has(.tbl) .md-container { display: block; }
 
-/* The primary nav stays reachable on the door: below 76.25em Material collapses
-   it into the slide-in drawer the header's menu button toggles. That drawer
-   lives inside .md-main and slides in via `:checked ~ .md-container .md-sidebar
-   --primary`, so .md-main must stay in the layout — hiding it (as before) left
-   the menu button toggling only the scrim, with no drawer behind it. Keep
-   .md-main present but give it no footprint: drop the content gap so the empty
-   main collapses against the door's own footer. */
+/* The primary nav stays reachable on the door: Material collapses it into the
+   slide-in drawer the header's taboo-logo button toggles (natively below
+   76.25em; at desktop too via the block below). That drawer lives inside
+   .md-main and slides in via `:checked ~ .md-container .md-sidebar--primary`, so
+   .md-main must stay in the layout — hiding it (as before) left the menu button
+   toggling only the scrim, with no drawer behind it. Keep .md-main present but
+   give it no footprint: drop the content gap so the empty main collapses
+   against the door's own footer. */
 body:has(.tbl) .md-main { display: block; }
 body:has(.tbl) .md-main__inner { margin-top: 0; }
 
-/* ---- At desktop the door has no nav drawer --------------------------------
-   The slide-in drawer is a mobile affordance only: below 76.25em Material
-   collapses the primary nav into the drawer the header's taboo-logo button
-   toggles (kept working by the .md-main rule above). At/above 76.25em Material
-   would otherwise lay the primary nav out as an in-flow left column — but the
-   door has no reading content for it to sit beside, so just hide it. The header
-   keeps Material's defaults here: the home-link logo shows and the drawer
-   toggle stays hidden, so the door's nav never opens at desktop width. */
+/* ---- The door keeps the slide-in drawer at desktop too --------------------
+   Material renders the primary nav as a drawer only below 76.25em; at/above it
+   switches to an in-flow accordion column and hides the toggle. The door has no
+   reading content for that column, so instead of hiding the nav we keep the
+   DRAWER at every width — by re-applying Material's own <76.234375em nav/sidebar
+   rules here, scoped to body:has(.tbl), and overriding the desktop rules that
+   fight them. Rules below the "lifted" markers are copied near-verbatim from
+   Material's mobile media block in main.*.min.css; RE-SYNC THEM ON A MATERIAL
+   UPGRADE. (We deliberately do NOT copy Material's stacked .md-nav__title rule —
+   extra.css already lays the drawer title out as an inline flex row at every
+   width — so here we only re-enable the back-arrow desktop hides.) */
 @media screen and (min-width: 76.25em) {
-  body:has(.tbl) .md-sidebar--primary { display: none; }
+  /* Header: the taboo mark opens the drawer (it no longer links home here). */
+  body:has(.tbl) .md-header__button.md-logo { display: none; }
+  body:has(.tbl) .md-header__button[for="__drawer"] { display: block; }
+
+  /* The scrim — Material gates the WHOLE .md-overlay (base + activation) to
+     mobile, so at desktop it's an unstyled, transparent, zero-size element.
+     Re-declare both so the dim backdrop + click-to-close (it's a <label
+     for=__drawer>) work at desktop too. (lifted) */
+  body:has(.tbl) .md-overlay {
+    position: fixed; top: 0; width: 0; height: 0; z-index: 5; opacity: 0;
+    background-color: #0000008a;
+    transition: width 0ms .25s, height 0ms .25s, opacity .25s;
+  }
+  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-overlay {
+    width: 100%; height: 100%; opacity: 1;
+    transition: width 0ms, height 0ms, opacity .25s;
+  }
+
+  /* The panel: fixed off-screen, slides in when #__drawer is checked. The three
+     !important values beat Material's Sidebar JS, which at desktop marks the
+     panel [hidden] and writes inline top/height (the door's hidden main makes it
+     compute a 0-height nav, so the drawer would slide in empty). (lifted) */
+  body:has(.tbl) .md-sidebar--primary {
+    position: fixed; top: 0 !important; left: -12.1rem;
+    width: 12.1rem; height: 100% !important; z-index: 5;
+    display: block !important;
+    background-color: var(--md-default-bg-color);
+    transform: translateX(0);
+    transition: transform .25s cubic-bezier(.4, 0, .2, 1), box-shadow .25s;
+  }
+  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary {
+    transform: translateX(12.1rem); box-shadow: var(--md-shadow-z3);
+  }
+  body:has(.tbl) .md-sidebar--primary .md-sidebar__scrollwrap {
+    position: absolute; inset: 0; height: 100% !important; margin: 0; overflow: hidden;
+  }
+
+  /* The nav: full-height stacked panels that slide (drill-down), not the desktop
+     grid accordion. (lifted) */
+  body:has(.tbl) .md-nav--primary,
+  body:has(.tbl) .md-nav--primary .md-nav {
+    position: absolute; inset: 0; z-index: 1;
+    display: flex; flex-direction: column;
+    background-color: var(--md-default-bg-color);
+    line-height: 1.5;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__list { flex: 1; padding-left: 0; }
+  body:has(.tbl) .md-nav--primary .md-nav__title ~ .md-nav__list {
+    overflow-y: auto;
+    box-shadow: 0 .05rem 0 var(--md-default-fg-color--lightest) inset;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__item {
+    border-top: .05rem solid var(--md-default-fg-color--lightest);
+  }
+  /* The first row's top separator is the list's inset shadow (below); drop its
+     border-top so the two semi-transparent --line layers don't stack into a
+     heavier/uneven line. Matches the <76.234375em drawer. (lifted) */
+  body:has(.tbl) .md-nav--primary .md-nav__title ~ .md-nav__list > :first-child {
+    border-top: 0;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__link { margin-top: 0; padding: .6rem .8rem; margin-right: 0 !important; }
+  /* Section-row "›" arrows: the mobile drawer sizes them to 1.2rem; the desktop
+     nav shrinks .md-nav__icon to .9rem. Restore 1.2rem for parity. (lifted) */
+  body:has(.tbl) .md-nav--primary .md-nav__link .md-nav__icon {
+    height: 1.2rem; width: 1.2rem; font-size: 1rem; margin-right: -.2rem;
+  }
+
+  /* Child panels slide in from the right when their section toggle is checked —
+     overrides the desktop grid-accordion on .md-nav__toggle ~ .md-nav. (lifted) */
+  body:has(.tbl) .md-nav__toggle ~ .md-nav {
+    display: flex; opacity: 0; transform: translateX(100%);
+    transition: transform .25s cubic-bezier(.8, 0, .6, 1), opacity 125ms 50ms;
+  }
+  body:has(.tbl) .md-nav__toggle:checked ~ .md-nav {
+    opacity: 1; transform: translateX(0);
+    transition: transform .25s cubic-bezier(.4, 0, .2, 1), opacity 125ms 125ms;
+  }
+
+  /* Top title bar wears the primary surface, like the mobile drawer's. (lifted) */
+  body:has(.tbl) .md-nav--primary .md-nav__title[for="__drawer"] {
+    background-color: var(--md-primary-fg-color);
+    color: var(--md-primary-bg-color);
+    font-weight: 700;
+  }
+  /* Drop Material's sticky-title halo (a bg-colored box-shadow) — it masks the
+     first nav item's top separator. The drawer's list scrolls in its own
+     overflow container, so the title never overlaps scrolling content here. */
+  body:has(.tbl) .md-nav--primary .md-nav__title { box-shadow: none; }
+
+  /* Re-show the "‹ Section" back-bar on drilled-in panels and its back arrow,
+     both of which the desktop nav hides. Layout stays extra.css's inline flex
+     row (display:flex, not block — see extra.css .md-nav__title). */
+  body:has(.tbl) .md-nav__item--nested > .md-nav > .md-nav__title { display: flex; }
+  body:has(.tbl) .md-nav--primary .md-nav__title .md-nav__icon {
+    display: block; height: 1.2rem; width: 1.2rem;
+  }
+  body:has(.tbl) .md-nav--primary .md-nav__title .md-nav__icon::after {
+    -webkit-mask-image: var(--md-nav-icon--prev); mask-image: var(--md-nav-icon--prev);
+  }
+
+  /* Drawer links follow the scheme fg, not the always-light code-window ink —
+     else they're white-on-white on the light door. */
+  body:has(.tbl) .md-sidebar--primary .md-nav__link { color: var(--md-default-fg-color); }
 }
 
 /* ============================ Tokens ============================ */
