@@ -26,67 +26,16 @@ body:has(.tbl) .md-container { display: block; }
 body:has(.tbl) .md-main { display: block; }
 body:has(.tbl) .md-main__inner { margin-top: 0; }
 
-/* ---- The door's nav is a slide-in drawer at EVERY width -------------------
-   On the landing the header's taboo-logo button opens the nav as a drawer.
-   Below 76.25em Material already gives us that. At/above it Material instead
-   turns the primary nav into a sticky inline column and hides the toggle, so
-   re-assert the drawer for the door: show the toggle, drop the redundant home
-   logo (the door IS home), and pin the primary nav — plus its scrim — back to
-   the fixed off-screen panel Material only defines below the breakpoint. The
-   panel is position:fixed, so it adds no layout (no empty nav column). */
+/* ---- At desktop the door has no nav drawer --------------------------------
+   The slide-in drawer is a mobile affordance only: below 76.25em Material
+   collapses the primary nav into the drawer the header's taboo-logo button
+   toggles (kept working by the .md-main rule above). At/above 76.25em Material
+   would otherwise lay the primary nav out as an in-flow left column — but the
+   door has no reading content for it to sit beside, so just hide it. The header
+   keeps Material's defaults here: the home-link logo shows and the drawer
+   toggle stays hidden, so the door's nav never opens at desktop width. */
 @media screen and (min-width: 76.25em) {
-  body:has(.tbl) .md-header__button[for="__drawer"] { display: inline-block; }
-  body:has(.tbl) .md-header__button.md-logo { display: none; }
-
-  body:has(.tbl) .md-sidebar--primary {
-    /* Material's sidebar JS re-adds the `hidden` attribute to the primary nav
-       at/above 76.25em (it expects the nav to be the in-flow desktop column,
-       which the door doesn't use) — and `[hidden]{display:none}` then collapses
-       our drawer to display:none, so the panel slides in EMPTY. Force it back to
-       display:block to keep the repurposed drawer painting at desktop. */
-    display: block !important;
-    position: fixed;
-    top: 0;
-    left: -12.1rem;
-    width: 12.1rem;
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    z-index: 5;
-    background-color: var(--md-default-bg-color);
-    transform: translateX(0);
-    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s;
-  }
-  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary {
-    transform: translateX(12.1rem);
-    box-shadow: var(--md-shadow-z3);
-  }
-  body:has(.tbl) .md-sidebar--primary .md-sidebar__scrollwrap {
-    position: absolute;
-    inset: 0;
-    margin: 0;
-    overflow: hidden;
-  }
-  body:has(.tbl) .md-sidebar--primary .md-sidebar__inner { padding: 0; }
-
-  /* The nav itself reverts to Material's in-flow desktop tree here, which lays
-     out fine inside the fixed panel — its links scroll within the scrollwrap.
-     Nested sections keep Material's desktop accordion (click a Diátaxis section
-     to expand it inline). */
-  body:has(.tbl) .md-sidebar--primary .md-nav--primary { overflow-y: auto; }
-
-  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-overlay {
-    width: 100%;
-    height: 100%;
-    opacity: 1;
-  }
-
-  /* The drawer is used at desktop here, so re-show its header logo (Material
-     only reveals it below the breakpoint). extra.css already lays the header
-     out inline with a label-sized mark. */
-  body:has(.tbl) .md-nav--primary > .md-nav__title .md-nav__button.md-logo {
-    display: flex;
-  }
+  body:has(.tbl) .md-sidebar--primary { display: none; }
 }
 
 /* ============================ Tokens ============================ */
