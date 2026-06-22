@@ -98,10 +98,10 @@
       
   <img src="assets/logo.svg" alt="logo">
 
-    </a>
-    <label class="md-header__button md-icon" for="__drawer">
+    </a><label class="md-header__button md-header__drawer" for="__drawer" aria-label="Open navigation">
       
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+  <img src="assets/logo.svg" alt="logo">
+
     </label>
     <div class="md-header__title" data-md-component="header-title">
       <div class="md-header__ellipsis">
@@ -231,14 +231,17 @@
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero__grid wrap">
         <div class="hero__copy">
-          <h1 class="hero__title" id="hero-title" data-reveal style="--i:0">taboo</h1>
+          <div class="hero__brand" data-reveal style="--i:0">
+            <span class="hero__logo" aria-hidden="true"><svg viewBox="0 0 100 100" role="img" aria-label="taboo"><rect width="100" height="100" fill="#E95420"/><path d="M19 50 L34 50 M66 50 L81 50" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/><circle cx="19" cy="50" r="3.9" fill="#fff"/><circle cx="81" cy="50" r="3.9" fill="#fff"/><rect x="34" y="34" width="32" height="32" rx="7.5" fill="none" stroke="#fff" stroke-width="4.5"/><path d="M41 42 H59 M50 42 V58" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="41" cy="42" r="3.4" fill="#fff"/><circle cx="59" cy="42" r="3.4" fill="#fff"/><circle cx="50" cy="58" r="3.4" fill="#fff"/></svg></span>
+            <h1 class="hero__title" id="hero-title">taboo</h1>
+          </div>
           <p class="hero__subtitle" data-reveal style="--i:1">
             Run coding agents in a sandbox. Land their commits on your&nbsp;branch.
           </p>
           <p class="hero__lead" data-reveal style="--i:2">
             taboo is a Go library and CLI. It runs AI coding agents inside isolated
-            Canonical&nbsp;workshops, then merges their commits onto your branch.
-            Nothing touches your working tree until the tests pass.
+            Canonical&nbsp;workshops and lands their commits on a fresh branch.
+            Nothing touches your working tree.
           </p>
 
           <div class="hero__actions" data-reveal style="--i:3">
@@ -289,7 +292,7 @@
           <h2 id="run-title" class="section-title">Three steps from prompt to commit</h2>
           <p class="section-lead">
             You describe the work in Go. taboo handles the sandbox, the agent loop, and the
-            merge. If the work fails, nothing reaches your branch.
+            fresh branch. The agent commits in place on that branch; your working tree is never touched.
           </p>
         </header>
 
@@ -414,7 +417,7 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
           </div>
           <div class="reason" data-reveal style="--i:1">
             <h3 class="reason__title">Commits, not loose diffs</h3>
-            <p class="reason__text">taboo runs the tests, then merges commits onto your branch. You review git history with passing tests, not a pile of unstaged edits.</p>
+            <p class="reason__text">The agent commits its work in place on a fresh branch, so you review real git history with proper commits, not a pile of unstaged edits.</p>
           </div>
           <div class="reason" data-reveal style="--i:2">
             <h3 class="reason__title">Contract-first and deterministic</h3>
@@ -501,8 +504,8 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
       
   <img src="assets/logo.svg" alt="logo">
 
+      taboo
     </a>
-    taboo
   </label>
   
     <div class="md-nav__source">
@@ -544,7 +547,7 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
   <span class="md-ellipsis">
     
   
-    Documentation
+    Tutorials
   
 
     
@@ -557,53 +560,6 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_1">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Documentation
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    
-    
-    
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_1" >
-        
-          
-          <label class="md-nav__link" for="__nav_1_1" id="__nav_1_1_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Tutorials
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_1_1">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -675,10 +631,9 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
     </li>
   
 
-              
-            
-              
-                
+    
+      
+      
   
   
   
@@ -692,10 +647,10 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_1_2" id="__nav_1_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -713,8 +668,8 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_1_2">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -842,10 +797,9 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
     </li>
   
 
-              
-            
-              
-                
+    
+      
+      
   
   
   
@@ -859,10 +813,10 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_1_3" id="__nav_1_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -880,8 +834,8 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_1_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1093,10 +1047,9 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
     </li>
   
 
-              
-            
-              
-                
+    
+      
+      
   
   
   
@@ -1110,10 +1063,10 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_1_4" id="__nav_1_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -1131,8 +1084,8 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_1_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1232,14 +1185,6 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
     </li>
   
 
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
     
   </ul>
 </nav>
@@ -1292,8 +1237,8 @@ log.<span class="c-fn">Printf</span>(<span class="c-st">"landed %s"</span>, res.
 
 <h1 id="taboo">taboo<a class="headerlink" href="#taboo" title="Permanent link">&para;</a></h1>
 <p>taboo is a Go library and CLI that runs AI coding agents inside isolated
-Canonical workshops, then merges their commits onto your branch — nothing
-touches your working tree until the tests pass.</p>
+Canonical workshops and lands their commits on a fresh branch. Nothing touches
+your working tree.</p>
 <p>Start with the <a href="tutorials/library-first-run/">library first run</a> or the
 <a href="tutorials/cli-first-run/">CLI first run</a>.</p>
 
