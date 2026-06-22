@@ -270,7 +270,15 @@
               <span class="window__dots" aria-hidden="true"><i></i><i></i><i></i></span>
               <span class="window__name">main.go</span>
             </div>
-            <pre class="code" aria-hidden="true"><code><span class="c-kw">res</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(ctx, <span class="c-st">"."</span>, <span class="c-st">"implement"</span>,
+            <pre class="code" aria-hidden="true"><code class="code--wide"><span class="c-kw">res</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(
+    ctx,
+    <span class="c-st">"."</span>,
+    <span class="c-st">"implement"</span>,
+    vars,
+    taboo.PlanOverrides{},
+    taboo.<span class="c-fn">NewExecCommander</span>(),
+)
+<span class="c-cm">// res.Commit is the agent's commit on res.Branch</span></code><code class="code--narrow"><span class="c-kw">res</span>, err := taboo.<span class="c-fn">RunWorkflow</span>(ctx, <span class="c-st">"."</span>, <span class="c-st">"implement"</span>,
     vars, taboo.PlanOverrides{}, taboo.<span class="c-fn">NewExecCommander</span>())
 <span class="c-cm">// res.Commit is the agent's commit on res.Branch</span></code></pre>
             <div class="window__run" aria-hidden="true">
