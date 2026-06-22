@@ -11,10 +11,71 @@
    the reading chrome — the door supplies its own body and footer. The header
    and the page background both follow the light/dark toggle, so crossing into
    the docs is seamless in either theme. ------------------------------------- */
-body:has(.tbl) .md-main,
-body:has(.tbl) .md-footer,
-body:has(.tbl) .md-sidebar { display: none !important; }
+body:has(.tbl) .md-content,
+body:has(.tbl) .md-sidebar--secondary,
+body:has(.tbl) .md-footer { display: none !important; }
 body:has(.tbl) .md-container { display: block; }
+
+/* The primary nav stays reachable on the door: below 76.25em Material collapses
+   it into the slide-in drawer the header's menu button toggles. That drawer
+   lives inside .md-main and slides in via `:checked ~ .md-container .md-sidebar
+   --primary`, so .md-main must stay in the layout — hiding it (as before) left
+   the menu button toggling only the scrim, with no drawer behind it. Keep
+   .md-main present but give it no footprint: drop the content gap so the empty
+   main collapses against the door's own footer. */
+body:has(.tbl) .md-main { display: block; }
+body:has(.tbl) .md-main__inner { margin-top: 0; }
+
+/* ---- The door's nav is a slide-in drawer at EVERY width -------------------
+   On the landing the header's taboo-logo button opens the nav as a drawer.
+   Below 76.25em Material already gives us that. At/above it Material instead
+   turns the primary nav into a sticky inline column and hides the toggle, so
+   re-assert the drawer for the door: show the toggle, drop the redundant home
+   logo (the door IS home), and pin the primary nav — plus its scrim — back to
+   the fixed off-screen panel Material only defines below the breakpoint. The
+   panel is position:fixed, so it adds no layout (no empty nav column). */
+@media screen and (min-width: 76.25em) {
+  body:has(.tbl) .md-header__button[for="__drawer"] { display: inline-block; }
+  body:has(.tbl) .md-header__button.md-logo { display: none; }
+
+  body:has(.tbl) .md-sidebar--primary {
+    position: fixed;
+    top: 0;
+    left: -12.1rem;
+    width: 12.1rem;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    z-index: 5;
+    background-color: var(--md-default-bg-color);
+    transform: translateX(0);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s;
+  }
+  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary {
+    transform: translateX(12.1rem);
+    box-shadow: var(--md-shadow-z3);
+  }
+  body:has(.tbl) .md-sidebar--primary .md-sidebar__scrollwrap {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    overflow: hidden;
+  }
+  body:has(.tbl) .md-sidebar--primary .md-sidebar__inner { padding: 0; }
+
+  body:has(.tbl) [data-md-toggle="drawer"]:checked ~ .md-overlay {
+    width: 100%;
+    height: 100%;
+    opacity: 1;
+  }
+
+  /* The drawer is used at desktop here, so re-show its header logo (Material
+     only reveals it below the breakpoint). extra.css already lays the header
+     out inline with a label-sized mark. */
+  body:has(.tbl) .md-nav--primary > .md-nav__title .md-nav__button.md-logo {
+    display: block;
+  }
+}
 
 /* ============================ Tokens ============================ */
 /* The color palette (--bg, --surface-*, --ink*, --accent*, --line*, --focus)
@@ -227,7 +288,10 @@ body:has(.tbl) .md-container { display: block; }
 .tbl .hero__copy, .tbl .hero__proof, .tbl .step, .tbl .path,
 .tbl .path--lead > *, .tbl .reason > * { min-width: 0; }
 .tbl .hero__copy { max-width: 36rem; }
-.tbl .hero__title { font-size: 3.5rem; letter-spacing: -0.04em; line-height: 1.0; margin-top: var(--s-4); margin-bottom: var(--s-2); }
+.tbl .hero__brand { display: flex; align-items: center; gap: 0.8rem; margin-top: var(--s-4); margin-bottom: var(--s-2); }
+.tbl .hero__logo { display: inline-flex; flex: none; line-height: 0; }
+.tbl .hero__logo svg { width: 2.7rem; height: 2.7rem; }
+.tbl .hero__title { font-size: 3.5rem; letter-spacing: -0.04em; line-height: 1.0; margin: 0; }
 .tbl .hero__subtitle {
   font-size: clamp(1.3rem, 1.05rem + 1.1vw, 1.9rem);
   font-weight: 600; line-height: 1.15; letter-spacing: -0.02em;

@@ -45,7 +45,8 @@ theme:
   features:
     # No navigation.tabs: the "Documentation" entry point is a homepage-only
     # header link (overrides/partials/header.html), not a topbar tab. The docs
-    # section uses the left sidebar's "Documentation" group instead.
+    # nav is the four Diátaxis groups at top level (no "Documentation" parent),
+    # so the sidebar and the mobile drawer drill straight into them.
     - navigation.instant
     - navigation.tracking
     - navigation.top
@@ -107,29 +108,29 @@ not_in_nav: |
   index.md
 
 # Home (index.md) is intentionally NOT in the nav — it is reached only via the
-# topbar logo/name (see not_in_nav below). The four Diátaxis groups sit under a
-# single "Documentation" entry, which the left sidebar shows as collapsible
-# sections for progressive disclosure. The homepage links into it via the
+# topbar logo/name (see not_in_nav below). The four Diátaxis groups sit at the
+# top level: the left sidebar shows them as collapsible sections for progressive
+# disclosure, and the mobile drawer drills straight from a group into its pages
+# (no redundant "Documentation" hop). The homepage links into the docs via the
 # header's "Documentation" link (overrides/partials/header.html).
 nav:
-  - Documentation:
-      - Tutorials:
-          - tutorials/library-first-run.md
-          - tutorials/cli-first-run.md
-      - How-to guides:
-          - guides/fan-out-runs.md
-          - guides/iterate-until-done.md
-          - guides/prepare-the-workspace-with-hooks.md
-          - guides/typed-results.md
-      - Reference:
-          - reference/library-api.md
-          - reference/cli.md
-          - reference/afk.md
-          - reference/agents.md
-          - reference/taboo-yaml.md
-          - Run variables: run-vars.md
-          - "Go API ↗ (pkg.go.dev)": https://pkg.go.dev/github.com/josecabralf/taboo
-      - Explanation:
-          - explanation/design.md
-          - explanation/isolation-model.md
-          - explanation/dogfooding.md
+  - Tutorials:
+      - tutorials/library-first-run.md
+      - tutorials/cli-first-run.md
+  - How-to guides:
+      - guides/fan-out-runs.md
+      - guides/iterate-until-done.md
+      - guides/prepare-the-workspace-with-hooks.md
+      - guides/typed-results.md
+  - Reference:
+      - reference/library-api.md
+      - reference/cli.md
+      - reference/afk.md
+      - reference/agents.md
+      - reference/taboo-yaml.md
+      - Run variables: run-vars.md
+      - "Go API ↗ (pkg.go.dev)": https://pkg.go.dev/github.com/josecabralf/taboo
+  - Explanation:
+      - explanation/design.md
+      - explanation/isolation-model.md
+      - explanation/dogfooding.md

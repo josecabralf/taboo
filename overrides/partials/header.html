@@ -17,9 +17,12 @@
     <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-header__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
       {% include "partials/logo.html" %}
     </a>
-    <label class="md-header__button md-icon" for="__drawer">
-      {% set icon = config.theme.icon.menu or "material/menu" %}
-      {% include ".icons/" ~ icon ~ ".svg" %}
+    {#- The drawer toggle wears the taboo logo instead of a hamburger (sized in
+        extra.css). On the docs it shows only below 76.25em; on the landing it
+        shows at every width and replaces the home-link logo (landing.css) —
+        the door is already home, so the mark just opens the nav drawer. -#}
+    <label class="md-header__button md-header__drawer" for="__drawer" aria-label="Open navigation">
+      {% include "partials/logo.html" %}
     </label>
     <div class="md-header__title" data-md-component="header-title">
       <div class="md-header__ellipsis">
