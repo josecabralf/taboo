@@ -165,6 +165,9 @@
   --md-footer-fg-color--lighter: var(--ink-faint);
 }
 
+/* ============================ Grid ============================ */
+.md-header .md-grid { max-width: 100%; }
+
 /* ============================ Selection ============================ */
 ::selection { background: color-mix(in oklab, var(--accent) 28%, transparent); }
 
@@ -415,16 +418,32 @@
 .md-typeset .headerlink:hover { color: var(--accent-text); }
 
 /* ============================ Buttons (md `.md-button`) ============================ */
+/* Colors mirror the landing hero CTAs (.btn--primary / .btn--ghost). */
+
+/* Ghost — the plain .md-button, matches .hero__cta .btn--ghost. */
+.md-typeset .md-button {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: color-mix(in oklab, var(--ink) 3%, transparent);
+}
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+  background: color-mix(in oklab, var(--ink) 6%, transparent);
+}
+
+/* Primary — matches .hero__cta .btn--primary: white on Ubuntu orange. */
 .md-typeset .md-button--primary {
   background: var(--accent);
-  color: var(--on-accent);
+  color: oklch(0.99 0 0);
   border-color: var(--accent);
 }
 .md-typeset .md-button--primary:hover,
 .md-typeset .md-button--primary:focus {
   background: var(--accent-bright);
   border-color: var(--accent-bright);
-  color: var(--on-accent);
+  color: oklch(0.99 0 0);
 }
 
 /* ============================ Focus ============================ */
