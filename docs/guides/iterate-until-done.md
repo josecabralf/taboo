@@ -39,7 +39,7 @@ The loop knobs live in your `taboo.yaml`, so the one-call bridge picks them up
 without extra Go code. `max-iterations` can sit on a workflow or in `defaults`;
 `completion-signal` is a `defaults`-only key:
 
-```yaml
+```yaml title="taboo.yaml"
 workshop: demo
 base: ubuntu@24.04
 repo: /home/me/repos/demo
@@ -61,7 +61,7 @@ workflows:
 `RunWorkflow` locates this config above the start directory, resolves the
 `iterate` workflow into a plan, and runs the loop over a `Commander`:
 
-```go
+```go title="main.go"
 package main
 
 import (

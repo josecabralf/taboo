@@ -250,9 +250,10 @@
   border-bottom: 1px solid var(--line);
   font-family: var(--md-code-font-family, monospace);
   font-weight: 400;
-  padding-left: 3.1rem;            /* room for the three dots */
+  padding-left: 4rem;            /* room for the three dots */
   position: relative;
   border-radius: var(--tb-radius) var(--tb-radius) 0 0;
+  font-size: 0.8rem;
 }
 .md-typeset .highlight span.filename::before {
   content: "";

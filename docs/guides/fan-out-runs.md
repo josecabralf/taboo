@@ -16,7 +16,7 @@ workshop runner input: build one directly, or take it from a resolved plan's
 `Config` field (`plan.Config`, from `(*ProjectConfig).Plan`) to reuse your
 `taboo.yaml` settings.
 
-```go
+```go title="main.go"
 package main
 
 import (

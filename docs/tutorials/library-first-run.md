@@ -82,7 +82,7 @@ go mod init taboo-demo
 
 Write `main.go`:
 
-```go
+```go title="main.go"
 package main
 
 import (

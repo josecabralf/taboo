@@ -29,7 +29,7 @@ whose JSON has the keys `passed` (bool) and `issues` (number)."
 `JSONResult[T]` returns a `ResultExtractor`. Its `Extract` method takes the agent
 output and returns `any`, which you type-assert to `T`.
 
-```go
+```go title="main.go"
 package main
 
 import (

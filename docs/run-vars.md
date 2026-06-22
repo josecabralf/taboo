@@ -121,7 +121,7 @@ fail a `--dry-run` preview, not just a real run. Each error is quoted verbatim:
 
 `.taboo/vars.json`:
 
-```json
+```json title=".taboo/vars.json"
 {
   "ISSUE_TITLE": "Parser drops trailing comments",
   "ISSUE_BODY": "Lines after a // comment are silently truncated."
@@ -130,7 +130,7 @@ fail a `--dry-run` preview, not just a real run. Each error is quoted verbatim:
 
 A workflow prompt in `taboo.yaml`:
 
-```yaml
+```yaml title="taboo.yaml"
 workflows:
   triage:
     prompt: |

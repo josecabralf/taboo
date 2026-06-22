@@ -25,7 +25,7 @@ assign the hooks to `plan.Request.Hooks` before running. `plan.Request` is an
 `OrchestratedRequest` that embeds `RunRequest`, so its `Hooks` field is the same
 one. The `taboo.yaml` supplies the workshop, agent, and repo.
 
-```go
+```go title="main.go"
 package main
 
 import (
