@@ -73,7 +73,7 @@ body:has(.tbl) .md-main__inner { margin-top: 0; }
      only reveals it below the breakpoint). extra.css already lays the header
      out inline with a label-sized mark. */
   body:has(.tbl) .md-nav--primary > .md-nav__title .md-nav__button.md-logo {
-    display: block;
+    display: flex;
   }
 }
 

@@ -202,7 +202,10 @@
 /* Material's drawer header stacks the logo above the site name — the logo is
    absolutely positioned full-width and the name pushed down by a 3rem top
    pad. Lay them out on one line with a logo sized to the label instead. */
-.md-nav--primary > .md-nav__title {
+/* Descendant (not `>`): this lays out BOTH the top-level site title and the
+   "back ‹ Section" title shown when a Diátaxis group is drilled into — Material
+   stacks both the same way (3rem top pad + absolute icon). */
+.md-nav--primary .md-nav__title {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -211,17 +214,35 @@
   line-height: 1.4;
   white-space: nowrap;
 }
+/* The drilled-in title's back chevron is absolutely positioned by Material and
+   the label pushed below it by the top pad — the stacked look. Let it flow as
+   the flex row's first item instead. (Material hides it on the desktop sidebar
+   via display:none, which this leaves untouched.) */
+.md-nav--primary .md-nav__title .md-nav__icon {
+  position: static;
+  top: auto;
+  left: auto;
+  right: auto;
+  margin: 0;
+  flex: 0 0 auto;
+}
 /* Only neutralize the logo's absolute placement — leave its visibility to
    Material (shown in the mobile drawer, hidden in the desktop docs sidebar so
    it doesn't duplicate the header logo). The landing re-shows it at desktop in
    landing.css, where the drawer is used at every width. */
-.md-nav--primary > .md-nav__title .md-nav__button.md-logo {
+.md-nav--primary .md-nav__title .md-nav__button.md-logo {
   position: static;
   margin: 0;
   padding: 0;
+  /* The site name now lives inside this link (overrides/partials/nav.html), so
+     the link — not the label — lays the mark and label out inline. */
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
 }
-.md-nav--primary > .md-nav__title .md-nav__button.md-logo img,
-.md-nav--primary > .md-nav__title .md-nav__button.md-logo svg {
+.md-nav--primary .md-nav__title .md-nav__button.md-logo img,
+.md-nav--primary .md-nav__title .md-nav__button.md-logo svg {
   height: 1.3rem;
   width: auto;
 }
