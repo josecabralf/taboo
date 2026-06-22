@@ -48,12 +48,17 @@ resolve](#every-supplied-placeholder-must-resolve)).
 
 === "CLI"
 
-    Two flags on `taboo run` build the variable map:
+    Two flags on `taboo run` build the variable map
+    (`cli/internal/app/run.go`):
 
     | Flag | Value | Notes |
     |---|---|---|
-    | `--vars-file <path>` | A JSON object of `{"VAR": "value"}` pairs. | Relative paths resolve against the `.taboo` config directory; absolute paths are used as given. |
-    | `--var KEY=VALUE` | A single variable inline. | Repeatable. Overrides a matching `--vars-file` key. |
+    | `--vars-file <path>` | A JSON object of `{"VAR": "value"}` pairs. Default `""` (unset). | A relative path resolves against the config file's directory (the directory holding `taboo.yaml`: the repo root for a bare `taboo.yaml`, or `.taboo/` when nested); an absolute path is used as given. |
+    | `--var KEY=VALUE` | A single variable inline. Repeatable, default none. | Overrides a matching `--vars-file` key. |
+
+    The library path takes no flags: a Go caller passes one pre-merged
+    `map[string]string`, so the `--var`-over-`--vars-file` layering below is the
+    CLI's `resolveVars` job, not something taboo does internally.
 
     ```sh
     taboo run triage --vars-file vars.json --var ISSUE_TITLE="Parser drops comments"
@@ -89,18 +94,28 @@ not through a shell, so there is no shell to expand the injected values.
 
 With no variables supplied, the prompt is passed through untouched, so a prompt
 that legitimately contains `{{...}}` is left alone. As soon as *any* variable is
-supplied, **every** `{{VAR}}` in the prompt must have a matching value — an
-unresolved placeholder fails the run fast (the error names the missing
-variable) rather than sending a half-filled prompt to the agent.
+supplied, **every** `{{VAR}}` in the prompt must have a matching value. An
+unresolved placeholder fails the run fast with
+`prompt template: undefined variable(s): <names>` (`internal/prompt/prompt.go`),
+naming the missing variables rather than sending a half-filled prompt to the
+agent.
+
+Substitution applies to the resolved prompt regardless of where it came from, so
+`{{VAR}}` placeholders in a `prompt-file`'s contents are filled the same as an
+inline `prompt`.
 
 ## Failure modes (CLI)
 
-Each of the following aborts the run before anything executes:
+These checks run during plan resolution, before anything executes, so they also
+fail a `--dry-run` preview, not just a real run. Each error is quoted verbatim:
 
-- a `--vars-file` that does not exist, or that it cannot read;
-- a `--vars-file` whose contents are not a JSON object of string values;
-- a `--var` without an `=`, or with an empty key;
-- a supplied set of variables that leaves any `{{VAR}}` in the prompt unresolved.
+- a `--vars-file` that does not exist or cannot be read: `read vars-file: <err>`;
+- a `--vars-file` whose contents are not a JSON object of string values:
+  `parse vars-file <path>: <err>`;
+- a `--var` without an `=`, or with an empty key:
+  `invalid --var "<kv>": want KEY=VALUE`;
+- a supplied set of variables that leaves any `{{VAR}}` in the prompt unresolved:
+  `prompt template: undefined variable(s): <names>`.
 
 ## Example
 

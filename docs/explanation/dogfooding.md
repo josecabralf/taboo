@@ -20,8 +20,8 @@ subcommand:
 - `afk implement --issue N` — fetch the issue, run the agent, push the branch,
   open a draft PR, hand off to review.
 - `afk review --pr N` — fetch the PR diff, run the review agent, post one review.
-- `afk write-pr [--ready]` — (re)compose a PR description from a branch's diff;
-  with `--ready`, the finalize step that lifts the draft.
+- `afk write-pr [--branch B] [--ready]` — (re)compose a PR description from a
+  branch's diff; with `--ready`, the finalize step that un-drafts the PR.
 - `afk update-branch --pr N` — merge `main` into a PR's branch and validate.
 - `afk to-issues --issue N` — decompose a PRD issue into ready child issues.
 - `afk loop` — the master orchestrator that drains the backlog (below).
@@ -53,6 +53,14 @@ swaps the PR to `agent:in-progress`, runs `afk review`, posts one review, and
 clears the label. On either side a failure adds `agent:blocked` and a run-link
 comment; re-adding the trigger label retries.
 
+Finalize is the closing step, and unlike review it is never applied
+automatically. A maintainer adds `agent:finalize` to a PR by hand once its branch
+has settled (implemented, reviewed, and up to date with `main`); the
+`agent-finalize.yml` workflow then runs `afk write-pr --branch <head> --ready`,
+which regenerates the PR title and body from the realized diff and lifts the
+draft. It uses the same `agent:in-progress`/`agent:blocked` bookkeeping as the
+other two and pushes nothing of its own.
+
 The chain from implement to review — and CI on the resulting PR — is automatic,
 but only because the implement flow applies the `agent:review` label with a
 personal access token rather than the default `GITHUB_TOKEN`.
@@ -66,7 +74,9 @@ personal access token rather than the default `GITHUB_TOKEN`.
     [one-time setup](#human-one-time-setup) below calls it out.
 
 `afk loop` is the same machine run autonomously. Where `implement` drives one
-issue, `loop` drains the whole `ready-for-agent` backlog wave by wave: each wave
+issue, `loop` drains the whole `ready-for-agent` backlog wave by wave. (`ready-for-agent`
+is the one label without the `agent:` prefix: it is the queue's entry point,
+distinct from the `agent:*` labels that trigger the workflows.) Each wave
 it plans the next parallel-safe batch, *claims* every issue in it (removing
 `ready-for-agent`, adding `agent:in-progress`) so a later wave can never
 re-select one in flight, fans the implement flow out across the batch through
@@ -212,9 +222,10 @@ not part of this loop.
 
 Before the loop can run, a repository admin sets up four things by hand:
 
-- **Create the four `agent:*` labels:** `agent:implement`, `agent:review`,
-  `agent:in-progress`, and `agent:blocked`. The workflows assume they already
-  exist.
+- **Create the five `agent:*` labels:** `agent:implement`, `agent:review`,
+  `agent:finalize`, `agent:in-progress`, and `agent:blocked`. The workflows assume
+  they already exist. (The `ready-for-agent` queue label that `afk loop` drains is
+  the only trigger label without the `agent:` prefix.)
 - **Add the agent credential secret:** `CLAUDE_CODE_OAUTH_TOKEN`, the Claude
   subscription token (from `claude setup-token`) the Claude Code agent
   authenticates with inside the workshop. API users set `ANTHROPIC_API_KEY`
@@ -228,8 +239,9 @@ Before the loop can run, a repository admin sets up four things by hand:
   (`actions/create-github-app-token`). The identity must have write access to the
   repo. A classic `repo`-scoped PAT works too but is far broader than needed; this
   is a long-lived, write-capable credential, so the narrowest scope wins. It is
-  used only by `agent-implement` (an `issues`-triggered job), not by the
-  `pull_request_target` review and finalize jobs.
+  used only by `agent-implement` (an `issues`-triggered job); the
+  `pull_request_target` review and finalize jobs apply no cascading label, so they
+  run with the default `GITHUB_TOKEN` and need no PAT.
 - **Confirm Actions permissions:** GitHub Actions must be allowed to push
   branches, open and label pull requests, and post reviews (workflow `contents`,
   `issues`, and `pull-requests` write permissions, plus repository settings that

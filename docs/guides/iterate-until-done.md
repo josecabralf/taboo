@@ -28,7 +28,10 @@ The loop stops on the first of two conditions:
 | The loop has run `MaxIterations` times | `StopMaxIterations` | `"max-iterations"` |
 
 `MaxIterations` below 1 means a single run. An empty completion signal disables
-the early stop, so the loop always runs the full `MaxIterations`.
+the early stop, so the loop always runs the full `MaxIterations`. The signal is
+matched as a plain substring of stdout (`strings.Contains`), not a whole line or
+an exact match, so choose a distinctive token: an agent that prints `not DONE
+yet` would stop a loop watching for `DONE`.
 
 ## Configure the loop in taboo.yaml
 
@@ -130,8 +133,8 @@ and adds three fields:
 - `Iterations` is how many times the agent ran.
 - `StopReason` is `StopSignal` or `StopMaxIterations`. It is only meaningful when
   the call returns a nil error. On a setup or exec failure, the call returns the
-  partial result with the error and leaves `StopReason` at its zero value, so
-  check `err` before reading `StopReason`.
+  partial result with the error and leaves `StopReason` at its zero value (the
+  empty string `""`), so check `err` before reading `StopReason`.
 - `Result` holds a decoded typed value when a result extractor is set, otherwise
   nil. See below.
 
@@ -144,8 +147,8 @@ one.
 Use `RunWorkflowAs[T]` to pull a structured value out of the final iteration's
 output. It runs the same locate-load-plan-run pipeline as `RunWorkflow`, but
 threads a `JSONResult[T]` extractor into the plan so the agent's structured
-output is decoded in-loop and returned as a statically typed `T`, with no caller
-assertion.
+output is decoded from the final iteration's output once the loop ends, and
+returned as a statically typed `T`, with no caller assertion.
 
 ```go
 type review struct {
@@ -189,8 +192,8 @@ session on every pass rather than continuing one fork.
 
 !!! warning "Fork plus a loop is rejected"
     A plan whose `Fork` is set and `MaxIterations` is greater than 1 returns
-    `ErrForkLoop` before any setup runs — taboo rejects the combination up
-    front, so no workshop or worktree is provisioned.
+    `ErrForkLoop` before any setup runs. taboo rejects the combination up front,
+    so no workshop or worktree is provisioned.
 
 A single-iteration fork (`MaxIterations` at or below 1) is allowed, and a
 multi-iteration plain resume (`ResumeSession` set, `Fork` false) is allowed.

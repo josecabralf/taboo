@@ -16,8 +16,8 @@ hide:
 # taboo
 
 taboo is a Go library and CLI that runs AI coding agents inside isolated
-Canonical workshops, then merges their commits onto your branch — nothing
-touches your working tree until the tests pass.
+Canonical workshops and lands their commits on a fresh branch. Nothing touches
+your working tree.
 
 Start with the [library first run](tutorials/library-first-run.md) or the
 [CLI first run](tutorials/cli-first-run.md).

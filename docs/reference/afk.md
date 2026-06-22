@@ -1,11 +1,11 @@
 # afk orchestrator reference
 
 `afk` is the AFK ("away from keyboard") agent loop that drives taboo's own
-development. It is a small Go application built on the `taboo` library — a
+development. It is a small Go application built on the `taboo` library, a
 **nested** Go module at `.taboo/orchestrator/` (`module afk`), not part of the
 `taboo` binary. The GitHub Actions in `.github/workflows/` only check out, set up
-the workshop, and plumb tokens; every step of the loop — including all GitHub
-side effects — is ordinary, unit-tested Go. For why the loop is shaped this way,
+the workshop, and plumb tokens; every step of the loop, including all GitHub
+side effects, is ordinary, unit-tested Go. For why the loop is shaped this way,
 see [Dogfooding the agent loop](../explanation/dogfooding.md) and
 [ADR 0010](https://github.com/josecabralf/taboo/blob/main/docs/adr/0010-go-orchestrator-on-pkg-taboo.md).
 
@@ -46,8 +46,19 @@ and it fails with `taboo: no taboo.yaml found from <dir>`.
 
 Every subcommand exits `0` on success and non-zero on failure (`main.go` maps a
 returned error to a non-zero exit and prints it to stderr). A subcommand that
-requires a number (`--issue`, `--pr`) fails fast with `--issue is required` /
-`--pr is required` before any I/O when the flag is missing or non-positive.
+requires a number (`--issue`, `--pr`) fails fast before any I/O: a non-integer
+value is rejected by stdlib `flag` parsing with its own message, and a missing or
+non-positive value fails the `> 0` check with `--issue is required` /
+`--pr is required`.
+
+## Output streams
+
+`afk` is built to be driven by CI scripts, so it separates machine output from
+diagnostics. The machine result goes to **stdout**: `implement`, `write-pr`, and
+`to-issues` print the PR or issue URL(s); `plan` and `loop --dry-run` print the
+selected batch as JSON. Everything else, the agent's live output and every
+progress, notice, and error line, goes to **stderr** (every subcommand sets
+`PlanOverrides.Stdout`/`Stderr` to `os.Stderr` for the run itself).
 
 ## Environment
 
@@ -56,9 +67,9 @@ forwards what its tools need.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `GH_TOKEN` | `gh` (via `internal/ghio`) | Token for all GitHub I/O — issue/PR fetch, branch push, PR create/edit, labels, reviews, comments. |
+| `GH_TOKEN` | `gh` and `git` (via `internal/ghio`) | Token for all GitHub I/O: issue/PR fetch, PR create/edit, labels, reviews, comments. Branch push goes through `git push` against the checkout's authenticated remote, not a `gh` call. |
 | `GH_REPO` | `gh` (via `internal/ghio`) | `owner/repo` the `gh` calls target. |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` | the agent inside the workshop | The credential the configured agent authenticates with — the OAuth token (Claude subscription) or API key (API) for the `claude-code` agent in `taboo.yaml`. taboo forwards only the keys present in the environment. |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` | the agent inside the workshop | The credential the configured agent authenticates with: the OAuth token (Claude subscription) or API key (API) for the `claude-code` agent in `taboo.yaml`. taboo forwards only the keys present in the environment. |
 
 In CI these come from repository secrets. `CLAUDE_CODE_OAUTH_TOKEN` is the agent
 credential. `GH_TOKEN` is set to `secrets.AGENT_PAT` (falling back to the default
@@ -69,11 +80,23 @@ the implement flow applies must go through a real-identity PAT to cascade into
 [one-time setup](../explanation/dogfooding.md#human-one-time-setup) for how
 `AGENT_PAT` should be scoped.
 
-All configuration — the workshop, agent profile, model, prompts, and the
-iteration/timeout/completion-signal knobs — comes from the **same**
+All configuration, the workshop, agent profile, model, prompts, and the
+iteration/timeout/completion-signal knobs, comes from the **same**
 `.taboo/taboo.yaml` the `taboo` CLI reads (see
 [taboo-yaml.md](taboo-yaml.md)). There is no orchestrator-specific config and no
 second place to keep loop settings.
+
+Each subcommand substitutes a fixed set of `{{VAR}}` placeholders
+(see [Run variables](../run-vars.md)) into its workflow prompt:
+
+| Subcommand | Variables |
+|---|---|
+| `implement` | `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `PLAN_OUTPUT_PATH` |
+| `review` | `PR_NUMBER`, `PR_DIFF` |
+| `write-pr` | `BRANCH`, `DIFF` |
+| `update-branch` | `PR_NUMBER`, `BRANCH` |
+| `to-issues` | `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY` |
+| `plan` | `CANDIDATES` |
 
 ## implement
 
@@ -90,7 +113,7 @@ afk implement --issue <n>
 
 1. **Fetch** the issue title/body via `gh issue view` (`internal/ghio`).
 2. **Run** the `implement` workflow on `taboo` through `taboo.RunWorkflow`: the
-   agent runs inside a taboo-provisioned workshop and **commits in place** — it
+   agent runs inside a taboo-provisioned workshop and **commits in place**; it
    is git-**push-denied**. The issue body reaches the prompt through taboo's
    variable substitution, never the shell, so backticks and `$()` in it are data,
    not commands.
@@ -117,7 +140,7 @@ afk review --pr <n>
    `taboo.RunWorkflowAs[reviewResult]`, asking for a `<result>` block of
    `{summary, comments:[{path, line, body}]}` decoded in-loop.
 3. **Drop** any inline comment whose `path:line` is not addressable in the diff
-   (`internal/diffmap` — the new-side added and context lines), logging a notice
+   (`internal/diffmap`, the new-side added and context lines), logging a notice
    for each. A mis-anchored comment costs a notice, never an error.
 4. **Post** one PR review via `gh api`. An empty review (no summary and no
    in-diff comments survive) is **skipped**, so GitHub never 422s.
@@ -125,13 +148,16 @@ afk review --pr <n>
 ## plan
 
 Lists the open `ready-for-agent` issues and prints the next parallel-safe batch
-of them as JSON. Read-only — it claims nothing and touches no labels.
+of them as JSON. Read-only: it claims nothing and touches no labels.
 
 ```text
 afk plan
 ```
 
-Takes no flags. The batch is the same selection `loop` runs each wave (see
+Takes no flags. The candidate set is the open issues labelled `ready-for-agent`,
+minus any also labelled `agent:in-progress` (already claimed by a wave in
+flight), minus any whose `Blocked by #N` line names an issue that is not yet
+CLOSED. The surviving batch is the same selection `loop` runs each wave (see
 below); `plan` is the preview of that selection. Output goes to stdout.
 
 ## write-pr
@@ -158,7 +184,7 @@ afk write-pr [--branch <branch>] [--ready]
    open PR, so an idempotent re-run never opens a duplicate; only when none
    exists is a new PR created.
 4. **`--ready`** (finalize): after the update, `gh pr ready` lifts the PR the
-   implement flow opened as a draft out of draft. No push happens here — the
+   implement flow opened as a draft out of draft. No push happens here: the
    branch is already on the remote, and finalize only reconciles the PR's
    description and draft state. Wired by the manually-applied
    `agent-finalize.yml`.
@@ -179,7 +205,7 @@ afk update-branch --pr <n>
 1. **Resolve** the PR's head branch via `gh pr view` and **fetch** `origin`, so
    `origin/main` and `origin/<branch>` are current.
 2. **No-op gate**: if `origin/main` is already contained in the branch, do
-   nothing — no workshop, no commit, no push — and exit 0.
+   nothing (no workshop, no commit, no push) and exit 0.
 3. **Run** the `update-branch` workflow on `taboo` through
    `taboo.RunWorkflowAs[updateBranchResult]`, with the worktree started at the PR
    branch's remote tip (`origin/<branch>`, via the bridge's `BaseRef` override):
@@ -189,7 +215,7 @@ afk update-branch --pr <n>
 4. **Gate on validation**: if validation failed, label the PR `agent:blocked`
    with a diagnostic comment and **do not push**. If nothing was merged (a race),
    report and exit. Otherwise **push** the branch as a non-force fast-forward
-   (`git push origin <branch>`) — distinct from the implement flow's force-push,
+   (`git push origin <branch>`), distinct from the implement flow's force-push,
    so a remote branch that moved under us fails safely.
 
 `update-branch` reuses the PR's branch name for its worktree (it is updating
@@ -219,6 +245,11 @@ afk to-issues --issue <n>
    and a back-link to the parent, resolving each `blocked_by` index to the real
    created issue number and writing it into the child as a `Blocked by #N` line.
 
+If the agent proposes no children, `to-issues` prints
+`afk: to-issues agent proposed no child issues` to stderr and exits `0` without
+creating anything. A proposed child with an empty title is a hard error,
+`to-issues agent produced a child with an empty title (index %d)`.
+
 The `ready-for-agent` label is what `plan` and `loop` select on, so `to-issues`
 feeds the loop's backlog.
 
@@ -234,7 +265,7 @@ afk loop [--max-iterations <n>] [--parallelism <n>] [--dry-run]
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--max-iterations` | `10` | Maximum plan→fan-out waves before stopping — a safety bound against a queue that never empties. |
+| `--max-iterations` | `10` | Maximum plan→fan-out waves before stopping, a safety bound against a queue that never empties. |
 | `--parallelism` | `3` | Maximum concurrent implement runs per wave. |
 | `--dry-run` | `false` | Plan and print the first batch without claiming, running, or touching any label. |
 
@@ -242,14 +273,20 @@ Each wave:
 
 1. **Plan** the next parallel-safe batch (the same selection `plan` emits). An
    empty batch means the queue is drained, so the loop stops.
-2. **Claim** every issue in the batch — remove `ready-for-agent`, add
-   `agent:in-progress` — so a later wave's planner can never re-select one
+2. **Claim** every issue in the batch (remove `ready-for-agent`, add
+   `agent:in-progress`) so a later wave's planner can never re-select one
    already in flight.
 3. **Fan out** the implement workflow across the batch through `taboo.Pool`,
    bounded by `--parallelism`.
 4. **Settle** each run: success releases `agent:in-progress`; failure also adds
    `agent:blocked` plus a diagnostic comment, taking the issue out of the ready
    pool until a human re-adds the label.
+
+If the whole wave fails (the pool itself returns an error), every issue claimed
+in step 2 is unclaimed, `agent:in-progress` dropped and `ready-for-agent`
+restored, so the next run can re-select them. All of `loop`'s label and comment
+operations are best-effort: a failure to apply or clear a label is logged to
+stderr and never aborts the wave.
 
 ## See also
 

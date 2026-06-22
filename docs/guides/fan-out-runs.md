@@ -5,8 +5,8 @@ result per request.
 
 Use `Pool` when you have several independent prompts to run against the same
 repo: try three approaches to one bug on three branches, or run the same workflow
-over a list of files. A single-call run handles one prompt at a time; `Pool` fans
-the work out across concurrency slots.
+over a list of files. `taboo.RunWorkflow` (or `Plan.Run`) handles one prompt at a
+time; `Pool` fans the work out across concurrency slots.
 
 ## Build a pool and run a batch
 
@@ -65,6 +65,11 @@ func main() {
     `pool.Run` launches workshops and execs agents, so a configured LXD-backed
     workshop host is required. The rest of the page describes its behaviour.
 
+Each `RunRequest` carries more than `Branch` and `Prompt`: `Timeout`, `Hooks`,
+`ResumeSession`, `Fork`, and `Stdout`/`Stderr` are all per-request. Each
+`RunResult` also exposes the captured agent stdout on `res.Output` (stderr is not
+retained).
+
 ## Results come back in input order
 
 `results[i]` corresponds to `reqs[i]`. The pool runs requests concurrently but
@@ -100,11 +105,19 @@ and worktree, so concurrent runs never touch each other's files. Isolation is at
 the workshop level. See [The isolation model](../explanation/isolation-model.md)
 for how workshops and worktrees fit together.
 
+A successful run leaves its branch and worktree on disk; the pool never tears
+them down. Fanning out N runs accumulates N worktrees and branches, so clean them
+up yourself: call `res.Dispose()` per result (a non-force `git worktree remove`
+that leaves the branch and workshop intact), or run `taboo clean` to tear down
+the whole project's worktrees, branches, and workshops.
+
 ## Constraints on the shared repo
 
 All slots share the base `RepoPath`. The two-mount rule pins the gitcommon mount
-to the host `.git`, so the pool serializes `git worktree add` across slots. Other
-commands (workshop swaps, agent exec) still run concurrently. Concurrent commits
+to the host `.git`, so the pool serializes `git worktree add` and
+`git worktree remove` across slots (both mutate the shared `.git` worktree
+registry). Other commands (workshop swaps, agent exec) still run concurrently.
+Concurrent commits
 to distinct branches are safe because refs are per-worktree and the object store
 is append-only.
 

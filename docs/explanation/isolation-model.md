@@ -7,6 +7,18 @@ page explains why the arrangement is shaped the way it is. For the steps to driv
 a run, see the [library](../tutorials/library-first-run.md) and
 [CLI](../tutorials/cli-first-run.md) tutorials.
 
+!!! note "Assumed knowledge"
+    This page assumes you know what a git *linked worktree* is (`git worktree
+    add`) and that its `.git` is a pointer into the main repository, not a full
+    repository of its own. New to worktrees? Read `git help worktree` first.
+
+!!! abstract "The one idea"
+    A linked worktree's `.git` is a pointer file, not a repository. Everything on
+    this page follows from one rule: mount **both** the worktree and the main
+    `.git`, and mount `.git` at the **same absolute path** inside the workshop as
+    on the host. Call it the **identical-path rule**. The `/tmp` trap, one
+    workshop per repo, and nested worktree placement are all consequences of it.
+
 ## What a workshop is
 
 A workshop is an LXD-backed development environment defined declaratively and
@@ -22,7 +34,10 @@ agent CLI installed into its rootfs, which takes minutes. That cost shapes the
 rest of the model: taboo provisions a workshop once and reuses it across many
 runs rather than creating one per run. `Runner.ensureWorkshop` in
 `internal/run/runner.go` probes with `workshop info` and only launches when the
-probe fails, so the second run onward reuses the existing workshop.
+probe fails, so the second run onward reuses the existing workshop. Reuse is
+guarded: taboo fingerprints the derived workshop definition (a sha256, persisted
+at `<ProjectDir>/workshop.fingerprint`) and `refresh`es or relaunches the
+workshop when the project's `workshop.yaml` drifts, reusing it untouched otherwise.
 
 ## Why two mounts, not one
 
@@ -33,6 +48,13 @@ form `gitdir: <repo>/.git/worktrees/<name>`, and its objects and refs live in th
 main repository's `.git`. Mounting only the worktree's working directory into the
 workshop gives the agent a directory whose `.git` pointer dangles, and git
 reports `fatal: not a git repository`.
+
+!!! tip "Observe it"
+    Run `cat <worktree>/.git` on any linked worktree: you get a single line,
+    `gitdir: <repo>/.git/worktrees/<name>`, a path rather than a directory. Then
+    `git -C <worktree> rev-parse --git-common-dir` resolves it back to
+    `<repo>/.git`, and that resolves to the same value on the host and inside the
+    workshop. That sameness is the identical-path rule at work.
 
 So taboo bind-mounts two things into the workshop:
 
@@ -54,7 +76,10 @@ the worktree's `.git` pointer resolves to the same place whether git reads it fr
 the host or from inside the workshop. The agent commits in place, the commit's
 objects and the branch ref land in the shared `.git`, and the branch HEAD is
 visible to host-side git immediately. `Runner.Exec` reads it back with
-`git -C <worktree> rev-parse HEAD` and records it on `RunResult.Commit`.
+`git -C <worktree> rev-parse HEAD` and records it on `RunResult.Commit`. That same
+shared object store is why the agent is push-denied: a push from inside the
+workshop, forced or not, could mutate host branches directly (see **Push is
+denied**, below).
 
 The alternative is to rewrite the worktree's `.git` pointer to a fixed in-workshop
 path such as `/gitcommon`. That also lets the in-workshop commit succeed, but it
@@ -83,13 +108,16 @@ so it holds for every layout.
 
 ## Why the per-run swap is cheap
 
-Each run needs a different worktree mounted at `/taboo/workspace`, but the workshop is
-long-lived and was launched once. So taboo repoints the existing mount rather than
+Reusing the workshop is what makes taboo usable at scale: a 50-run fan-out pays
+the minutes-long container build once, not 50 times, and every run after the first
+costs only seconds. Here is the mechanism that keeps the reuse safe. Each run
+needs a different worktree mounted at `/taboo/workspace`, but the workshop is
+long-lived and was launched once, so taboo repoints the existing mount rather than
 relaunching. The mechanism is `workshop remount`, which points an existing mount
 plug at a new host source.
 
-A `remount` is only atomic when the new source is empty and on the same filesystem
-as the current one. A worktree is a non-empty directory, so the swap cannot be
+A `remount` is only atomic when the new source is empty (or non-existent) and on
+the same filesystem as the current one. A worktree is a non-empty directory, so the swap cannot be
 live. `Runner.Setup` does it as `stop`, then `remount` for `workspace` and
 `gitcommon` (and `sessions` for a session-capable agent), then `start`. The
 ordering is visible in the code: `workshop.VerbArgs(proj, "stop", ws)`, the
@@ -107,11 +135,16 @@ so anything installed ad hoc into the rootfs by a previous `exec` is wiped befor
 the next run. Only the bind-mounts survive. taboo therefore ships the agent CLI
 as a workshop SDK embedded with `//go:embed sdk` in
 `internal/workshop/materialize.go` and seeds it into the project on first run,
-so the agent is present in the rootfs every time the workshop starts.
+so the agent is present in the rootfs every time the workshop starts. The sessions
+mount survives the same wipe, which is what lets an agent's resume/fork state
+persist across runs; each `Pool` slot gets its own sessions directory under its
+own `ProjectDir`, so parallel runs never share a session store.
 
 ## One workshop per agent, one workshop per slot
 
-A single workshop is pinned to one agent and, through the git-common mount, to one
+The planning consequence first: you cannot point one provisioned workshop at a
+second repository, so plan one workshop per repo (and one per agent). A single
+workshop is pinned to one agent and, through the git-common mount, to one
 repository. `WorkshopName(base, agent)` in `internal/workshop/workshop.go`
 derives the name as `base + "-" + agent`, so each distinct agent gets its own
 reused workshop. The repository pinning is structural: the git-common target
@@ -125,8 +158,8 @@ its own project directory `"<ProjectDir>/slot-<slot>"`, so slots never collide o
 definitions, worktrees, or session stores. Isolation is at the workshop level: each
 slot reuses its own workshop across waves, and every request still gets its own
 branch and worktree. Because all slots share the base repository, `Pool` serializes
-`git worktree add` across them (worktree creation mutates the shared `.git`), while
-the workshop swaps and agent execs run concurrently. The
+`git worktree add` and `git worktree remove` across them (both mutate the shared
+`.git` worktree registry), while the workshop swaps and agent execs run concurrently. The
 [fan-out guide](../guides/fan-out-runs.md) covers the operational caveats, such as
 not running `git gc` against the repository mid-run.
 
@@ -173,6 +206,10 @@ left to extract from the working directory, but the directory itself is not
 reaped. A long-running session, a daemon, or a `Pool` that fans many runs out
 therefore accumulates worktrees until something clears them.
 
+!!! tip "Observe it"
+    `git -C <repo> worktree list` shows every worktree under `.taboo/worktrees/`
+    that no run will remove for you.
+
 That something is the `clean` command. It probes the host for the project's
 taboo-managed artifacts and tears them down: `git worktree remove` for each
 worktree, `workshop remove` for each workshop, and `git branch -D` for the run
@@ -181,24 +218,31 @@ it is interactive by design — `--dry-run` prints the plan and a confirmation
 prompt gates the mutation. See the [CLI reference](../reference/cli.md) for the
 flag matrix.
 
-!!! warning "The library has no programmatic teardown"
-    `clean` lives in the CLI, not the facade. A Go program embedding taboo gets
-    no `Dispose()` or equivalent; it must remove worktrees itself, with the layout
-    knowledge above, or shell out to `git worktree remove`. The orchestrator
-    sidesteps this because CI hands it a fresh, ephemeral checkout per run and
-    throws the whole tree away afterward. A client on a persistent checkout — a
-    web service, a daemon, a `loop` — inherits the disk leak with no built-in
-    escape. Closing that gap (result-side read operations plus a `defer`-able
-    `Dispose` handle that reuses the safe teardown `clean` already encodes) is an
-    open design question, not yet a shipped API.
+!!! warning "The library tears down one worktree, not the whole run"
+    `RunResult` carries the teardown most embedders need. `res.Dispose()` removes
+    the run's worktree with a non-force `git worktree remove` (the same teardown
+    `clean` uses) and is idempotent, so an already-removed worktree counts as
+    success. It is explicit and never automatic: nothing on the run path calls it
+    for you, so a long-running session, a daemon, or a `loop` on a persistent
+    checkout must call `res.Dispose()` itself or accumulate worktrees. Read a
+    finished run's files first with `res.Artifact(relpath)`.
+
+    Two gaps remain. `Dispose` removes only the worktree; it leaves the branch ref
+    and the workshop intact, since persistence is the default. And there is no
+    library-level equivalent of the full `clean` command, which also runs
+    `workshop remove` and `git branch -D`. A client that needs full teardown
+    drives `clean` (or shells out to those verbs) itself. The orchestrator
+    sidesteps all of this because CI hands it a fresh, ephemeral checkout per run
+    and throws the whole tree away afterward.
 
 ## Push is denied; the host owns integration
 
 Agents run headless, with no interactive approver, and commit autonomously. The
 two profiles that expose a tool-permission flag wire in a hard `git push` deny by
 default — Claude Code via `--disallowedTools "Bash(git push *)"`, Copilot via
-`--deny-tool=shell(git push)` — while OpenCode runs its tools freely and leans on
-the workshop itself as the boundary (see [agents.md](../reference/agents.md)). The
+`--deny-tool=shell(git push)` — while OpenCode's argv carries no push deny at all
+and leans solely on the workshop container as the boundary (see
+[agents.md](../reference/agents.md)). The
 deny is deliberate. A linked worktree shares the host repository's object store and
 refs, so a push from inside the workshop, forced or not, could mutate host branches
 directly.
@@ -209,9 +253,20 @@ it makes them. A workflow that does need to publish a branch or open a pull requ
 adds an explicit push stage on the host side, after the run, rather than relying on
 the agent to push from inside the workshop.
 
+## The model in four facts
+
+Remember four things and you can regenerate the rest:
+
+1. A linked worktree's `.git` is a **pointer**, not a repository.
+2. So taboo mounts **two** things: the worktree and the main `.git`.
+3. The `.git` mount sits at its **identical absolute path** on both sides, so the
+   pointer resolves the same inside the workshop and on the host.
+4. The agent therefore **commits in place** onto the host branch, and for the same
+   reason (a shared object store) it is **push-denied**.
+
 ## See also
 
+- **Start here:** [ADR 0007: nested worktree placement](https://github.com/josecabralf/taboo/blob/main/docs/adr/0007-nested-worktree-placement.md) — the integration test (`TestIntegration_NestedWorktreeArrangement`) that proved, on real workshop 0.9.1 and LXD 6.8, that the commit lands on the host branch and the worktree's `.git` pointer still resolves. It is the empirical ground for everything above.
 - [Why the API is shaped this way](design.md)
-- [Library API reference](../reference/library-api.md)
+- [Library API reference](../reference/library-api.md) — the `RunResult.Dispose` / `Artifact` signatures.
 - [ADR 0006: defer warm-clone fan-out, one workshop per repo](https://github.com/josecabralf/taboo/blob/main/docs/adr/0006-defer-warm-fanout-single-repo-workshops.md)
-- [ADR 0007: nested worktree placement](https://github.com/josecabralf/taboo/blob/main/docs/adr/0007-nested-worktree-placement.md)

@@ -33,8 +33,9 @@ applies per-call `PlanOverrides`. A missing config is a distinct error naming
 
 `RunWorkflowAs[T]` is the typed one-call bridge. It runs the same
 locate-load-plan-run pipeline, but threads a `JSONResult[T]` extractor into the
-plan so the agent's structured output is decoded in-loop and returned as a
-statically typed `T`, with no caller assertion. On a locate/load/plan failure it
+plan so the agent's structured output is decoded from the final iteration's
+output once the loop ends, and returned as a statically typed `T`, with no caller
+assertion. On a locate/load/plan failure it
 short-circuits before running, returning the zero `T` and a zero
 `OrchestratedResult`. On an extraction failure (`ErrNoResult` / `ErrInvalidResult`)
 the run already happened: the error surfaces with the zero `T` alongside the
@@ -61,8 +62,8 @@ inspectable description of one run (modulo reading a prompt file). Inspect or
 adjust `Plan.Config` and `Plan.Request` before running. `(*Plan).Run` executes
 the resolved plan — the sole side effect — driving the iteration loop over `cmd`.
 
-Use this path when you want to see or tweak the resolved run before it happens;
-`RunWorkflow` is the same pipeline collapsed into one call.
+This path exposes the resolved run for inspection or adjustment before it
+executes; `RunWorkflow` is the same pipeline collapsed into one call.
 
 ### PlanOverrides
 
@@ -135,7 +136,9 @@ type RunRequest struct {
 `"origin/feature-x"`), setup fetches `origin` and starts the run's branch from
 that ref instead of the host repo's `HEAD`; empty starts a fresh branch off
 `HEAD` with no fetch. `Fork` without `ResumeSession` is meaningless and ignored.
-Agents with no native fork degrade to worktree-only isolation.
+Agents with no native fork degrade to worktree-only isolation. A forked run must
+be single-iteration: `Fork` with `MaxIterations > 1` returns `ErrForkLoop` before
+any setup runs.
 
 ### RunResult
 
@@ -151,6 +154,35 @@ type RunResult struct {
 `RunResult` reports the outcome of a run. `Err` is populated by `Pool` when
 fanning out so one failed run does not abort the batch. The run's worktree is
 not exposed as a path; read files from it with `res.Artifact(relpath)`.
+
+```go
+func (r RunResult) Artifact(relpath string) (string, error)
+func (r RunResult) Dispose() error
+
+func NewResultWithWorktree(worktree string) RunResult
+func NewResultWithWorktreeCmd(worktree string, cmd Commander) RunResult
+```
+
+`Artifact` reads the file at `relpath` within the run's worktree and returns its
+contents. `relpath` must stay inside the worktree: an absolute path or a `..`
+escape is rejected with `artifact "<relpath>": path escapes worktree`, and a
+result that carries no worktree handle returns
+`artifact: result has no worktree handle`.
+
+`Dispose` removes the run's worktree with a non-force `git worktree remove`,
+matching `taboo clean`'s teardown. It is explicit, never automatic: nothing on
+the run path calls it for you. It is idempotent (a worktree already gone is
+success), and it leaves the branch ref and the workshop intact, so a later push
+or run can reuse them. There is no library equivalent of the full `clean`
+command, which also tears down the workshop and branch. `Dispose` returns
+`dispose: result has no worktree handle` when the result carries no handle.
+
+`NewResultWithWorktree` and `NewResultWithWorktreeCmd` build a `RunResult` around
+a bare worktree path so a consumer test can exercise `Artifact`/`Dispose` without
+a full run. A result from `NewResultWithWorktree` carries no `Commander`, so
+calling `Dispose` on it (when the worktree still exists) fails with
+`dispose: result handle has no commander`; use `NewResultWithWorktreeCmd` to
+supply one.
 
 ### OrchestratedRequest
 
@@ -297,7 +329,10 @@ as `any` for the caller to type-assert.
 `JSONResult[T]` builds a `ResultExtractor` that locates the last
 `<result>...</result>` block in the agent's output and decodes its JSON payload
 into `T`. The caller's struct is the schema. `RunWorkflowAs[T]` wires this in
-automatically.
+automatically. Block pairing anchors on the **last** `<result>` opening tag, then
+takes the **first** `</result>` after it; if that last opening tag has no
+following close tag, extraction returns `ErrNoResult` even when an earlier block
+was complete.
 
 `WithDelimiters` overrides the block delimiters; the defaults are `<result>` and
 `</result>`. `WithStrictFields` makes decoding reject a payload that carries
@@ -315,8 +350,9 @@ func Substitute(tmpl string, vars map[string]string) (string, error)
 `Substitute` replaces every `{{VAR}}` placeholder in `tmpl` with `vars[VAR]`,
 where `VAR` matches `[A-Za-z_][A-Za-z0-9_]*`. It is pure. A placeholder with no
 matching key returns an error of the form
-`prompt template: undefined variable(s): ...`. The bridge's `vars` argument runs
-through this.
+`prompt template: undefined variable(s): ...`. The bridge runs `vars` through
+this only when the map is non-empty; with no vars the prompt's `{{VAR}}`
+placeholders are left untouched and produce no error.
 
 ### Hook and Hooks
 
@@ -358,6 +394,7 @@ type Commander interface {
 }
 
 func NewExecCommander() Commander
+func Output(ctx context.Context, c Commander, cmd Cmd) (string, error)
 ```
 
 `Cmd` is a single host-side process invocation (workshop or git). `Commander`
@@ -365,6 +402,10 @@ runs host-side commands and is the single side-effecting seam in taboo: the real
 implementation shells out, and tests substitute a fake that records invocations.
 `NewExecCommander` returns a `Commander` that runs commands as real host
 processes via `os/exec`.
+
+`Output` runs `cmd` and returns its raw captured stdout together with the run
+error. The returned string is untrimmed, and any `Stdout` already set on `cmd` is
+overwritten with the capture buffer.
 
 ## Config model
 

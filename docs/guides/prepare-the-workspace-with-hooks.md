@@ -10,15 +10,15 @@ sees, so its effects are visible to the agent.
 !!! note "Before you start"
     This guide uses the inspect-then-run path, so it assumes you can already
     drive a run from Go. If you have not yet, work through
-    [the library first run](../tutorials/library-first-run.md). You also need a
+    [Drive one agent run from Go](../tutorials/library-first-run.md). You also need a
     `taboo.yaml` in the target repository and a workshop host installed
     (`plan.Run` launches a workshop).
 
 ## Attach a hook to a run
 
-Hooks live on `RunRequest.Hooks`. The one hook point is `OnWorkshopReady`, a
-slice of `Hook`. Each `Hook` has a `Command` (the executable and its arguments)
-and an `InWorkshop` flag.
+Hooks live on `RunRequest.Hooks` (`internal/run/hooks.go`). The one hook point is
+`OnWorkshopReady`, a slice of `Hook`. Each `Hook` has a `Command` (the executable
+and its arguments) and an `InWorkshop` flag.
 
 Set them through the inspect-then-run path: load the config, resolve a `Plan`, and
 assign the hooks to `plan.Request.Hooks` before running. `plan.Request` is an
@@ -115,20 +115,27 @@ plan, as the example does — to see what a hook printed when it fails.
   the agent will use.
 
 A host hook does not get the credential env keys or the session-dir redirect,
-because those are workshop paths. Pick `InWorkshop: true` when the command must
-run in the same context as the agent.
+because those are workshop paths; it inherits only the calling process's
+environment, with no extra environment set by taboo. Pick `InWorkshop: true` when
+the command must run in the same context as the agent.
+
+`Command` is run directly, not through a shell: the first element is the
+executable and the rest are its arguments. Shell features (pipes, `&&`, globbing,
+`$VAR`) do not work. To use them, invoke a shell explicitly, for example
+`{Command: []string{"sh", "-c", "go mod download && go build ./..."}}`.
 
 ## Timeout
 
 The run's `Timeout` (carried on `plan.Request.Timeout`) bounds each hook the same
 way it bounds the agent exec. A hook that hangs cannot stall the run past the
 timeout. When `Timeout` is zero, hooks are unbounded. Set a timeout through
-`PlanOverrides` when resolving the plan if a hook might hang:
+`PlanOverrides` when resolving the plan if a hook might hang (building on the
+example above, with `"time"` added to the imports):
 
 ```go
 plan, err := cfg.Plan("/home/me/repos/demo", "fix", nil, taboo.PlanOverrides{
 	Branch:  "taboo/with-deps",
-	Prompt:  prompt,
+	Prompt:  "Add a benchmark for the parser.",
 	Timeout: 5 * time.Minute,
 })
 if err != nil {

@@ -3,13 +3,21 @@
 !!! abstract "What you'll build"
     A real taboo project in a git repository, scaffolded and validated, ending in one agent run that commits to a fresh branch in your repo. Every step is concrete and runs in order.
 
-By the end of this tutorial you will have installed the `taboo` binary, scaffolded a taboo project into a git repository, set one credential, checked that your host is ready, and run the seeded `fix` workflow. The `taboo` CLI wraps the library: `init` scaffolds the project (`cli/internal/app/init.go`, `cli/internal/app/scaffold.go`), `doctor` checks the host (`cli/internal/app/doctor.go`), and `run` drives a workflow end-to-end on a fresh branch (`cli/internal/app/run.go`).
+By the end of this tutorial you will have installed the `taboo` binary, scaffolded a taboo project into a git repository, set one credential, checked that your host is ready, and run the seeded `fix` workflow. The `taboo` CLI wraps the library: `init` scaffolds the project, `doctor` checks the host, and `run` drives a workflow end-to-end on a fresh branch.
 
 This tutorial uses the `opencode` agent. For why runs are isolated and commit in place, read [the isolation model](../explanation/isolation-model.md) afterwards.
 
+!!! warning "Before you start"
+    The final step launches a real LXD container, so check you have these first. The run cannot work without them:
+
+    - **A Linux host with LXD** (`sudo snap install lxd`). taboo launches LXD-backed workshops; macOS and LXD-less hosts cannot run the final step.
+    - **The `workshop` snap, `0.9.1` or newer** (`sudo snap install workshop`).
+    - **`git`**, and **Go** (to `go install` the CLI).
+    - **An agent API key.** This tutorial uses `opencode`, which reads `OPENROUTER_API_KEY`. Create one at [openrouter.ai](https://openrouter.ai) if you do not have it.
+
 ## Install the CLI
 
-taboo's CLI is its own Go module (`github.com/josecabralf/taboo/cli`), separate from the yaml.v3-only library at `github.com/josecabralf/taboo`. Install the CLI binary, named `taboo`:
+The CLI is its own Go module, `github.com/josecabralf/taboo/cli`. Install the binary, named `taboo`:
 
 ```sh
 go install github.com/josecabralf/taboo/cli@latest
@@ -21,18 +29,22 @@ Confirm it is on your `PATH`:
 taboo --help
 ```
 
+You should see the usage line and the six subcommands: `doctor`, `init`, `validate`, `run`, `list`, and `clean`.
+
 ## Move into a git repository
 
-Work inside a git repository on persistent storage. Do not use a repository under `/tmp` or `/run`: those paths are tmpfs and the mount taboo relies on silently fails there. Put the repo under `$HOME`. Use an existing repo, or create one:
+The agent commits its work to a new branch in *this* repository, so it must be a real git repo. Work inside one on persistent storage. Do not use a repository under `/tmp` or `/run`: those paths are tmpfs and the mount taboo relies on silently fails there. Put the repo under `$HOME`. Use an existing repo, or create one:
 
 ```sh
 mkdir -p "$HOME/demo-repo"
-git -C "$HOME/demo-repo" init
-git -C "$HOME/demo-repo" commit --allow-empty -m "initial commit"
 cd "$HOME/demo-repo"
+git init
+git config user.email you@example.com   # skip if your global git identity is set
+git config user.name "You"
+git commit --allow-empty -m "initial commit"
 ```
 
-The repository must also be a *workshop project*: it needs a `workshop.yaml` that names the workshop and its base toolchain. taboo derives each agent's workshop from this definition, so `init` (and `doctor`) refuse a repo without one (`cli/internal/app/init.go`, `requireWorkshopProject`). Write a minimal one at the repo root:
+The repository must also be a *workshop project*: it needs a `workshop.yaml` that names the workshop and its base toolchain. taboo builds the agent a throwaway environment from this definition (your project's own toolchain), so `init` and `doctor` refuse a repo without one. Write a minimal one at the repo root:
 
 ```yaml title="workshop.yaml"
 name: demo-repo
@@ -53,16 +65,18 @@ Run `taboo init`. Passing `--agent` and `--model` scaffolds without prompting. (
 taboo init --agent opencode --model openrouter/qwen/qwen3-coder-plus
 ```
 
-This writes a `.taboo/` directory into the repository. With no `--workflows none` flag it seeds the example `fix` and `refactor` workflows and their prompt files. It writes:
+This writes a `.taboo/` directory into the repository. By default it seeds the example `fix` and `refactor` workflows and their prompt files (pass `--workflows none` to skip them). It writes:
 
 - `.taboo/taboo.yaml` — the project config (shown below).
 - `.taboo/.gitignore` — ignores the runtime state taboo writes: `worktrees/`, `.workshop/`, the derived `/workshop.yaml` and `/workshop.fingerprint`, `.env`, and `logs/`.
 - `.taboo/.env.example` — one `KEY=` line per credential the chosen agent reads.
 - `.taboo/prompts/fix.md` and `.taboo/prompts/refactor.md` — the seeded workflow prompts.
 
-`init` never launches a workshop. It prints the next steps and offers to run `doctor`.
+`init` never launches a workshop. It prints the next steps, which include running `taboo doctor` next.
 
-The seeded `.taboo/taboo.yaml` looks like this. The `workshop`, `repo`, and `model` values are filled from your flags or wizard answers; the values below are examples:
+Confirm the scaffold landed: `ls .taboo/` should list `taboo.yaml`, `.gitignore`, `.env.example`, and `prompts/`.
+
+The seeded `.taboo/taboo.yaml` looks like this. The `workshop`, `base`, `repo`, `agent`, and `model` values come from your flags or wizard answers; only `strategy` is fixed to `branch` by the scaffold. The values below are examples:
 
 ```yaml
 # taboo.yaml — generated by `taboo init`.
@@ -83,11 +97,11 @@ workflows:
 default-workflow: fix
 ```
 
-`taboo init` marshals this through `yaml.v3`, which indents nested mappings by four spaces. `workshop` defaults to a slug of the repository directory name. `repo` is the absolute path to the repository you ran `init` in. `default-workflow: fix` is what a bare `taboo run` selects.
+`workshop` defaults to a slug of the repository directory name, and `repo` is the absolute path to the repository you ran `init` in. `default-workflow: fix` is what a bare `taboo run` selects.
 
 ## Set the one credential
 
-`init` writes `.env.example` but not `.env`. Copy it and fill in the credential the agent uses. For `opencode` that is `OPENROUTER_API_KEY` (`internal/agent/agent_opencode.go`):
+Without a credential the agent cannot reach its model and the run does nothing. `init` writes `.env.example` but not `.env`. Copy it and fill in the credential the agent uses; for `opencode` that is `OPENROUTER_API_KEY`:
 
 ```sh
 cp .taboo/.env.example .taboo/.env
@@ -107,6 +121,8 @@ Load the file into your shell so taboo can forward the value:
 set -a; source .taboo/.env; set +a
 ```
 
+Confirm it loaded: `echo $OPENROUTER_API_KEY` should print your key.
+
 ## Check the host
 
 Run `doctor` from inside the project so it checks both the host tooling and the resolved config:
@@ -115,19 +131,19 @@ Run `doctor` from inside the project so it checks both the host tooling and the 
 taboo doctor
 ```
 
-`doctor` reports an error if the `workshop` snap is missing or older than `0.9.1` (the floor `minWorkshopVersion` in `cli/internal/app/version.go`), if LXD is missing or unreachable, or if `git` is absent. Inside a `.taboo/` project it also checks that the config loads, the `repo` path is on persistent storage and is a git repository, and that the repo is a workshop project (has a `workshop.yaml`). It warns (without failing) when the Go toolchain is missing or the agent's credentials are not set. Install anything it flags as an error:
+`doctor` reports an error if the `workshop` snap is missing or older than `0.9.1` (the minimum taboo requires), if LXD is missing or unreachable, or if `git` is absent. Inside a `.taboo/` project it also checks that the config loads, the `repo` path is on persistent storage and is a git repository, and that the repo is a workshop project (has a `workshop.yaml`). It warns (without failing) when the Go toolchain is missing or the agent's credentials are not set. Install anything it flags as an error:
 
 ```sh
 sudo snap install workshop
 sudo snap install lxd
 ```
 
-Re-run `taboo doctor` until it reports no errors.
+Re-run `taboo doctor` until it reports no errors. `doctor` checks host tooling; to check the project config on its own, run `taboo validate`, which strictly validates your `.taboo/taboo.yaml`.
 
 ## Run the fix workflow
 
 !!! warning "This step launches a real workshop"
-    `taboo run` starts a workshop and runs the agent for real, so it is not exercised in this repo's tests — run it on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it. At a terminal `run` prints a one-line summary and asks for confirmation before it starts; pass `--yes` to skip the prompt.
+    `taboo run` starts a workshop and runs the agent for real, so run it on a workshop host. The first run launches the workshop, which takes minutes; later runs reuse it. At a terminal `run` prints a one-line summary and asks for confirmation before it starts (pass `--yes` to skip the prompt, or decline to abort); when stdout is not a terminal it proceeds without asking. To rehearse with no host side effects, run `taboo run fix --dry-run` first: it resolves and prints the plan only.
 
 ```sh
 taboo run fix
@@ -148,11 +164,21 @@ git log --oneline <branch-name>
 
 A bare `taboo run` runs `default-workflow` (here, `fix`). To run the other seeded workflow, name it: `taboo run refactor`.
 
+## What just happened
+
+Four ideas to carry forward:
+
+- Your repo's own `workshop.yaml` is its toolchain; taboo *derived* an isolated agent workshop from it. You never authored the agent's environment.
+- `.taboo/` holds taboo's config and runtime state, all git-ignored.
+- The agent ran sandboxed and committed *in place* on a fresh branch. Nothing was pushed, and your working tree was never touched.
+- `taboo doctor` checks the host, `taboo validate` checks the config, and `taboo run` does the work.
+
 ## Next steps
 
 [CLI reference](../reference/cli.md){ .md-button .md-button--primary } [taboo.yaml reference](../reference/taboo-yaml.md){ .md-button }
 
+**Read this next:** [the isolation model](../explanation/isolation-model.md). It explains why the commit landed on your branch with no sync step, which is the whole point of what you just did.
+
 - For every command, flag, and output shape, see the [CLI reference](../reference/cli.md).
 - For every config key and the precedence rules, see the [taboo.yaml reference](../reference/taboo-yaml.md).
 - To drive a run from Go instead of the CLI, read [the library first run](library-first-run.md).
-- For why commits land on the host branch with no sync step, read [the isolation model](../explanation/isolation-model.md).
