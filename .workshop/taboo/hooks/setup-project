@@ -1,0 +1,19 @@
+#!/bin/bash
+# setup-project runs after the project is mounted at /project (setup-base has
+# already installed python3-venv). It provisions the Material for MkDocs
+# toolchain that `make docs-serve` needs, installed from the project's own
+# requirements.txt so the version pins stay in exactly one place. The `docs`
+# tunnel (workshop.yaml) forwards the served site to http://localhost:8000 on
+# the host.
+set -euo pipefail
+
+# Keep the venv outside /project so it never collides with a host-side install.
+DOCS_VENV="$HOME/.docs-venv"
+python3 -m venv "$DOCS_VENV"
+"$DOCS_VENV/bin/pip" install -r /project/requirements.txt
+
+# Expose `mkdocs` on PATH for both `workshop run -- make docs-serve` (a
+# non-login shell that only sees /usr/local/bin) and interactive `workshop
+# shell` sessions. The symlinked entrypoint keeps its venv shebang, so it
+# resolves mkdocs-material from the venv.
+sudo ln -sf "$DOCS_VENV/bin/mkdocs" /usr/local/bin/mkdocs

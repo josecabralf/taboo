@@ -8,12 +8,15 @@
 #   - gcc, libc6-dev  `make test-race` — the race detector needs cgo, a C
 #                     compiler, and the libc headers (gcc alone omits them)
 #   - golangci-lint   `make lint` (not bundled by the go SDK)
+#   - python3-venv    `make docs-serve` — the Material for MkDocs toolchain is
+#                     installed into a venv by the setup-project hook; this just
+#                     supplies the interpreter + venv module (ensurepip)
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-apt-get install -y make git curl gcc libc6-dev
+apt-get install -y make git curl gcc libc6-dev python3-venv
 
 # --- golangci-lint ---------------------------------------------------------
 # Pin the same version CI uses (see .github/workflows/ci.yml).

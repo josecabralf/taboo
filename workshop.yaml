@@ -4,6 +4,19 @@ sdks:
   - name: go
     channel: 1.26/stable
   - name: project-taboo
+    # `make docs-serve` runs `mkdocs serve` on localhost:8000 inside the workshop.
+    # The tunnel slot below (paired with the matching system plug) forwards that
+    # service to the host, so the docs site is reachable at http://localhost:8000
+    # on the dev's machine. Mirrors the dev-service tunnels in last-mile-worker.
+    slots:
+      docs:
+        interface: tunnel
+        endpoint: localhost:8000
+  - name: system
+    plugs:
+      docs:
+        interface: tunnel
+        endpoint: localhost:8000
 actions:
   make: |
     make "$@"

@@ -1,4 +1,4 @@
-.PHONY: help setup build test test-race test-integration fmt lint vet tidy
+.PHONY: help setup build test test-race test-integration fmt lint vet tidy docs-serve
 
 .DEFAULT_GOAL := help
 
@@ -66,3 +66,13 @@ vet: ## Vet every module
 tidy: ## Tidy every module
 	go mod tidy
 	$(fanout)
+
+# Docs site (Material for MkDocs). Root-only (the site lives at the repo root),
+# so no fanout. In the workshop the toolchain is provisioned from requirements.txt
+# by .workshop/taboo/hooks/setup-project; on a dev's own machine, first run
+# `pip install -r requirements.txt`. `mkdocs serve` binds DOCS_ADDR (localhost:8000):
+# inside the workshop the `docs` tunnel (workshop.yaml) forwards it to the host,
+# so the site opens at http://localhost:8000 either way.
+DOCS_ADDR ?= localhost:8000
+docs-serve: ## Live-preview the docs site at http://localhost:8000 (mkdocs serve)
+	mkdocs serve --dev-addr $(DOCS_ADDR)
