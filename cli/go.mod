@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/x/term v0.2.1
-	github.com/josecabralf/taboo v0.1.0
+	github.com/josecabralf/taboo v0.1.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	gopkg.in/yaml.v3 v3.0.1
