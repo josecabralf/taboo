@@ -20,7 +20,7 @@ This tutorial uses the `opencode` agent. For why runs are isolated and commit in
 The CLI is its own Go module, `github.com/josecabralf/taboo/cli`. Install the binary, named `taboo`:
 
 ```sh
-go install github.com/josecabralf/taboo/cli@latest
+go install github.com/josecabralf/taboo/cli/taboo@latest
 ```
 
 Confirm it is on your `PATH`:

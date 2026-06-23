@@ -45,7 +45,7 @@ go get github.com/josecabralf/taboo
 CLI (binary `taboo`):
 
 ```sh
-go install github.com/josecabralf/taboo/cli/cmd/taboo@latest
+go install github.com/josecabralf/taboo/cli/taboo@latest
 ```
 
 The library and the CLI are separate Go modules in this monorepo —
