@@ -22,12 +22,12 @@ that back-pointer path is **invisible inside the workshop** — the working dir 
 there, but at a *different* path than the one the back-pointer names.
 
 git treats a worktree whose back-pointer does not resolve as **stale / prunable**,
-and a `git worktree prune` deletes its admin dir **with no grace period** (the
-3-month `gc.worktreePruneExpire` window only covers a worktree whose *gitdir file*
-is valid but whose working dir is merely missing; a back-pointer to a
-non-existent location is pruned immediately — reproduced with plain git, see
-Verification). Because the host `.git` is
-bind-mounted, that deletion lands **on the host too**. The branch is orphaned and
+and a `git worktree prune` deletes its admin dir **with no grace period**. The
+3-month `gc.worktreePruneExpire` window does not apply here: it covers a worktree
+whose *gitdir file* is valid but whose working dir is merely missing. A
+back-pointer to a path that does not exist is pruned immediately (reproduced with
+plain git, see Verification). Because the host `.git` is bind-mounted, that
+deletion lands **on the host too**. The branch is orphaned and
 every subsequent in-place `git commit` and host-side `git rev-parse HEAD` fails:
 
 ```
@@ -112,8 +112,14 @@ on a resolvable pointer) was reproduced with plain `git` before choosing the fix
   requires worktree + git-common + worktrees-parent. All three always-on (sessions
   stays session-capable-only).
 - **The worktrees parent is exposed read-write in the workshop.** It holds only
-  this ProjectDir's own worktrees (all checkouts of the same repo, already fully
-  reachable via the git-common mount), so the added surface is minimal. taboo's
+  this ProjectDir's own worktrees — all checkouts of the same repo, whose
+  *committed* content is already reachable via the git-common mount — so the added
+  surface is small. The new exposure is *uncommitted/untracked* working-tree files
+  of any sibling worktree that happens to coexist: on sequential runs reusing a
+  ProjectDir, if a prior run's worktree dir has not yet been disposed, a later
+  agent can read or write it. This is the same repo the agent already controls,
+  and `Dispose` removes the per-branch worktree dir, so the window is narrow; it is
+  noted here only because git-common alone never exposed untracked content. taboo's
   other `.taboo` state (sessions, the derived def, the fingerprint) is **not**
   mounted — only the `worktrees/` subtree is.
 - **Reversible.** Removing the plug + its remount reverts to the two-mount rule.

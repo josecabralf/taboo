@@ -112,17 +112,18 @@ record only if that stance reverses.
 The **third** mount (the worktrees parent) closes a subtler gap: the linked
 worktree's admin dir (`<repo>/.git/worktrees/<name>`) holds a *back-pointer* to
 the worktree's host path (`<ProjectDir>/worktrees/<name>/.git`, where
-`<ProjectDir>` is `<repo>/.taboo`). With only mounts
-1–2, that path is invisible inside the workshop (the working dir is there, but at
-`/taboo/workspace`, a *different* path), so in-workshop git treats the worktree as
-stale/prunable — and a `git worktree prune` deletes the admin dir **with no grace
-period**, on the shared host `.git` too, orphaning the branch mid-run and failing
-every later commit / `rev-parse HEAD` with `fatal: not a git repository:
-.../.git/worktrees/<name>` (CI run 28110176802). Mounting the worktrees parent at
-its identical host path makes the back-pointer resolve on both sides for every
-branch, so the worktree is never stale and `prune` is a no-op. The parent (not the
-per-branch worktree) is the target because it is the *same path for every branch*
-— a static plug, no per-run target change. Like git-common, it is exempt from the
+`<ProjectDir>` is `<repo>/.taboo`). With only mounts 1 and 2, that back-pointer
+path is invisible inside the workshop: the working dir is mounted, but at
+`/taboo/workspace`, not at the path the back-pointer names. In-workshop git
+therefore treats the worktree as stale and prunable. A `git worktree prune` then
+deletes the admin dir **with no grace period**, on the shared host `.git` too. The
+branch is orphaned mid-run, and every later commit and `rev-parse HEAD` fails with
+`fatal: not a git repository: .../.git/worktrees/<name>` (CI run 28110176802).
+Mounting the worktrees parent at its identical host path makes the back-pointer
+resolve on both sides for every branch, so the worktree is never stale and `prune`
+is a no-op. The parent is the target rather than the per-branch worktree because
+it is the same path for every branch. That makes the plug static, with no per-run
+target change. Like git-common, it is exempt from the
 `/taboo/...` namespacing: its path **is** the mechanism. See ADR 0011.
 
 **Mount-plug mechanics.** A `mount` plug is declared **inline in `workshop.yaml`**

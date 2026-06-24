@@ -680,8 +680,10 @@ func TestRun_PerRunSequence(t *testing.T) {
 	}
 	// The worktrees source is the worktree parent at its identical host path (the
 	// other load-bearing leg: it makes the linked worktree's admin-dir
-	// back-pointer resolve in-workshop).
-	wantWt := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "worktrees", workshop.WorktreesCommonTarget(cfg.ProjectDir))
+	// back-pointer resolve in-workshop). Derive the expected source from the
+	// worktree this run actually created (filepath.Dir of its path), not from the
+	// production helper, so a regression that mounts the wrong parent is caught.
+	wantWt := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "worktrees", filepath.Dir(res.handle.worktreePath))
 	if got := fc.findRemount(t, "worktrees").Args; !slices.Equal(got, wantWt) {
 		t.Errorf("worktrees remount args =\n  %v\nwant\n  %v", got, wantWt)
 	}
