@@ -61,6 +61,7 @@ var agents = []registration{
 	{New: NewOpenCode, Hint: openCodeHint},
 	{New: NewClaudeCode, Hint: claudeCodeHint},
 	{New: NewGitHubCopilot, Hint: copilotHint},
+	{New: NewPi, Hint: piHint},
 }
 
 // NewProfile resolves a canonical agent name to its AgentProfile, constructed

@@ -1,11 +1,11 @@
 # Agents reference
 
-taboo supports three agents: `opencode`, `claude-code`, and `github-copilot`. Each is
-one `AgentProfile` implementation (`internal/agent/agent.go`); construct one
+taboo supports four agents: `opencode`, `claude-code`, `github-copilot`, and `pi`.
+Each is one `AgentProfile` implementation (`internal/agent/agent.go`); construct one
 through the public `NewProfile(name, model)`. The profiles live in
-`internal/agent/agent_opencode.go`, `agent_claudecode.go`, and
-`agent_githubcopilot.go`; the declarative roster that ties names to constructors is in
-`internal/agent/registry.go`.
+`internal/agent/agent_opencode.go`, `agent_claudecode.go`,
+`agent_githubcopilot.go`, and `agent_pi.go`; the declarative roster that ties names
+to constructors is in `internal/agent/registry.go`.
 
 The generated godoc is the rendered source of truth:
 <https://pkg.go.dev/github.com/josecabralf/taboo>.
@@ -17,12 +17,15 @@ The generated godoc is the rendered source of truth:
 | OpenCode | `opencode` | `NewProfile(taboo.OpenCode, model)` | `OPENROUTER_API_KEY` | argv | `XDG_DATA_HOME` / `opencode` | `<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus` | native (`--fork`) |
 | Claude Code | `claude-code` | `NewProfile(taboo.ClaudeCode, model)` | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | stdin | `CLAUDE_CONFIG_DIR` / `projects` | `a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet` | native (`--fork-session`) |
 | GitHub Copilot | `github-copilot` | `NewProfile(taboo.GitHubCopilot, model)` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | argv (value of `-p`) | `COPILOT_HOME` / `session-state` | none (never warns) | ignored |
+| Pi | `pi` | `NewProfile(taboo.Pi, model)` | `OPENROUTER_API_KEY` | stdin | `PI_CODING_AGENT_SESSION_DIR` / _(empty)_ | `<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus` | native (`--fork <id>`) |
 
-No agent can push from inside the workshop: `claude-code` and `github-copilot`
-deny `git push` at the command level, while `opencode` carries no command-level
-deny and relies on the workshop container as its only boundary. Credential env
-keys reach the agent via `workshop exec --env NAME`, which silently drops any key
-that is unset on the host, so a user forwards only the credential they hold.
+`claude-code` and `github-copilot` deny `git push` at the command level. `opencode`
+and `pi` carry no command-level deny and rely on the workshop container as their
+only boundary — `opencode` has no argv deny mechanism, and `pi`'s deny lives in a
+permissions policy file the argv-only `BuildCommand` contract cannot ship.
+Credential env keys reach the agent via `workshop exec --env NAME`, which silently
+drops any key that is unset on the host, so a user forwards only the credential
+they hold.
 
 !!! warning "Session capture assumes env-based auth"
     `Sessions()` relocates an agent's whole config/home directory onto the host
@@ -131,6 +134,47 @@ Push deny: yes, via `--deny-tool=shell(git push)`. Denial rules take precedence
 over `--allow-all`, and Copilot approves shell commands on a first-level
 subcommand basis, so this one pattern blocks every `git push` form.
 
+## Pi
+
+Source: `internal/agent/agent_pi.go`.
+
+`Name()` returns `pi`. Construct it with `NewProfile(taboo.Pi, model)`.
+
+Credential env keys (`CredentialEnvKeys()`): `OPENROUTER_API_KEY`. Pi reads its
+OpenRouter credentials from this key; a single key mirrors OpenCode's OpenRouter
+path. Pi can also authenticate from `~/.pi/agent/auth.json`, but supplying the key
+through `--env` means no such credential file is written.
+
+Prompt delivery: stdin. `BuildCommand` renders `pi -p --approve --model <model>`
+and sets `AgentCommand.Stdin` to the prompt; the prompt never rides in argv. `-p`
+is Pi's non-interactive print mode (plain final response — no JSON parser needed,
+unlike `--mode json`). `--approve` trusts the project for the run: non-interactive
+modes show no trust prompt and otherwise fall back to Pi's `defaultProjectTrust`
+(default `ask`), which would leave the project untrusted and withhold tool
+execution. A resume id appends `--session <id>` (the deterministic id-targeted
+flag — Pi's `-r/--resume` is an interactive picker), and a fork instead appends
+`--fork <id>`: Pi's fork flag *takes* the source id and writes the continuation to
+a new session file, so it replaces `--session` rather than adding to it.
+
+Sessions (`Sessions()`): `DirEnv` is `PI_CODING_AGENT_SESSION_DIR`, `Subdir` is
+empty, and the second return value is `true`. Pi writes session files directly
+under that dir (organized into per-working-directory subdirs). Unlike OpenCode's
+`XDG_DATA_HOME` or Copilot's `COPILOT_HOME`, this env var relocates only the
+sessions dir, not Pi's config/auth home, so `~/.pi/agent/auth.json` never lands on
+the host mount.
+
+Model-hint `expected`: `<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus`.
+The hint pattern is `^[^/]+/.+$` (mirroring OpenCode, the other OpenRouter agent),
+so a bare value with no provider segment (for example a bare `sonnet`) does not
+match and `taboo validate` warns.
+
+Fork: native (`--fork <id>`). The flag takes the source id; a fork without a
+session to fork from is dropped.
+
+Push deny: no command-level deny. Pi's allow/deny rules live in a permissions
+policy file (`--permissions-file`), which the argv-only `BuildCommand` contract
+cannot ship, so the workshop container is the only boundary.
+
 ## Why push is denied
 
 A linked worktree shares the host repo's object store and refs, so a push from
@@ -150,15 +194,17 @@ func MatchModelFormat(agentName AgentName, model string) (ok bool, expected stri
 ```
 
 The roster in `registry.go` is a slice of registrations, one line per supported
-agent (internal constructor names `NewOpenCode`, `NewClaudeCode`, `NewGitHubCopilot`).
-The public constants live in `internal/agent` and are re-exported from the
-facade as `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`:
+agent (internal constructor names `NewOpenCode`, `NewClaudeCode`,
+`NewGitHubCopilot`, `NewPi`). The public constants live in `internal/agent` and are
+re-exported from the facade as `taboo.OpenCode`, `taboo.ClaudeCode`,
+`taboo.GitHubCopilot`, and `taboo.Pi`:
 
 ```go
 var agents = []registration{
     {New: NewOpenCode, Hint: openCodeHint},
     {New: NewClaudeCode, Hint: claudeCodeHint},
     {New: NewGitHubCopilot, Hint: copilotHint},
+    {New: NewPi, Hint: piHint},
 }
 ```
 
@@ -168,10 +214,10 @@ equals `name` and returns `New(model)`. An unmatched name returns a wrapped
 `NewProfile` validates the name only, not the model.
 
 `AgentNames()` returns the registered names as a sorted `[]string`: `claude-code`,
-`github-copilot`, `opencode`. It feeds the CLI's fuzzy-suggestion path on an
+`github-copilot`, `opencode`, `pi`. It feeds the CLI's fuzzy-suggestion path on an
 unknown name; the matching itself lives in the CLI, not here. To name an agent in
-code, use the `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`
-constants (`AgentName`) with `NewProfile` or `Workflow.Agent`.
+code, use the `taboo.OpenCode`, `taboo.ClaudeCode`, `taboo.GitHubCopilot`, and
+`taboo.Pi` constants (`AgentName`) with `NewProfile` or `Workflow.Agent`.
 
 `MatchModelFormat(agentName AgentName, model)` reads the registration's `Hint` and reports
 whether `model` looks well-formed, plus the `expected` format string. It is
@@ -183,10 +229,10 @@ workflow's, to an `AgentProfile` through `NewProfile`, storing them on
 
 ## Unsupported agents
 
-`codex` and `pi` are not supported. They exist only as SDK stub directories under
-`internal/workshop/sdk/`. They have no Go profile in `agent_*.go` and no registration in
-`registry.go`, so `NewProfile(taboo.AgentName("codex"), ...)` and `NewProfile(taboo.AgentName("pi"), ...)` return
-`ErrUnknownAgent`, and `AgentNames()` does not list them.
+`codex` is not supported. It exists only as an SDK stub directory under
+`internal/workshop/sdk/`. It has no Go profile in `agent_*.go` and no registration in
+`registry.go`, so `NewProfile(taboo.AgentName("codex"), ...)` returns
+`ErrUnknownAgent`, and `AgentNames()` does not list it.
 
 ## See also
 

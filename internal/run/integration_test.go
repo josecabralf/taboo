@@ -495,6 +495,24 @@ func TestIntegration_CopilotAgent(t *testing.T) {
 	runLiveAgentCommitTest(t, mustProfile("github-copilot", "claude-sonnet-4.6"), "agent/github-copilot")
 }
 
+// TestIntegration_PiAgent runs the real Pi agent (qwen via OpenRouter). Skipped
+// unless OPENROUTER_API_KEY is set — the single key the profile forwards via --env
+// (ADR 0004).
+//
+// Pi delivers the prompt on AgentCommand.Stdin into `pi -p` (ADR 0001), like Claude
+// Code and unlike OpenCode's argv path. `-p` selects non-interactive print mode and
+// `--approve` trusts the project so the headless agent can edit and commit without a
+// trust prompt. No credential-on-disk walk (cf. the Claude Code test): the
+// OPENROUTER_API_KEY comes in via --env and PI_CODING_AGENT_SESSION_DIR relocates
+// only Pi's sessions dir, not its auth home, so no auth.json is written onto the
+// host mount.
+func TestIntegration_PiAgent(t *testing.T) {
+	if os.Getenv("OPENROUTER_API_KEY") == "" {
+		t.Skip("OPENROUTER_API_KEY not set; skipping live Pi integration test")
+	}
+	runLiveAgentCommitTest(t, mustProfile("pi", "openrouter/qwen/qwen3-coder-plus"), "agent/pi")
+}
+
 // openCodeJSONFormat wraps the real OpenCode profile to add `--format json`,
 // which makes `opencode run` emit newline-delimited JSON events carrying the
 // sessionID — the only way to capture a run's session id, since OpenCode keeps
