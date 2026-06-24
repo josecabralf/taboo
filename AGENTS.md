@@ -67,8 +67,8 @@ make test    # go test ./... -count=1 -cover   in every module (also runs the go
 
 ## Gotchas
 
-- Only `opencode`, `claude-code`, and `github-copilot` are real agents. The `codex` and
-  `pi` SDK dirs under `internal/workshop/sdk/` are unregistered stubs — not in
+- Only `opencode`, `claude-code`, `github-copilot`, and `pi` are real agents. The
+  `codex` SDK dir under `internal/workshop/sdk/` is an unregistered stub — not in
   `internal/agent/registry.go`, not supported.
 
 ## Pointers

@@ -249,6 +249,7 @@ const (
     OpenCode      AgentName = "opencode"
     ClaudeCode    AgentName = "claude-code"
     GitHubCopilot AgentName = "github-copilot"
+    Pi            AgentName = "pi"
 )
 
 // Agent registry helpers
