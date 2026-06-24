@@ -3,15 +3,15 @@ module github.com/josecabralf/taboo/cli
 go 1.26.3
 
 retract (
-	v0.1.0 // unbuildable: filesystem replace directive prevents go install
-	v0.1.1 // binary misnamed "cli"; root-level install path retired
 	v0.1.2 // cmd/taboo install path retired in favor of cli/taboo
+	v0.1.1 // binary misnamed "cli"; root-level install path retired
+	v0.1.0 // unbuildable: filesystem replace directive prevents go install
 )
 
 require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/x/term v0.2.1
-	github.com/josecabralf/taboo v0.1.2
+	github.com/josecabralf/taboo v0.1.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	gopkg.in/yaml.v3 v3.0.1
