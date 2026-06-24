@@ -70,6 +70,13 @@ func initSeedRepo(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// taboo derives the agent workshop from the project's own workshop.yaml
+	// (ADR 0009), so the seed repo must ship one. This minimal def carries no
+	// SDKs; derive injects the agent SDK (per the test's profile) and the mount
+	// plugs. git itself is already in the ubuntu base image.
+	if err := os.WriteFile(filepath.Join(repo, "workshop.yaml"), []byte("name: seed\nbase: ubuntu@24.04\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	run("add", "-A")
 	run("commit", "-qm", "seed")
 	return repo
@@ -84,7 +91,7 @@ type scriptProfile struct {
 	argv []string
 }
 
-func (scriptProfile) Name() AgentName { return OpenCode }
+func (scriptProfile) Name() agent.AgentName { return agent.OpenCode }
 
 func (p scriptProfile) BuildCommand(opts agent.CommandOptions) agent.AgentCommand {
 	return agent.AgentCommand{Argv: append(slices.Clone(p.argv), opts.Prompt)}
@@ -259,6 +266,78 @@ git commit -qm "agent: add NESTED.md"`
 		t.Errorf("host worktree on wrong branch: got %q, want %q", got, "agent/nested")
 	}
 	t.Logf("nested arrangement OK: workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.handle.worktreePath)
+}
+
+// TestIntegration_WorktreePruneInWorkshopKeepsAdminDir is the regression gate for
+// the gitdir-in-workshop bug (CI run 28110176802): a `git worktree prune` run
+// inside the workshop must NOT destroy the run's worktree. A linked worktree's
+// admin dir (<repo>/.git/worktrees/<name>) records a back-pointer to the
+// worktree's host path (<ProjectDir>/worktrees/<name>/.git). With only the
+// worktree (relocated to /taboo/workspace) and .git mounted, that back-pointer
+// path is invisible in the workshop, so in-workshop git flags the worktree
+// prunable and a prune deletes the admin dir on the shared host .git — orphaning
+// the branch and breaking every later commit / rev-parse with
+// "fatal: not a git repository: .../.git/worktrees/<name>". The worktrees mount
+// (the third leg of the mount rule) makes the back-pointer resolve, so prune is a
+// no-op. This drives the nested arrangement (the one CI hits) with a deterministic
+// script that prunes and then commits; it would fail on the commit before the fix.
+func TestIntegration_WorktreePruneInWorkshopKeepsAdminDir(t *testing.T) {
+	repo := initSeedRepo(t)
+	proj := filepath.Join(repo, ".taboo")
+	r, cfg := newIntegrationRunnerInProject(t, repo, scriptProfile{argv: []string{"bash", "-lc"}}, proj)
+
+	// Prune first (the destructive op in the bug), then commit. Before the fix the
+	// prune self-deletes this worktree's admin dir and the commit fails 128.
+	const script = `set -eux
+git config user.email agent@example.com
+git config user.name agent
+git worktree list
+git worktree prune -v
+echo "written inside the workshop" > PRUNE.md
+git add -A
+git commit -qm "agent: add PRUNE.md after worktree prune"`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	var agentOut strings.Builder
+	res, err := r.Run(ctx, RunRequest{
+		Branch: "agent/prune", Prompt: script, Timeout: 2 * time.Minute,
+		Stdout: &agentOut, Stderr: &agentOut,
+	})
+	t.Logf("agent exec output:\n%s", agentOut.String())
+	if err != nil {
+		t.Fatalf("Run (in-workshop prune destroyed the worktree?): %v", err)
+	}
+
+	// The commit landed despite the in-workshop prune: the worktree survived.
+	if res.Commit == "" {
+		t.Fatal("RunResult.Commit is empty (commit after prune did not land)")
+	}
+
+	// The host admin dir for this worktree still exists — a prune would have
+	// removed it. This is the crisp regression signal.
+	adminDir := filepath.Join(repo, ".git", "worktrees", filepath.Base(res.handle.worktreePath))
+	if _, err := os.Stat(adminDir); err != nil {
+		t.Fatalf("worktree admin dir gone after in-workshop prune (the bug): %v", err)
+	}
+
+	// Host-side git still resolves the worktree and sees the commit on its branch.
+	branchOut, err := osexec.Command("git", "-C", res.handle.worktreePath, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("host-side git in worktree failed after prune (pointer broken): %v\n%s", err, branchOut)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != "agent/prune" {
+		t.Errorf("host worktree on wrong branch: got %q, want %q", got, "agent/prune")
+	}
+	logOut, err := osexec.Command("git", "-C", res.handle.worktreePath, "log", "--oneline").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, logOut)
+	}
+	if !strings.Contains(string(logOut), "add PRUNE.md") {
+		t.Errorf("commit not on branch; log:\n%s", logOut)
+	}
+	t.Logf("prune-survival OK: workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.handle.worktreePath)
 }
 
 // runLiveAgentCommitTest is the shared body of the three live-agent integration

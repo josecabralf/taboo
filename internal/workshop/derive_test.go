@@ -72,10 +72,11 @@ actions:
     make "$@"
 `)
 	cfg := Config{
-		Workshop: "taboo-run-abc",
-		Base:     "ubuntu@99.99", // deliberately != source base; derive must inherit source base
-		Agent:    mustProfile("opencode", openCodeModel),
-		RepoPath: "/home/dev/repos/myproject",
+		Workshop:   "taboo-run-abc",
+		Base:       "ubuntu@99.99", // deliberately != source base; derive must inherit source base
+		Agent:      mustProfile("opencode", openCodeModel),
+		RepoPath:   "/home/dev/repos/myproject",
+		ProjectDir: "/home/dev/repos/myproject/.taboo",
 	}
 
 	out, _, err := deriveDefinition(cfg, source)
@@ -122,7 +123,7 @@ actions:
 		t.Errorf("go sdk channel = %v, want 1.26/stable (unmodeled, preserved)", goSDK["channel"])
 	}
 
-	// The injected agent SDK carries the workspace + gitcommon mount plugs.
+	// The injected agent SDK carries the workspace + gitcommon + worktrees plugs.
 	agentSDK := findSDK(sdks, "project-opencode")
 	if agentSDK == nil {
 		t.Fatalf("project-opencode sdk missing, want appended; got %v", sdks)
@@ -133,16 +134,18 @@ actions:
 	}
 	assertMountPlug(t, plugs, "workspace", "/taboo/workspace")
 	assertMountPlug(t, plugs, "gitcommon", "/home/dev/repos/myproject/.git")
+	assertMountPlug(t, plugs, "worktrees", "/home/dev/repos/myproject/.taboo/worktrees")
 }
 
 // When the source has no sdks: key, derive creates one holding just the agent.
 func TestDeriveDefinition_CreatesSdksWhenAbsent(t *testing.T) {
 	source := []byte("name: bare\nbase: ubuntu@24.04\n")
 	cfg := Config{
-		Workshop: "taboo-run-abc",
-		Base:     "ubuntu@99.99",
-		Agent:    mustProfile("opencode", openCodeModel),
-		RepoPath: "/home/dev/repos/myproject",
+		Workshop:   "taboo-run-abc",
+		Base:       "ubuntu@99.99",
+		Agent:      mustProfile("opencode", openCodeModel),
+		RepoPath:   "/home/dev/repos/myproject",
+		ProjectDir: "/home/dev/repos/myproject/.taboo",
 	}
 
 	out, _, err := deriveDefinition(cfg, source)
@@ -172,6 +175,7 @@ func TestDeriveDefinition_CreatesSdksWhenAbsent(t *testing.T) {
 	}
 	assertMountPlug(t, plugs, "workspace", "/taboo/workspace")
 	assertMountPlug(t, plugs, "gitcommon", "/home/dev/repos/myproject/.git")
+	assertMountPlug(t, plugs, "worktrees", "/home/dev/repos/myproject/.taboo/worktrees")
 }
 
 // Per ADR 0009, taboo's two RELOCATABLE mount targets move under a reserved
@@ -182,9 +186,10 @@ func TestDeriveDefinition_CreatesSdksWhenAbsent(t *testing.T) {
 func TestDeriveDefinition_NamespacesWorkspaceAndSessionsTargets(t *testing.T) {
 	source := []byte("name: p\nbase: ubuntu@24.04\n")
 	cfg := Config{
-		Workshop: "taboo-run-abc",
-		Agent:    mustProfile("opencode", openCodeModel), // session-capable: gets a sessions plug
-		RepoPath: "/home/dev/repos/myproject",
+		Workshop:   "taboo-run-abc",
+		Agent:      mustProfile("opencode", openCodeModel), // session-capable: gets a sessions plug
+		RepoPath:   "/home/dev/repos/myproject",
+		ProjectDir: "/home/dev/repos/myproject/.taboo",
 	}
 
 	out, _, err := deriveDefinition(cfg, source)
@@ -213,8 +218,11 @@ func TestDeriveDefinition_NamespacesWorkspaceAndSessionsTargets(t *testing.T) {
 	// The two relocatable targets move under /taboo/...
 	assertMountPlug(t, plugs, "workspace", "/taboo/workspace")
 	assertMountPlug(t, plugs, "sessions", "/taboo/sessions")
-	// git-common is NOT namespaced: its path is the two-mount mechanism.
+	// git-common and worktrees are NOT namespaced: their paths ARE the mount
+	// mechanism (they must equal their host absolute paths so the worktree's
+	// .git pointer and its admin-dir back-pointer resolve identically inside).
 	assertMountPlug(t, plugs, "gitcommon", "/home/dev/repos/myproject/.git")
+	assertMountPlug(t, plugs, "worktrees", "/home/dev/repos/myproject/.taboo/worktrees")
 }
 
 func assertMountPlug(t *testing.T, plugs map[string]any, name, target string) {
@@ -286,10 +294,11 @@ func TestDeriveDefinition_DogfoodTabooRepo(t *testing.T) {
 func TestDeriveDefinition_OmitsSessionsForSessionlessAgent(t *testing.T) {
 	source := []byte("name: p\nbase: ubuntu@24.04\n")
 	cfg := Config{
-		Workshop: "taboo-run",
-		Base:     "ubuntu@24.04",
-		Agent:    stdinProfile{}, // Sessions() ok == false
-		RepoPath: "/home/dev/repos/myproject",
+		Workshop:   "taboo-run",
+		Base:       "ubuntu@24.04",
+		Agent:      stdinProfile{}, // Sessions() ok == false
+		RepoPath:   "/home/dev/repos/myproject",
+		ProjectDir: "/home/dev/repos/myproject/.taboo",
 	}
 
 	out, _, err := deriveDefinition(cfg, source)
@@ -313,9 +322,10 @@ func TestDeriveDefinition_OmitsSessionsForSessionlessAgent(t *testing.T) {
 	if _, ok := plugs["sessions"]; ok {
 		t.Error("sessions plug present for a sessionless agent, want none")
 	}
-	// The two always-on mounts are still there.
+	// The three always-on mounts are still there.
 	assertMountPlug(t, plugs, "workspace", "/taboo/workspace")
 	assertMountPlug(t, plugs, "gitcommon", "/home/dev/repos/myproject/.git")
+	assertMountPlug(t, plugs, "worktrees", "/home/dev/repos/myproject/.taboo/worktrees")
 }
 
 // A source that is not a YAML mapping (an empty/comment-only file, a bare scalar,

@@ -623,6 +623,22 @@ func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) exec.Cmd {
 	return exec.Cmd{}
 }
 
+// findRemount returns the remount call whose plug target ends with ":<plug>", so
+// a test can match a mount by name rather than by a brittle positional index
+// (inserting or reordering a mount must not shift unrelated assertions).
+func (f *fakeCommander) findRemount(t *testing.T, plug string) exec.Cmd {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if verbOf(c) == "remount" && strings.HasSuffix(argAfter(c.Args, "remount"), ":"+plug) {
+			return c
+		}
+	}
+	t.Fatalf("no remount call for plug %q in %v", plug, f.verbs())
+	return exec.Cmd{}
+}
+
 func TestRun_PerRunSequence(t *testing.T) {
 	fc := &fakeCommander{errFn: failOnVerb("info")} // workshop absent -> launches
 	cfg := testConfig(t)
@@ -637,33 +653,42 @@ func TestRun_PerRunSequence(t *testing.T) {
 	}
 
 	// The verified recipe order: ensure (info+launch) -> worktree add ->
-	// stop -> remount workspace -> remount gitcommon -> remount sessions ->
-	// start -> exec. The sessions remount is present because OpenCode is a
-	// session-capable agent.
-	wantSeq := []string{"info", "launch", "worktree", "stop", "remount", "remount", "remount", "start", "exec", "rev-parse"}
+	// stop -> remount workspace -> remount gitcommon -> remount worktrees ->
+	// remount sessions -> start -> exec. The sessions remount is present because
+	// OpenCode is a session-capable agent.
+	wantSeq := []string{"info", "launch", "worktree", "stop", "remount", "remount", "remount", "remount", "start", "exec", "rev-parse"}
 	if got := fc.verbs(); !slices.Equal(got, wantSeq) {
 		t.Fatalf("sequence =\n  %v\nwant\n  %v", got, wantSeq)
 	}
 
-	// Two-mount rule: workspace -> the worktree; gitcommon -> the repo's .git.
-	// Assert the whole remount argv against the builder the production path uses
-	// (its flag layout is pinned by TestWorkshopArgs), so this test stays about
-	// wiring the right plug+source rather than positional argument shape.
+	// Three-mount rule: workspace -> the worktree; gitcommon -> the repo's .git;
+	// worktrees -> the worktree parent (so the worktree's back-pointer resolves
+	// in-workshop and git never prunes it). Assert the whole remount argv against
+	// the builder the production path uses (its flag layout is pinned by
+	// TestWorkshopArgs), so this test stays about wiring the right plug+source
+	// rather than positional argument shape.
 	wantWs := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "workspace", res.handle.worktreePath)
-	if got := fc.findCallN(t, "remount", 0).Args; !slices.Equal(got, wantWs) {
+	if got := fc.findRemount(t, "workspace").Args; !slices.Equal(got, wantWs) {
 		t.Errorf("workspace remount args =\n  %v\nwant\n  %v", got, wantWs)
 	}
 	// The gitcommon source is the host .git absolute path; derived from RepoPath
-	// via the production helper (the load-bearing half of the two-mount rule),
-	// which tracks the temp RepoPath testConfig allocates.
+	// via the production helper (one load-bearing leg of the mount rule), which
+	// tracks the temp RepoPath testConfig allocates.
 	wantGc := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "gitcommon", workshop.GitCommonTarget(cfg.RepoPath))
-	if got := fc.findCallN(t, "remount", 1).Args; !slices.Equal(got, wantGc) {
+	if got := fc.findRemount(t, "gitcommon").Args; !slices.Equal(got, wantGc) {
 		t.Errorf("gitcommon remount args =\n  %v\nwant\n  %v", got, wantGc)
 	}
+	// The worktrees source is the worktree parent at its identical host path (the
+	// other load-bearing leg: it makes the linked worktree's admin-dir
+	// back-pointer resolve in-workshop).
+	wantWt := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "worktrees", workshop.WorktreesCommonTarget(cfg.ProjectDir))
+	if got := fc.findRemount(t, "worktrees").Args; !slices.Equal(got, wantWt) {
+		t.Errorf("worktrees remount args =\n  %v\nwant\n  %v", got, wantWt)
+	}
 	// Sessions mount: a host sessions dir under the project is bound so the
-	// agent's session files survive the swap. It is the third remount.
+	// agent's session files survive the swap.
 	wantSess := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "sessions", filepath.Join(cfg.ProjectDir, "sessions"))
-	if got := fc.findCallN(t, "remount", 2).Args; !slices.Equal(got, wantSess) {
+	if got := fc.findRemount(t, "sessions").Args; !slices.Equal(got, wantSess) {
 		t.Errorf("sessions remount args =\n  %v\nwant\n  %v", got, wantSess)
 	}
 	// The host sessions dir must exist for the remount source to resolve.
@@ -814,15 +839,16 @@ func TestRun_SessionlessAgent_NoSessionsWiring(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// Only the two core remounts (workspace, gitcommon); no sessions remount.
+	// Only the three core remounts (workspace, gitcommon, worktrees); no sessions
+	// remount.
 	remounts := 0
 	for _, v := range fc.verbs() {
 		if v == "remount" {
 			remounts++
 		}
 	}
-	if remounts != 2 {
-		t.Errorf("got %d remounts, want 2 (workspace+gitcommon, no sessions); verbs: %v", remounts, fc.verbs())
+	if remounts != 3 {
+		t.Errorf("got %d remounts, want 3 (workspace+gitcommon+worktrees, no sessions); verbs: %v", remounts, fc.verbs())
 	}
 
 	// No session-dir redirect leaks into the agent exec.

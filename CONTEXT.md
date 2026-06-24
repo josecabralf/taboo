@@ -78,23 +78,24 @@ This sidesteps workshop's missing copy primitive entirely and matches its grain.
 **Worktree placement is host-side and free of the mount topology.** A run's
 worktree lives at `<ProjectDir>/worktrees/<branch>` (slashes → `-`). The CLI sets
 `ProjectDir = <repo>/.taboo`, so worktrees **nest at
-`<repo>/.taboo/worktrees/<branch>`**, inside the repo and git-ignored. This was the
-open risk in PRD #19 (issue #35) — nesting the worktree under the repo whose `.git`
-is the second mount — and is now **verified on real workshop 0.9.1 + LXD 6.8**
+`<repo>/.taboo/worktrees/<branch>`**, inside the repo and git-ignored. Nesting the
+worktree under the repo whose `.git` is a mount is sound because placement changes
+only the host path of the `/taboo/workspace` source, never the mounts themselves
 (`TestIntegration_NestedWorktreeArrangement`): the commit lands on the host branch
-and the worktree's `.git` pointer resolves on both sides. Nesting works because
-placement changes only the host path of the `/taboo/workspace` source, never the two
-mounts themselves; the out-of-repo layout remains a sound fallback. See ADR 0007.
+and the worktree's `.git` pointer resolves on both sides. The out-of-repo layout
+remains a sound fallback. See ADR 0007.
 
-**Two mounts are required, not one.** A *linked* git worktree is **not
-self-contained**: its `.git` is a pointer to the main repo's
+**Three mounts are required, not just the worktree.** A *linked* git worktree is
+**not self-contained**: its `.git` is a pointer to the main repo's
 `.git/worktrees/<name>`, and its objects/refs live in the main `.git`. Mounting
 only the worktree's working dir yields `fatal: not a git repository` inside. So
-taboo bind-mounts **both**:
+taboo bind-mounts **three** things:
 
 1. the worktree → a fixed target (`/taboo/workspace`);
 2. the repo's main `.git` (the git *common dir*) → mounted at its **identical
-   host absolute path** inside the workshop.
+   host absolute path** inside the workshop;
+3. the worktrees *parent* (`<ProjectDir>/worktrees`) → mounted at its **identical
+   host absolute path** too.
 
 Mounting `.git` at the same absolute path makes the worktree's `.git` pointer
 resolve identically inside and on the host, so **no pointer rewriting** is needed
@@ -108,6 +109,22 @@ that is mounted at its identical path. Multi-repo reuse is **not** built
 (ADR 0006): one workshop per repo; the common-parent mount is the design of
 record only if that stance reverses.
 
+The **third** mount (the worktrees parent) closes a subtler gap: the linked
+worktree's admin dir (`<repo>/.git/worktrees/<name>`) holds a *back-pointer* to
+the worktree's host path (`<ProjectDir>/worktrees/<name>/.git`, where
+`<ProjectDir>` is `<repo>/.taboo`). With only mounts
+1–2, that path is invisible inside the workshop (the working dir is there, but at
+`/taboo/workspace`, a *different* path), so in-workshop git treats the worktree as
+stale/prunable — and a `git worktree prune` deletes the admin dir **with no grace
+period**, on the shared host `.git` too, orphaning the branch mid-run and failing
+every later commit / `rev-parse HEAD` with `fatal: not a git repository:
+.../.git/worktrees/<name>` (CI run 28110176802). Mounting the worktrees parent at
+its identical host path makes the back-pointer resolve on both sides for every
+branch, so the worktree is never stale and `prune` is a no-op. The parent (not the
+per-branch worktree) is the target because it is the *same path for every branch*
+— a static plug, no per-run target change. Like git-common, it is exempt from the
+`/taboo/...` namespacing: its path **is** the mechanism. See ADR 0011.
+
 **Mount-plug mechanics.** A `mount` plug is declared **inline in `workshop.yaml`**
 under any SDK entry (`plugs: { <name>: { interface: mount, workshop-target:
 <path> } }`) — no custom mount-SDK needs authoring; it auto-connects to
@@ -117,8 +134,9 @@ scratch**: for a managed project it is *derived* from the project's own
 `workshop.yaml` by opaque-tree injection (see "Derive the workshop from the
 project's definition" below and ADR 0009). The relocatable mount targets
 (`/taboo/workspace`, `/taboo/sessions`) move under a reserved `/taboo/...` prefix so they
-cannot collide with the project's own mounts; the git-common target stays at the
-host `.git` path (the two-mount rule pins it there). Two `remount` caveats:
+cannot collide with the project's own mounts; the git-common and worktrees
+targets stay at their host paths (the mount rule pins them there). Two `remount`
+caveats:
 
 - `remount` is atomic **only** when the new source is empty / non-existent and on
   the same filesystem as the current source. A worktree is non-empty, so the
@@ -163,7 +181,7 @@ store-sourced dependency mechanism.
 rootfs from the declared SDKs. Since the per-run loop is `stop → remount → start`
 (the worktree swap above), any ad-hoc-installed agent would be erased before it
 ran. The agent therefore *must* be baked in via an SDK, not installed at runtime.
-Only bind-mounts (worktree, git-common, sessions) survive a
+Only bind-mounts (worktree, git-common, worktrees-parent, sessions) survive a
 `stop`/`refresh`.
 
 OpenCode is baked via an **in-project SDK**. The agent SDKs ship embedded under
@@ -191,7 +209,7 @@ Agents run headless (`claude -p` and equivalents) with no interactive approver.
 The Claude Code profile launches with `--permission-mode auto` — the agent edits
 files and commits autonomously — plus a hard `--disallowedTools "Bash(git push
 *)"` deny (deny outranks the auto-mode classifier). The deny is deliberate: a
-*linked* worktree shares the host repo's object store and refs (see the two-mount
+*linked* worktree shares the host repo's object store and refs (see the three-mount
 note above), so a `git push` from inside the workshop, forced or not, could
 mutate host branches. taboo's contract is **commit in place; the host owns
 integration** — the agent never needs to push.
@@ -209,17 +227,18 @@ on the agent to push from inside the workshop.
 
 For session resume/fork, agent session files (normally in `$HOME` inside the
 workshop, e.g. `~/.claude/projects/...`) must reach the host — but there is no
-`copyOut`. taboo mounts a host sessions directory at a known path (a second mount
+`copyOut`. taboo mounts a host sessions directory at a known path (another mount
 plug) and points each agent's session storage there via env. Files write
 straight through to the host using the same bind-mount trick as the worktree.
 
 OpenCode resolves its data dir from `XDG_DATA_HOME` (via `xdg-basedir`); its
 store is a single **SQLite DB** (`opencode/opencode.db` + WAL sidecars), *not*
 loose per-session JSON. Setting `XDG_DATA_HOME` to the mount target redirects it
-through the bind-mount and survives the per-run swap. Resume and fork thread a caller-supplied session id to the agent
-(`--session <id>` / `--fork`) and read the SQLite DB directly, since the store is
-opaque from the host. `AgentProfile.Sessions()` returns the env var + on-disk
-subpath per agent (`{XDG_DATA_HOME, "opencode"}` for OpenCode).
+through the bind-mount and survives the per-run swap. Resume and fork thread a
+caller-supplied session id to the agent (`--session <id>` / `--fork`) and read
+the SQLite DB directly, since the store is opaque from the host.
+`AgentProfile.Sessions()` returns the env var + on-disk subpath per agent
+(`{XDG_DATA_HOME, "opencode"}` for OpenCode).
 
 ### Derive the workshop from the project's definition
 
