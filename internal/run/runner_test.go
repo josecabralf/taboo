@@ -939,6 +939,90 @@ func TestRun_CapturesExecStdout(t *testing.T) {
 	}
 }
 
+// parseOutputProfile is a test agent implementing the optional OutputParser
+// interface. It embeds a real profile so the run wiring is otherwise unchanged;
+// ParseOutput tags the captured stdout so the test can prove the runner applied
+// it. This is the capture seam Claude Code's claudestream parser plugs into.
+type parseOutputProfile struct{ agent.AgentProfile }
+
+func (parseOutputProfile) ParseOutput(raw string) string { return "parsed:" + raw }
+
+// An agent implementing OutputParser has its captured stdout reduced before it
+// lands on RunResult.Output, while the live display tee still receives the RAW
+// stdout — display and scan are separate concerns (the stream-json contract).
+func TestRun_AppliesOutputParser(t *testing.T) {
+	fc := &fakeCommander{
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "exec" {
+				return "raw stdout"
+			}
+			return ""
+		},
+	}
+	cfg := testConfig(t)
+	cfg.Agent = parseOutputProfile{cfg.Agent}
+
+	var out strings.Builder
+	req := RunRequest{Branch: "agent/x", Prompt: "go", Stdout: &out}
+	res, err := New(cfg, fc).Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Output != "parsed:raw stdout" {
+		t.Errorf("Output = %q, want %q (ParseOutput applied at capture seam)", res.Output, "parsed:raw stdout")
+	}
+	if out.String() != "raw stdout" {
+		t.Errorf("streamed stdout = %q, want raw %q (display tee untouched by ParseOutput)", out.String(), "raw stdout")
+	}
+}
+
+// renderProfile is a test agent implementing the optional OutputRenderer
+// interface. Render wraps the display sink so the test can prove the runner
+// routes the live stdout through it while leaving the captured buffer — and thus
+// RunResult.Output — the raw stdout. This is the display seam Claude Code's
+// claudestream renderer plugs into.
+type renderProfile struct{ agent.AgentProfile }
+
+func (renderProfile) Render(w io.Writer) io.Writer { return upperWriter{w} }
+
+// upperWriter renders by upper-casing — a stand-in for the real transcript
+// renderer that is trivial to assert against.
+type upperWriter struct{ w io.Writer }
+
+func (u upperWriter) Write(p []byte) (int, error) {
+	_, err := u.w.Write([]byte(strings.ToUpper(string(p))))
+	return len(p), err
+}
+
+// An agent implementing OutputRenderer has its live display path wrapped in the
+// renderer, while the captured buffer that becomes RunResult.Output keeps the
+// raw stdout — display and scan are separate concerns (the stream-json contract).
+func TestRun_AppliesOutputRenderer(t *testing.T) {
+	fc := &fakeCommander{
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "exec" {
+				return "raw stdout"
+			}
+			return ""
+		},
+	}
+	cfg := testConfig(t)
+	cfg.Agent = renderProfile{cfg.Agent}
+
+	var out strings.Builder
+	req := RunRequest{Branch: "agent/x", Prompt: "go", Stdout: &out}
+	res, err := New(cfg, fc).Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.String() != "RAW STDOUT" {
+		t.Errorf("streamed stdout = %q, want %q (display routed through renderer)", out.String(), "RAW STDOUT")
+	}
+	if res.Output != "raw stdout" {
+		t.Errorf("Output = %q, want raw %q (renderer must not touch the capture seam)", res.Output, "raw stdout")
+	}
+}
+
 func TestRun_CapturesCommit(t *testing.T) {
 	fc := &fakeCommander{
 		stdoutFn: func(c exec.Cmd) string {

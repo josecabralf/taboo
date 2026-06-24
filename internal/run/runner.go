@@ -349,7 +349,16 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 	var captured strings.Builder
 	stdout := io.Writer(&captured)
 	if req.Stdout != nil {
-		stdout = io.MultiWriter(&captured, req.Stdout)
+		// captured always receives the RAW stdout — it is what ParseOutput reduces
+		// to res.Output below. Only the live display path is wrapped: an agent that
+		// implements OutputRenderer (Claude Code, whose stream-json stdout is JSONL)
+		// has its sink pretty-printed into a transcript for the workflow log, so
+		// display and scan stay separate concerns.
+		sink := req.Stdout
+		if rf, ok := r.cfg.Agent.(agent.OutputRenderer); ok {
+			sink = rf.Render(sink)
+		}
+		stdout = io.MultiWriter(&captured, sink)
 	}
 
 	ac := r.cfg.Agent.BuildCommand(agent.CommandOptions{
@@ -376,7 +385,17 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 	if err := r.cmd.Run(ctx, execCmd); err != nil {
 		return res, fmt.Errorf("exec agent: %w", err)
 	}
+	// res.Output must always be the agent's clean final text — the orchestrator's
+	// completion-signal scan and <result>{…}</result> extraction only ever see
+	// this. The display tee above already forwarded the raw stdout live, so
+	// reducing the captured buffer here keeps display and scan as separate
+	// concerns. Agents that implement OutputParser (Claude Code, whose stream-json
+	// stdout interleaves tool calls) collapse it to their final text; the rest
+	// retain their stdout verbatim.
 	res.Output = captured.String()
+	if p, ok := r.cfg.Agent.(agent.OutputParser); ok {
+		res.Output = p.ParseOutput(res.Output)
+	}
 
 	// The agent committed in place through the bind-mount; capture the branch
 	// HEAD from the host worktree. The path comes from the handle, which Setup
