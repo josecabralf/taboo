@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"io"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +14,7 @@ const claudeCodeModel = "claude-sonnet-4-6"
 // the `git push` deny matters because the worktree shares the host repo's refs.
 // Resume/fork flags, when present, append after this prefix.
 var claudeBaseArgv = []string{
-	"claude", "-p", "--output-format", "text", "--model", claudeCodeModel,
+	"claude", "-p", "--output-format", "stream-json", "--verbose", "--model", claudeCodeModel,
 	"--permission-mode", "auto", "--disallowedTools", "Bash(git push *)",
 }
 
@@ -112,6 +114,42 @@ func TestClaudeCode_CredentialEnvKeys(t *testing.T) {
 	want := []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
 	if !slices.Equal(got, want) {
 		t.Errorf("CredentialEnvKeys() = %v, want %v", got, want)
+	}
+}
+
+// Claude Code implements the optional OutputParser interface: ParseOutput
+// collapses its raw stream-json stdout to the clean result text the orchestrator
+// scans, delegating to claudestream.ResultText. This pins the wiring; the
+// extraction edge cases are covered by the claudestream package tests.
+func TestClaudeCode_ParseOutput(t *testing.T) {
+	p, ok := NewClaudeCode(claudeCodeModel).(OutputParser)
+	if !ok {
+		t.Fatal("claudeCode does not implement OutputParser")
+	}
+	raw := `{"type":"message_start"}
+{"type":"result","result":"all done <result>{}</result>"}`
+	if got := p.ParseOutput(raw); got != "all done <result>{}</result>" {
+		t.Errorf("ParseOutput(...) = %q, want clean result text", got)
+	}
+}
+
+// Claude Code implements the optional OutputRenderer interface: Render wraps a
+// writer in claudestream's transcript renderer so the live workflow log reads as
+// a transcript of assistant text and tool calls. This pins the wiring; the
+// rendering edge cases are covered by the claudestream package tests.
+func TestClaudeCode_Render(t *testing.T) {
+	r, ok := NewClaudeCode(claudeCodeModel).(OutputRenderer)
+	if !ok {
+		t.Fatal("claudeCode does not implement OutputRenderer")
+	}
+	var buf strings.Builder
+	w := r.Render(&buf)
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n"
+	if _, err := io.WriteString(w, line); err != nil {
+		t.Fatalf("Render write: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "hello" {
+		t.Errorf("Render output = %q, want the rendered assistant text %q", got, "hello")
 	}
 }
 

@@ -1,5 +1,7 @@
 package agent
 
+import "io"
+
 // AgentName is the canonical identity of a registered agent. It is a defined
 // string type so the public API can expose named constants and the compiler can
 // catch accidental interchange with arbitrary strings.
@@ -25,6 +27,42 @@ type AgentProfile interface {
 	// plug, bind a host sessions directory into the workshop, and point DirEnv at
 	// the mount target so session files survive the per-run rootfs wipe.
 	Sessions() (SessionSpec, bool)
+}
+
+// OutputParser is an optional capability an AgentProfile may implement to
+// post-process its captured stdout before it lands on RunResult.Output. The
+// runner asserts for it after each exec: an agent that implements it has
+// ParseOutput applied to the captured buffer; an agent that doesn't keeps its
+// raw stdout verbatim. ParseOutput must return the agent's clean final text —
+// the orchestrator's completion-signal scan and <result>{…}</result> extraction
+// run on the result.
+//
+// It is deliberately NOT part of AgentProfile: the core interface is reviewed by
+// hand and stays minimal (see the doc on AgentProfile), so only the agents whose
+// stdout differs from their clean final text opt in. Today that is just Claude
+// Code, whose --output-format stream-json interleaves tool calls; the asserted
+// optional interface mirrors how Sessions() carves out per-agent behavior
+// without growing the shared contract.
+type OutputParser interface {
+	ParseOutput(raw string) string
+}
+
+// OutputRenderer is an optional capability an AgentProfile may implement to
+// pretty-print its captured stdout on the live display path. When the agent
+// provides one, the runner wraps the caller's Stdout in Render(stdout) before
+// teeing, so the workflow log receives a human-readable transcript instead of
+// the agent's raw stdout. The capture seam is untouched: the buffer that becomes
+// RunResult.Output still accumulates the raw stdout (and OutputParser still
+// reduces it), so display and scan stay separate concerns.
+//
+// Like OutputParser it is deliberately NOT part of AgentProfile and is asserted,
+// not added to the hand-reviewed core interface. Today only Claude Code opts in:
+// its --output-format stream-json stdout is JSONL, which Render turns into a
+// transcript of assistant text and tool calls. OpenCode and Copilot already
+// stream a readable transcript, so they do not implement it and the runner
+// forwards their stdout verbatim.
+type OutputRenderer interface {
+	Render(w io.Writer) io.Writer
 }
 
 // CommandOptions is the input to AgentProfile.BuildCommand: the agent-agnostic

@@ -1,6 +1,11 @@
 package agent
 
-import "regexp"
+import (
+	"io"
+	"regexp"
+
+	"github.com/josecabralf/taboo/internal/agent/claudestream"
+)
 
 // claudeCode is the AgentProfile for the Claude Code CLI, run against a single model.
 type claudeCode struct {
@@ -19,12 +24,25 @@ const ClaudeCode AgentName = "claude-code"
 func (claudeCode) Name() AgentName { return ClaudeCode }
 
 // BuildCommand renders the verified Claude Code invocation: `claude -p
-// --output-format text --model <m> --permission-mode auto --disallowedTools
-// "Bash(git push *)"`, with the prompt piped on stdin rather than in argv (ADR
-// 0001). --output-format text keeps the agent's output literal so the
-// orchestrator's completion-signal scan and the <result>{…}</result> extraction
-// keep working; --output-format json would escape that block and break
-// extraction.
+// --output-format stream-json --verbose --model <m> --permission-mode auto
+// --disallowedTools "Bash(git push *)"`, with the prompt piped on stdin rather
+// than in argv (ADR 0001).
+//
+// --output-format stream-json --verbose is what surfaces the agent's full
+// activity in the workflow log: it emits JSONL — one event per line for
+// assistant text and every tool call — instead of `text`'s final-message-only
+// output, matching the visibility OpenCode's run already has. (--verbose is
+// mandatory with stream-json in -p mode.) The raw JSONL streams live to the
+// caller's Stdout; what the orchestrator scans is decoupled from it. The catch
+// `text` avoided — that raw JSONL would break the completion-signal scan and the
+// <result>{…}</result> extraction — is handled at the capture seam, not here:
+// ParseOutput (the runner's optional OutputParser) reduces the captured JSONL
+// back to the clean final text via claudestream.ResultText, so RunResult.Output
+// is exactly what `text` used to give. That is the invariant: res.Output is
+// always the agent's clean final text; display is a separate concern. Plain
+// --output-format json was rejected for the same reason text was kept — it
+// JSON-escapes the <result> block — and it never streamed intermediate activity
+// anyway.
 //
 // --permission-mode auto lets the headless agent edit files and commit
 // autonomously (there is no interactive approver in `claude -p`; the default
@@ -42,7 +60,7 @@ func (claudeCode) Name() AgentName { return ClaudeCode }
 // the agent never needs to push. Automations that must publish add their own
 // host-side push stage (see CONTEXT.md).
 func (a claudeCode) BuildCommand(opts CommandOptions) AgentCommand {
-	argv := []string{"claude", "-p", "--output-format", "text", "--model", a.model,
+	argv := []string{"claude", "-p", "--output-format", "stream-json", "--verbose", "--model", a.model,
 		"--permission-mode", "auto", "--disallowedTools", "Bash(git push *)"}
 	if opts.ResumeSession != "" {
 		argv = append(argv, "--resume", opts.ResumeSession)
@@ -56,6 +74,30 @@ func (a claudeCode) BuildCommand(opts CommandOptions) AgentCommand {
 	// The prompt rides on stdin, never in argv (no positional to omit): an empty
 	// prompt simply pipes empty stdin to `claude -p`.
 	return AgentCommand{Argv: argv, Stdin: opts.Prompt}
+}
+
+// ParseOutput reduces Claude Code's raw stream-json stdout to the agent's clean
+// final text, implementing the runner's optional OutputParser interface. The
+// runner applies it at the capture seam so RunResult.Output is the unescaped
+// result text — what the completion-signal scan and <result>{…}</result>
+// extraction expect — while the raw JSONL still streams live to the workflow
+// log. Agents that don't implement OutputParser (OpenCode, Copilot) keep their
+// stdout verbatim; only Claude Code, whose stdout interleaves tool calls, opts
+// in. See claudestream.ResultText for the no-result-line fallback.
+func (claudeCode) ParseOutput(raw string) string {
+	return claudestream.ResultText(raw)
+}
+
+// Render wraps the live display sink in claudestream's transcript renderer,
+// implementing the runner's optional OutputRenderer interface. Claude Code's raw
+// stdout is stream-json JSONL; Render turns it into a readable transcript of
+// assistant text and tool calls for the workflow log, matching the visibility
+// OpenCode's plain transcript already has. It touches only the display path — the
+// captured buffer behind RunResult.Output keeps the raw JSONL that ParseOutput
+// reduces — so display and scan remain separate concerns. See
+// claudestream.NewRenderer for the event schema and partial-line buffering.
+func (claudeCode) Render(w io.Writer) io.Writer {
+	return claudestream.NewRenderer(w)
 }
 
 // CredentialEnvKeys returns both keys Claude Code accepts: ANTHROPIC_API_KEY for
