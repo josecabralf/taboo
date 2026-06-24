@@ -27,6 +27,9 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-env
 
+      - name: Launch workshop
+        run: workshop launch --verbose
+
       - name: Lint
         run: workshop run -- make lint
 

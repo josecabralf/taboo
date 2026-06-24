@@ -2,10 +2,18 @@
 # setup-project runs after the project is mounted at /project (setup-base has
 # already installed python3-venv). It provisions the Material for MkDocs
 # toolchain that `make docs-serve` needs, installed from the project's own
-# requirements.txt so the version pins stay in exactly one place. The `docs`
-# tunnel (workshop.yaml) forwards the served site to http://localhost:8000 on
-# the host.
+# requirements.txt so the version pins stay in exactly one place.
 set -euo pipefail
+
+# The Material for MkDocs toolchain is a dev-workshop convenience for
+# `make docs-serve`. taboo's own agent workshop derives from this same SDK but
+# mounts .taboo (not the repo root) as /project, so it has no requirements.txt,
+# and the agent never serves docs. Skip provisioning when there is nothing to
+# install rather than aborting the launch.
+if [ ! -f /project/requirements.txt ]; then
+  echo "setup-project: no /project/requirements.txt; skipping docs toolchain"
+  exit 0
+fi
 
 # Keep the venv outside /project so it never collides with a host-side install.
 DOCS_VENV="$HOME/.docs-venv"
