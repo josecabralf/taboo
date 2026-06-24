@@ -1,4 +1,4 @@
-# In-project SDK: carries the setup hooks (setup-base, setup-project). Its `docs`
-# tunnel slot is declared on this SDK's entry in workshop.yaml, next to the
-# matching system plug, so `make docs-serve` is reachable at localhost:8000.
+# In-project SDK: carries the setup hooks (setup-base, setup-project) that
+# provision the toolchain the make targets need: Go tooling, golangci-lint, and
+# (in the dev workshop only) the Material for MkDocs venv for `make docs-serve`.
 name: taboo

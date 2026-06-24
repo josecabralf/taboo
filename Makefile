@@ -70,9 +70,12 @@ tidy: ## Tidy every module
 # Docs site (Material for MkDocs). Root-only (the site lives at the repo root),
 # so no fanout. In the workshop the toolchain is provisioned from requirements.txt
 # by .workshop/taboo/hooks/setup-project; on a dev's own machine, first run
-# `pip install -r requirements.txt`. `mkdocs serve` binds DOCS_ADDR (localhost:8000):
-# inside the workshop the `docs` tunnel (workshop.yaml) forwards it to the host,
-# so the site opens at http://localhost:8000 either way.
+# `pip install -r requirements.txt`. `mkdocs serve` binds DOCS_ADDR. On the host
+# the site is at http://localhost:8000. Inside the workshop, localhost:8000 is
+# reachable only from within the container; to reach it from the host, bind the
+# container interface and open the workshop's IP, e.g.
+# `DOCS_ADDR=0.0.0.0:8000 make docs-serve`, then open port 8000 on the IP from
+# `lxc list`.
 DOCS_ADDR ?= localhost:8000
 docs-serve: ## Live-preview the docs site at http://localhost:8000 (mkdocs serve)
 	mkdocs serve --dev-addr $(DOCS_ADDR)

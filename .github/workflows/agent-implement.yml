@@ -70,7 +70,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
-      - name: Setup environment (lxd + workshop)
+      - name: Setup environment (lxd + workshop toolchain)
         uses: ./.github/actions/setup-env
 
       - name: Run implement orchestrator

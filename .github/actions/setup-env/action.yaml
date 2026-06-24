@@ -1,5 +1,5 @@
 name: Setup environment
-description: Installs dependencies and launches the workshop environment.
+description: Installs the workshop toolchain (lxd + workshop) and initialises LXD.
 
 runs:
   using: composite
@@ -18,7 +18,3 @@ runs:
         # policy to DROP, which silently kills egress from LXD containers.
         # Without this, apt/curl inside the workshop can't reach the network.
         sudo iptables -P FORWARD ACCEPT
-    - name: Launch workshop
-      shell: bash
-      run: |
-        workshop launch --verbose
