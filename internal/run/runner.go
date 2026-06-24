@@ -281,32 +281,9 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 		}
 	}
 
-	// Swap the worktree + the repo's .git into the workshop. A worktree is a
-	// non-empty source, so remount is not atomic: stop -> remount -> start.
-	proj, ws, sdk := r.cfg.ProjectDir, r.cfg.Workshop, string(r.cfg.Agent.Name())
-	if err := r.workshop(ctx, workshop.VerbArgs(proj, "stop", ws)); err != nil {
-		return res, fmt.Errorf("stop: %w", err)
-	}
-	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "workspace", wt)); err != nil {
-		return res, fmt.Errorf("remount workspace: %w", err)
-	}
-	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "gitcommon", workshop.GitCommonTarget(r.cfg.RepoPath))); err != nil {
-		return res, fmt.Errorf("remount gitcommon: %w", err)
-	}
-	// A session-capable agent gets a host sessions dir bound in alongside the
-	// worktree, so its session files write through to the host and survive this
-	// stop/remount/start swap (which wipes the rootfs).
-	if _, ok := r.cfg.Agent.Sessions(); ok {
-		host := r.sessionsDir()
-		if err := os.MkdirAll(host, 0o750); err != nil {
-			return res, fmt.Errorf("create sessions dir: %w", err)
-		}
-		if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "sessions", host)); err != nil {
-			return res, fmt.Errorf("remount sessions: %w", err)
-		}
-	}
-	if err := r.workshop(ctx, workshop.VerbArgs(proj, "start", ws)); err != nil {
-		return res, fmt.Errorf("start: %w", err)
+	// Swap the worktree + the repo's .git into the workshop.
+	if err := r.swapWorktreeIntoWorkshop(ctx, wt); err != nil {
+		return res, err
 	}
 
 	// The workshop is ready with the worktree mounted: run caller-supplied
@@ -317,6 +294,44 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 
 	return res, nil
+}
+
+// swapWorktreeIntoWorkshop binds the run's worktree (wt) and the repo's git
+// state into the workshop. A worktree is a non-empty source, so remount is not
+// atomic: the swap is stop -> remount... -> start. Three mounts are always
+// applied (the three-mount rule, see workshop.WorktreesCommonTarget): workspace
+// -> wt, gitcommon -> the repo's .git, and worktrees -> the worktree parent (so
+// the linked worktree's admin-dir back-pointer resolves in-workshop and git
+// never prunes it). A session-capable agent additionally gets its host sessions
+// dir bound so session files write through and survive the swap (which wipes the
+// rootfs).
+func (r *Runner) swapWorktreeIntoWorkshop(ctx context.Context, wt string) error {
+	proj, ws, sdk := r.cfg.ProjectDir, r.cfg.Workshop, string(r.cfg.Agent.Name())
+	if err := r.workshop(ctx, workshop.VerbArgs(proj, "stop", ws)); err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "workspace", wt)); err != nil {
+		return fmt.Errorf("remount workspace: %w", err)
+	}
+	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "gitcommon", workshop.GitCommonTarget(r.cfg.RepoPath))); err != nil {
+		return fmt.Errorf("remount gitcommon: %w", err)
+	}
+	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "worktrees", workshop.WorktreesCommonTarget(r.cfg.ProjectDir))); err != nil {
+		return fmt.Errorf("remount worktrees: %w", err)
+	}
+	if _, ok := r.cfg.Agent.Sessions(); ok {
+		host := r.sessionsDir()
+		if err := os.MkdirAll(host, 0o750); err != nil {
+			return fmt.Errorf("create sessions dir: %w", err)
+		}
+		if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "sessions", host)); err != nil {
+			return fmt.Errorf("remount sessions: %w", err)
+		}
+	}
+	if err := r.workshop(ctx, workshop.VerbArgs(proj, "start", ws)); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+	return nil
 }
 
 // Exec runs the agent once in the worktree Setup prepared (read from the result's

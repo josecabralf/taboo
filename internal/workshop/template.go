@@ -64,3 +64,21 @@ func projectSDKRef(name string) string { return "project-" + name }
 func GitCommonTarget(repoPath string) string {
 	return filepath.Join(repoPath, ".git")
 }
+
+// WorktreesCommonTarget is the in-workshop mount target for the parent directory
+// that holds every run's worktree (<ProjectDir>/worktrees, where <ProjectDir> is
+// <repo>/.taboo; see Runner.worktreePath). Like GitCommonTarget it must equal its
+// host absolute path: a linked worktree's admin dir (<repo>/.git/worktrees/<name>)
+// records a *back-pointer* to the worktree's host path
+// (<ProjectDir>/worktrees/<name>/.git), and git treats the
+// worktree as stale/prunable — and will delete the admin dir on the next
+// `git worktree prune` — unless that back-pointer resolves. With only the
+// worktree (at the relocated /taboo/workspace) and .git mounted, the back-pointer
+// path is invisible in the workshop, so an in-workshop prune destroys the admin
+// dir on the host too (it is the same bind-mounted .git). Mounting the worktrees
+// parent at its identical host path makes the back-pointer resolve on both sides
+// for every branch, with no per-run target change. This is the third mount of the
+// (formerly two-) mount rule; see CONTEXT.md and docs/adr/0011.
+func WorktreesCommonTarget(projectDir string) string {
+	return filepath.Join(projectDir, "worktrees")
+}

@@ -243,12 +243,16 @@ func projectSDKNamesFromSeq(sdks *yaml.Node) []string {
 	return names
 }
 
-// agentPlugs returns the mount plugs for the injected agent SDK: workspace and
-// gitcommon always, plus sessions for a session-capable agent.
+// agentPlugs returns the mount plugs for the injected agent SDK: workspace,
+// gitcommon, and worktrees always, plus sessions for a session-capable agent.
+// The worktrees plug mounts the parent of every run's worktree at its identical
+// host path so the linked worktree's admin-dir back-pointer resolves in the
+// workshop and git never prunes it (see WorktreesCommonTarget).
 func agentPlugs(cfg Config) map[string]plug {
 	plugs := map[string]plug{
 		"workspace": {Interface: "mount", WorkshopTarget: WorkspaceTarget},
 		"gitcommon": {Interface: "mount", WorkshopTarget: GitCommonTarget(cfg.RepoPath)},
+		"worktrees": {Interface: "mount", WorkshopTarget: WorktreesCommonTarget(cfg.ProjectDir)},
 	}
 	if _, ok := cfg.Agent.Sessions(); ok {
 		plugs["sessions"] = plug{Interface: "mount", WorkshopTarget: SessionsTarget}
