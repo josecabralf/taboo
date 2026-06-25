@@ -56,6 +56,9 @@ func (p *Pool) slotConfig(slot int) workshop.Config {
 	c := p.cfg
 	c.Workshop = fmt.Sprintf("%s-%d", p.cfg.Workshop, slot)
 	c.ProjectDir = filepath.Join(p.cfg.ProjectDir, fmt.Sprintf("slot-%d", slot))
+	// Slots share one RepoPath, which the branch strategy can't (it switches the
+	// single checkout in place), so force worktree — each slot still gets its own.
+	c.Strategy = workshop.StrategyWorktree
 	return c
 }
 

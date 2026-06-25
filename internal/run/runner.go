@@ -132,8 +132,12 @@ func (r RunResult) Dispose() error {
 // dispose performs the worktree removal for Dispose. Idempotency lives here: a
 // worktree already gone (a prior Dispose, or a manual `git worktree remove`)
 // short-circuits to success before shelling out, so git's "not a working tree"
-// failure never surfaces.
+// failure never surfaces. The branch strategy returns first: its workspace IS
+// the checkout (worktreePath == repoPath), so there is nothing to remove.
 func (h *runResultHandle) dispose(ctx context.Context) error {
+	if h.worktreePath == h.repoPath {
+		return nil
+	}
 	if _, err := os.Stat(h.worktreePath); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -247,12 +251,33 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	return r.Exec(ctx, req, res)
 }
 
-// Setup ensures the workshop exists, creates a fresh worktree on req.Branch, and
-// swaps it (and the repo's .git) into the workshop via stop/remount/start. It
-// runs once per worktree; the returned RunResult carries Branch + a worktree
-// handle for the subsequent Exec call(s).
+// Setup ensures the workshop exists, prepares the run's workspace on req.Branch,
+// and swaps it into the workshop via stop/remount/start. It runs once per
+// workspace; the returned RunResult carries Branch + a handle for the subsequent
+// Exec call(s). It dispatches on cfg.Strategy: StrategyBranch works in place on
+// the checkout, while the worktree strategy (the default) uses a linked
+// worktree. An unrecognized strategy is rejected by Validate, not silently
+// routed. See CONTEXT.md.
 func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	res := RunResult{Branch: req.Branch}
+
+	if err := r.cfg.Strategy.Validate(); err != nil {
+		return res, err
+	}
+
+	// Prepare the workspace on req.Branch with host-side git BEFORE the costly
+	// workshop launch, so a precondition failure (e.g. a dirty checkout) aborts
+	// cheaply. Symmetric across strategies — each prepares, then we swap.
+	var workspace string
+	var err error
+	if r.cfg.Strategy == workshop.StrategyBranch {
+		workspace, err = r.prepareBranch(ctx, req, &res)
+	} else {
+		workspace, err = r.prepareWorktree(ctx, req, &res)
+	}
+	if err != nil {
+		return res, err
+	}
 
 	fingerprint, err := r.materialize()
 	if err != nil {
@@ -262,62 +287,130 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 		return res, fmt.Errorf("ensure workshop: %w", err)
 	}
 
-	wt := r.worktreePath(req.Branch)
-	res.handle = &runResultHandle{repoPath: r.cfg.RepoPath, worktreePath: wt, cmd: r.cmd}
-	if req.BaseRef != "" {
-		// Update remote-tracking refs so BaseRef (and origin/main, which the agent
-		// may merge offline) are current, then start the worktree branch FROM
-		// BaseRef's tip rather than the host repo's HEAD.
-		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "fetch", "origin"}); err != nil {
-			return res, fmt.Errorf("fetch origin: %w", err)
-		}
-		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt, req.BaseRef}); err != nil {
-			return res, fmt.Errorf("add worktree from %s: %w", req.BaseRef, err)
-		}
-	} else {
-		// A fresh linked worktree on req.Branch, off the repo's current HEAD.
-		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt}); err != nil {
-			return res, fmt.Errorf("add worktree: %w", err)
-		}
-	}
-
-	// Swap the worktree + the repo's .git into the workshop.
-	if err := r.swapWorktreeIntoWorkshop(ctx, wt); err != nil {
+	// Swap the prepared workspace into the ready workshop, layering the strategy's
+	// extra git mounts (none for the branch strategy; gitcommon + worktrees for the
+	// worktree strategy — the three-mount rule, see CONTEXT.md).
+	if err := r.swapIntoWorkshop(ctx, workspace, workshop.StrategyGitMounts(r.cfg)...); err != nil {
 		return res, err
 	}
 
-	// The workshop is ready with the worktree mounted: run caller-supplied
+	// The workshop is ready with the workspace mounted: run caller-supplied
 	// setup hooks before handing control to the agent. This is the end of
-	// Setup, so hooks run once per worktree, before any Exec.
-	if err := r.runHooks(ctx, wt, req.Timeout, req.Stderr, req.Hooks.OnWorkshopReady); err != nil {
+	// Setup, so hooks run once per workspace, before any Exec.
+	if err := r.runHooks(ctx, workspace, req.Timeout, req.Stderr, req.Hooks.OnWorkshopReady); err != nil {
 		return res, fmt.Errorf("on-workshop-ready hook: %w", err)
 	}
 
 	return res, nil
 }
 
-// swapWorktreeIntoWorkshop binds the run's worktree (wt) and the repo's git
-// state into the workshop. A worktree is a non-empty source, so remount is not
-// atomic: the swap is stop -> remount... -> start. Three mounts are always
-// applied (the three-mount rule, see workshop.WorktreesCommonTarget): workspace
-// -> wt, gitcommon -> the repo's .git, and worktrees -> the worktree parent (so
-// the linked worktree's admin-dir back-pointer resolves in-workshop and git
-// never prunes it). A session-capable agent additionally gets its host sessions
-// dir bound so session files write through and survive the swap (which wipes the
-// rootfs).
-func (r *Runner) swapWorktreeIntoWorkshop(ctx context.Context, wt string) error {
+// prepareWorktree allocates a fresh linked worktree on req.Branch (off the
+// repo's HEAD, or off req.BaseRef after a fetch) and records the handle that
+// removes it on Dispose. It does host-side git only; Setup swaps the returned
+// worktree path — plus the repo's .git via StrategyGitMounts — into the workshop.
+func (r *Runner) prepareWorktree(ctx context.Context, req RunRequest, res *RunResult) (string, error) {
+	wt := r.worktreePath(req.Branch)
+	res.handle = &runResultHandle{repoPath: r.cfg.RepoPath, worktreePath: wt, cmd: r.cmd}
+	if req.BaseRef != "" {
+		// Update remote-tracking refs so BaseRef (and origin/main, which the agent
+		// may merge offline) are current, then start the worktree branch FROM
+		// BaseRef's tip rather than the host repo's HEAD.
+		if err := r.fetchOrigin(ctx, r.cfg.RepoPath); err != nil {
+			return "", err
+		}
+		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt, req.BaseRef}); err != nil {
+			return "", fmt.Errorf("add worktree from %s: %w", req.BaseRef, err)
+		}
+	} else {
+		// A fresh linked worktree on req.Branch, off the repo's current HEAD.
+		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt}); err != nil {
+			return "", fmt.Errorf("add worktree: %w", err)
+		}
+	}
+	return wt, nil
+}
+
+// prepareBranch runs the agent in place on the checkout (r.cfg.RepoPath): it
+// creates req.Branch with `git switch -c` and returns the checkout path. The
+// checkout's .git is self-contained, so StrategyGitMounts adds no
+// git-common/worktrees mount and Setup binds only the checkout. Single-use per
+// checkout: a re-run chains off the prior tip and an existing branch name aborts
+// at `git switch -c`, so use the worktree strategy for a reusable checkout. See
+// CONTEXT.md.
+func (r *Runner) prepareBranch(ctx context.Context, req RunRequest, res *RunResult) (string, error) {
+	checkout := r.cfg.RepoPath
+	// worktreePath == repoPath marks the in-place branch strategy: Dispose reads it
+	// to short-circuit (the workspace IS the checkout, nothing to remove).
+	res.handle = &runResultHandle{repoPath: checkout, worktreePath: checkout, cmd: r.cmd}
+	// Unlike the worktree path (which always branches into a fresh worktree), this
+	// switches the checkout in place, so a dirty tree is unsafe: uncommitted changes
+	// either abort `git switch -c` or are carried onto the agent's branch and
+	// contaminate the result. Refuse up front with a clear message.
+	if err := r.ensureCleanCheckout(ctx, checkout); err != nil {
+		return "", err
+	}
+	if req.BaseRef != "" {
+		// Update remote-tracking refs so BaseRef (and origin/main) are current,
+		// then create the run's branch FROM BaseRef's tip rather than HEAD.
+		if err := r.fetchOrigin(ctx, checkout); err != nil {
+			return "", err
+		}
+		if err := r.git(ctx, []string{"-C", checkout, "switch", "-c", req.Branch, req.BaseRef}); err != nil {
+			return "", fmt.Errorf("switch -c %s from %s: %w", req.Branch, req.BaseRef, err)
+		}
+	} else {
+		if err := r.git(ctx, []string{"-C", checkout, "switch", "-c", req.Branch}); err != nil {
+			return "", fmt.Errorf("switch -c %s: %w", req.Branch, err)
+		}
+	}
+	return checkout, nil
+}
+
+// fetchOrigin updates the repo's remote-tracking refs so a BaseRef (and
+// origin/main, which the agent may merge offline) are current before a branch or
+// worktree is created from them. Shared by both strategies' BaseRef arms.
+func (r *Runner) fetchOrigin(ctx context.Context, repo string) error {
+	if err := r.git(ctx, []string{"-C", repo, "fetch", "origin"}); err != nil {
+		return fmt.Errorf("fetch origin: %w", err)
+	}
+	return nil
+}
+
+// ensureCleanCheckout fails if the checkout has uncommitted *tracked* changes,
+// so the branch strategy never switches in place over a user's (or a prior
+// run's) pending work. Untracked files are ignored (--untracked-files=no):
+// taboo itself writes untracked artifacts into the checkout (e.g. .taboo/
+// sessions/), and `git switch -c` tolerates them anyway.
+func (r *Runner) ensureCleanCheckout(ctx context.Context, checkout string) error {
+	out, err := r.gitCapture(ctx, []string{"-C", checkout, "status", "--porcelain", "--untracked-files=no"})
+	if err != nil {
+		return fmt.Errorf("git status: %w", err)
+	}
+	if out != "" {
+		return fmt.Errorf("branch strategy needs a clean checkout at %s; commit or stash first", checkout)
+	}
+	return nil
+}
+
+// swapIntoWorkshop binds workspace into the workshop, plus any extra git mounts
+// and a sessions mount for a session-capable agent. A workspace source is
+// non-empty, so remount is not atomic: the swap is stop -> remount workspace
+// [-> remount extra...] [-> remount sessions] -> start. The sessions mount lets
+// a session-capable agent's files write through and survive the swap, which
+// wipes the rootfs. See CONTEXT.md for the extra git mounts the worktree
+// strategy passes (workshop.StrategyGitMounts).
+func (r *Runner) swapIntoWorkshop(ctx context.Context, workspace string, extra ...workshop.GitMount) error {
 	proj, ws, sdk := r.cfg.ProjectDir, r.cfg.Workshop, string(r.cfg.Agent.Name())
 	if err := r.workshop(ctx, workshop.VerbArgs(proj, "stop", ws)); err != nil {
 		return fmt.Errorf("stop: %w", err)
 	}
-	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "workspace", wt)); err != nil {
+	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "workspace", workspace)); err != nil {
 		return fmt.Errorf("remount workspace: %w", err)
 	}
-	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "gitcommon", workshop.GitCommonTarget(r.cfg.RepoPath))); err != nil {
-		return fmt.Errorf("remount gitcommon: %w", err)
-	}
-	if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, "worktrees", workshop.WorktreesCommonTarget(r.cfg.ProjectDir))); err != nil {
-		return fmt.Errorf("remount worktrees: %w", err)
+	for _, m := range extra {
+		if err := r.workshop(ctx, workshop.RemountArgs(proj, ws, sdk, m.Plug, m.Target)); err != nil {
+			return fmt.Errorf("remount %s: %w", m.Plug, err)
+		}
 	}
 	if _, ok := r.cfg.Agent.Sessions(); ok {
 		host := r.sessionsDir()

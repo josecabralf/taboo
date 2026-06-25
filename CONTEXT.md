@@ -126,6 +126,41 @@ it is the same path for every branch. That makes the plug static, with no per-ru
 target change. Like git-common, it is exempt from the
 `/taboo/...` namespacing: its path **is** the mechanism. See ADR 0011.
 
+**The `branch` strategy opts out of the three-mount rule.** The two extra mounts
+above exist only because a linked worktree is not self-contained. When a run can
+own the checkout outright, those two mounts are unnecessary. `Runner.Setup`
+therefore dispatches on a `strategy` seam (`workshop.Config.Strategy`):
+
+- **`branch`** operates in place on the checkout (`cfg.RepoPath`): it creates the
+  run's branch with `git switch -c` and binds only the checkout as the single
+  `/taboo/workspace` mount. The checkout's `.git` is a real, self-contained
+  directory, so it needs none of the git-common or worktrees machinery. That
+  deletes the exact mechanism that fails in CI on LXD and GitHub Actions: the
+  back-pointer and prune trap above. It first refuses a dirty checkout (a `git
+  switch -c` in place would otherwise carry uncommitted changes onto the run's
+  branch). Dispose is a no-op, because the workspace is the checkout, so there is
+  no linked worktree to `git worktree remove`. The cost is one run per checkout:
+  a single working tree and a single HEAD, so it cannot back the concurrent
+  `Pool` or the local daemon. Use it for CI and other disposable checkouts.
+- **`worktree`** (and `""`) keeps today's linked-worktree
+  behavior, including the three-mount rule above. It is what the concurrent
+  `Pool` (`internal/run/pool.go`) requires: each slot fans a run out onto its own
+  branch and worktree, which only the worktree strategy provides.
+
+`branch` and `worktree` are the only accepted values (with `""` defaulting to
+`worktree`); `Setup` rejects anything else, so a typo fails loudly instead of
+silently selecting the worktree path. The concurrent `Pool` forces the worktree
+strategy on every slot (`Pool.slotConfig`), so fan-out stays correct regardless
+of the configured default.
+
+The one-run-per-disposable-checkout contract, and the consequences of breaking
+it (HEAD left on the run branch, a second no-`BaseRef` run chaining off the
+prior tip, and `git switch -c` aborting on an existing branch), are explained
+for users in `docs/explanation/isolation-model.md` ("The branch strategy: one
+run per disposable checkout"). Each is reachable only by reusing a checkout,
+which the contract forbids; the fix for a reusable checkout is the worktree
+strategy, not hardening the branch path.
+
 **Mount-plug mechanics.** A `mount` plug is declared **inline in `workshop.yaml`**
 under any SDK entry (`plugs: { <name>: { interface: mount, workshop-target:
 <path> } }`) — no custom mount-SDK needs authoring; it auto-connects to

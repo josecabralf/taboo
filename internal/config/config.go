@@ -26,6 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/josecabralf/taboo/internal/agent"
+	"github.com/josecabralf/taboo/internal/workshop"
 )
 
 // Duration is a config-friendly time.Duration that (un)marshals Go duration
@@ -69,9 +70,10 @@ type ProjectConfig struct {
 	Agent agent.AgentName `yaml:"agent"`
 	// Model is the default model passed to the resolved agent.
 	Model string `yaml:"model"`
-	// Strategy is the branch-strategy seam; it defaults to "branch" and accepts
-	// any value for forward compatibility.
-	Strategy string `yaml:"strategy,omitempty"`
+	// Strategy is the workspace seam, a closed set: it defaults to "worktree" (a
+	// per-run linked worktree, collision-safe), while "branch" operates in place
+	// on the checkout. Any other value is rejected at load.
+	Strategy workshop.BranchingStrategy `yaml:"strategy,omitempty"`
 	// SourceDefinition names the workshop definition to derive from when the repo
 	// carries several named .workshop/*.yaml definitions; empty selects the sole
 	// definition.
@@ -137,8 +139,13 @@ var ErrConfigRead = errors.New("taboo: cannot read config")
 // or otherwise invalid config document.
 var ErrConfigParse = errors.New("taboo: invalid config")
 
-// defaultStrategy is the branch strategy applied when the config omits one.
-const defaultStrategy = "branch"
+// defaultStrategy is applied when the config omits one. It is the worktree
+// strategy: the collision-safe path (each run gets its own branch + worktree, so
+// it never mutates the checkout in place), and it matches what Setup does for an
+// unset strategy. CI and other disposable checkouts opt into "branch" explicitly;
+// the strategy is a closed set ("worktree" or "branch") and any other value is
+// rejected at load.
+const defaultStrategy = workshop.StrategyWorktree
 
 // LoadConfig reads and parses a taboo.yaml at path, resolves the agent/model of
 // the top level and of every workflow to an AgentProfile, and returns the
@@ -156,6 +163,11 @@ func LoadConfig(path string) (*ProjectConfig, error) {
 	}
 	if cfg.Strategy == "" {
 		cfg.Strategy = defaultStrategy
+	}
+	// The strategy is a closed set: reject any unknown value here so taboo
+	// validate / doctor catch a typo at load instead of at run time.
+	if err := cfg.Strategy.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfigParse, path, err)
 	}
 	if err := cfg.resolveProfiles(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err) // preserves ErrUnknownAgent via %w
