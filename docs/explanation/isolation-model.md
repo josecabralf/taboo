@@ -195,6 +195,51 @@ on workshop 0.9.1 and LXD 6.8, and that the out-of-repo layout remains a sound
 fallback. The only host-side cost the nested layout inherits is the
 repo-not-under-`/tmp` constraint, which already existed for the git-common mount.
 
+## The branch strategy: one run per disposable checkout
+
+Everything above describes the **worktree strategy**: a fresh linked worktree per
+run, the two mounts that make a linked worktree resolve, and the per-slot
+isolation that lets a `Pool` fan out. taboo has a second workspace seam, the
+**branch strategy**, that deletes all of it.
+
+The seam is `Config.Strategy` (`internal/workshop/template.go`), and
+`Runner.Setup` (`internal/run/runner.go`) dispatches on it. The set is closed:
+`worktree` (the default, and what an omitted value resolves to) and `branch` are
+the only accepted values, and any other value is rejected with a validation
+error rather than silently resolved to the worktree path. With
+`strategy: worktree`, Setup takes the worktree path above. With `strategy: branch`,
+`Runner.prepareBranch` runs the agent in place on the checkout itself: it creates
+the run's branch with `git switch -c`, binds only the checkout as the single
+`/taboo/workspace` mount, and skips the git-common and worktrees mounts entirely.
+The checkout's `.git` is a real, self-contained repository that travels with the
+workspace mount, so the linked-worktree machinery the rest of this page describes
+is unnecessary. The CI dogfooding loop uses this seam (`.taboo/taboo.yaml` sets
+`strategy: branch`), because that machinery is what failed under LXD on GitHub
+Actions.
+
+The cost of deleting the machinery is a contract: **one run per checkout, and
+the checkout is disposable.** A single checkout has one working tree and one
+`HEAD`, so the branch strategy cannot back the concurrent `Pool` (`slotConfig` in
+`internal/run/pool.go` forces `worktree` on every slot for this reason) and is
+not safe to run twice against the same checkout. Three consequences follow, and
+all three are intended:
+
+- After a run, `HEAD` is left on the run's branch. `git switch -c` moved it there
+  and nothing moves it back, because that branch is the artifact the run exists
+  to produce. `RunResult.Dispose` is a no-op for this strategy (there is no
+  linked worktree to remove), so it does not restore `HEAD` either.
+- A second run with no `BaseRef` branches off the first run's tip, the current
+  `HEAD`, and inherits its commits. The `BaseRef` arm avoids this by branching
+  from the fetched ref; the default path is `HEAD`-relative.
+- A second run whose branch name already exists fails at `git switch -c`, which
+  aborts rather than reusing or overwriting the branch.
+
+None of these can happen when each run gets a fresh checkout that is discarded
+afterward, which is what CI provides. They are reachable only by pointing the
+branch strategy at a reused or local checkout, which the contract forbids. For
+any checkout you keep, use the worktree strategy, the default: every run gets its
+own branch and worktree, and the checkout's `HEAD` is never touched.
+
 ## Teardown is not on the run path
 
 Setup creates a worktree; nothing on the run path removes it. `Runner.Run`,

@@ -28,14 +28,15 @@ row.
 | `repo` | string | none | Host git repository path whose worktrees the agent operates on. |
 | `agent` | string | none | Default agent name, resolved against the registry. |
 | `model` | string | none | Default model passed to the resolved agent. |
-| `strategy` | string | `branch` | Branch-strategy seam; accepts any value for forward compatibility. |
+| `strategy` | string | `worktree` | Workspace seam; `worktree` (default) or `branch`. |
 | `source-definition` | string | `""` | Names the workshop definition to derive from when the repo carries several named `.workshop/*.yaml` definitions; empty selects the sole definition. |
 | `defaults` | mapping (`RunDefaults`) | omitted (nil) | Scalar run settings applied when a workflow or flag does not override them. |
 | `workflows` | mapping (`Workflow`) | omitted | Named, reusable task types keyed by workflow name. |
 | `default-workflow` | string | `""` | Workflow run when the CLI selects none. |
 
-`strategy` defaults to `branch` in `LoadConfig` when omitted (`defaultStrategy`,
-`internal/config/config.go`). `agent` and `model` are resolved to a profile only where
+`strategy` defaults to `worktree` in `LoadConfig` when omitted (`defaultStrategy`,
+`internal/config/config.go`). The two strategies and when each applies are
+explained in [the branch strategy](../explanation/isolation-model.md#the-branch-strategy-one-run-per-disposable-checkout). `agent` and `model` are resolved to a profile only where
 an agent is set; an empty agent leaves the resolved `Profile` nil without error.
 Enforcing a required agent is the `validate` command's job, not the loader's.
 
@@ -168,7 +169,7 @@ treats an empty document as an error (`config is empty`, `decodeValidate` in
 `taboo init` writes this `taboo.yaml` when seeding the example workflows
 (`cli/internal/app/scaffold.go`, `renderTabooYAML`). The `workshop`, `base`,
 `repo`, `agent`, and `model` values are filled from the flags or wizard answers
-(plus `source-definition` when set); only `strategy: branch` is fixed by the
+(plus `source-definition` when set); only `strategy: worktree` is fixed by the
 scaffold.
 
 ```yaml title="taboo.yaml"
@@ -181,7 +182,7 @@ base: ubuntu@24.04
 repo: /home/you/my-project
 agent: opencode
 model: openrouter/qwen/qwen3-coder-plus
-strategy: branch
+strategy: worktree
 workflows:
     fix:
         prompt-file: prompts/fix.md
@@ -215,7 +216,7 @@ workflows:
 default-workflow: fix
 ```
 
-`strategy` is omitted, so `LoadConfig` defaults it to `branch`. The `defaults:`
+`strategy` is omitted, so `LoadConfig` defaults it to `worktree`. The `defaults:`
 block is omitted, so `branch-prefix`, `timeout`, `max-iterations`, and
 `completion-signal` take their zero values until a workflow or a CLI flag sets
 them.
