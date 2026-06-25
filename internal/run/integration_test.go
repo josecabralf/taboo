@@ -340,6 +340,112 @@ git commit -qm "agent: add PRUNE.md after worktree prune"`
 	t.Logf("prune-survival OK: workshop=%s commit=%s worktree=%s", cfg.Workshop, res.Commit, res.handle.worktreePath)
 }
 
+// TestIntegration_BranchStrategyCommitsInPlace is the live acceptance gate for
+// the branch strategy (issue #129). Where the worktree path allocates a linked
+// worktree and applies the three-mount rule (the machinery that fails in CI on
+// LXD/GH Actions, run 28110176802), the branch strategy works IN PLACE on the
+// checkout: `git switch -c`, a single workspace mount, no git-common/worktrees
+// remount, and a no-op Dispose.
+//
+// It drives the full launch -> switch -c -> stop/remount workspace/start -> exec
+// -> commit path with the deterministic shell "agent" (no LLM, no credential),
+// so it gates on workshop + LXD alone, and asserts the four behaviours the
+// fake-commander unit tests can only assert as argv: (1) the workspace IS the
+// checkout, not a linked worktree; (2) the agent's commit lands on the new
+// branch in the checkout, host-visible; (3) no linked worktree was created; and
+// (4) Dispose leaves the checkout intact.
+func TestIntegration_BranchStrategyCommitsInPlace(t *testing.T) {
+	repo := initSeedRepo(t)
+	proj := nonTmpDir(t)
+	ws := fmt.Sprintf("taboo-it-branch-%d", os.Getpid())
+	cfg := workshop.Config{
+		Workshop:   ws,
+		Base:       "ubuntu@24.04",
+		Agent:      scriptProfile{argv: []string{"bash", "-lc"}},
+		RepoPath:   repo,
+		ProjectDir: proj,
+		Strategy:   workshop.StrategyBranch,
+	}
+	t.Cleanup(func() {
+		_ = osexec.Command("workshop", "--project", proj, "remove", ws).Run()
+		_ = osexec.Command("git", "-C", repo, "worktree", "prune").Run()
+	})
+	r := New(cfg, exec.NewExecCommander())
+
+	const script = `set -eux
+git config user.email agent@example.com
+git config user.name agent
+echo "written inside the workshop" > BRANCH.md
+git add -A
+git commit -qm "agent: add BRANCH.md"`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	var agentOut strings.Builder
+	res, err := r.Run(ctx, RunRequest{
+		Branch: "agent/branch-strategy", Prompt: script, Timeout: 2 * time.Minute,
+		Stdout: &agentOut, Stderr: &agentOut,
+	})
+	t.Logf("agent exec output:\n%s", agentOut.String())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// (1) The workspace IS the checkout — the branch strategy never allocates a
+	// linked worktree, so the handle points at the repo itself.
+	if res.handle.worktreePath != repo {
+		t.Fatalf("branch strategy should operate in place on the checkout: got %q, want %q", res.handle.worktreePath, repo)
+	}
+
+	// (2) The agent's file and commit landed on the new branch, in the checkout,
+	// and are visible to host-side git (the in-place commit succeeded without the
+	// git-common machinery — the exact thing that fails in CI).
+	if res.Commit == "" {
+		t.Fatal("RunResult.Commit is empty")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "BRANCH.md")); err != nil {
+		t.Fatalf("agent file not on host checkout: %v", err)
+	}
+	logOut, err := osexec.Command("git", "-C", repo, "log", "--oneline").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, logOut)
+	}
+	if !strings.Contains(string(logOut), "add BRANCH.md") {
+		t.Errorf("commit not on branch; log:\n%s", logOut)
+	}
+	branchOut, err := osexec.Command("git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v\n%s", err, branchOut)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != "agent/branch-strategy" {
+		t.Errorf("checkout on wrong branch after switch -c: got %q, want %q", got, "agent/branch-strategy")
+	}
+
+	// (3) No linked worktree was created: `git worktree list` shows only the
+	// checkout (a single line). A worktree-strategy run would show two.
+	wtList, err := osexec.Command("git", "-C", repo, "worktree", "list").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git worktree list: %v\n%s", err, wtList)
+	}
+	if lines := strings.Count(strings.TrimSpace(string(wtList)), "\n") + 1; lines != 1 {
+		t.Errorf("branch strategy created extra worktrees; want only the checkout:\n%s", wtList)
+	}
+
+	// (4) Dispose is a no-op: the checkout (its .git and the agent's commit)
+	// survives intact — no `git worktree remove` against the main checkout.
+	if err := res.Dispose(); err != nil {
+		t.Fatalf("Dispose: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
+		t.Fatalf("Dispose damaged the checkout's .git: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "BRANCH.md")); err != nil {
+		t.Fatalf("Dispose removed the agent's committed file: %v", err)
+	}
+	t.Logf("branch strategy OK: workshop=%s commit=%s checkout=%s", ws, res.Commit, repo)
+}
+
 // runLiveAgentCommitTest is the shared body of the three live-agent integration
 // tests (OpenCode, Claude Code, Copilot). Those tests differ only in their
 // credential skip guard, their profile, and their branch name; the orchestration

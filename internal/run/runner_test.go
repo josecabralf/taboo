@@ -605,6 +605,231 @@ func TestSetup_NoBaseRefSkipsFetchAndStartPoint(t *testing.T) {
 	}
 }
 
+// TestSetup_BranchStrategy pins the in-place branch seam (#129): with
+// cfg.Strategy == workshop.StrategyBranch, Setup operates on the checkout itself rather
+// than a linked worktree. It creates req.Branch with `git switch -c`, binds ONLY
+// the checkout into the workshop (a single workspace mount plus sessions for a
+// session-capable agent), and skips the git-common / worktrees mounts the
+// worktree path needs. Dispose is a no-op — the workspace IS the checkout, so
+// there is nothing to `git worktree remove`.
+func TestSetup_BranchStrategy(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Strategy = workshop.StrategyBranch
+	fc := &fakeCommander{errFn: failOnVerb("info")} // absent -> launch
+	r := New(cfg, fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	// In-place recipe: status (clean-tree guard) -> switch -c -> ensure
+	// (info+launch) -> stop -> remount workspace -> remount sessions -> start. The
+	// host-side git prep now runs BEFORE the workshop launch (a precondition
+	// failure aborts cheaply). No worktree add, no gitcommon or worktrees remount.
+	// (opencode is session-capable, hence the sessions remount.)
+	wantSeq := []string{"status", "switch", "info", "launch", "stop", "remount", "remount", "start"}
+	if got := fc.verbs(); !slices.Equal(got, wantSeq) {
+		t.Fatalf("sequence =\n  %v\nwant\n  %v", got, wantSeq)
+	}
+
+	// The workspace remount source is the checkout itself (cfg.RepoPath), not a
+	// per-run worktree path.
+	wantWs := workshop.RemountArgs(cfg.ProjectDir, cfg.Workshop, string(cfg.Agent.Name()), "workspace", cfg.RepoPath)
+	if got := fc.findRemount(t, "workspace").Args; !slices.Equal(got, wantWs) {
+		t.Errorf("workspace remount args =\n  %v\nwant\n  %v", got, wantWs)
+	}
+
+	// No gitcommon and no worktrees remount: the checkout's .git is a real,
+	// self-contained dir, so the two extra legs of the worktree mount rule do not
+	// apply.
+	fc.assertNoRemount(t, "gitcommon", "worktrees")
+
+	// The handle points at the checkout, so Exec's rev-parse runs there.
+	if res.handle.worktreePath != cfg.RepoPath {
+		t.Errorf("handle worktreePath = %q, want the checkout %q", res.handle.worktreePath, cfg.RepoPath)
+	}
+}
+
+// TestSetup_BranchStrategy_DisposeIsNoOp is the branch counterpart to
+// TestSetup_WorktreeStrategy_DisposeRemovesWorktree: the in-place path's Dispose
+// must NOT issue a `git worktree remove` (which would be destructive against the
+// main checkout), because the workspace IS the checkout (worktreePath ==
+// repoPath), so there is nothing to remove.
+func TestSetup_BranchStrategy_DisposeIsNoOp(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Strategy = workshop.StrategyBranch
+	fc := &fakeCommander{errFn: failOnVerb("info")} // absent -> launch
+	r := New(cfg, fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	if err := res.Dispose(); err != nil {
+		t.Fatalf("Dispose: %v", err)
+	}
+	for _, c := range fc.snapshot() {
+		if c.Name == "git" && slices.Contains(c.Args, "worktree") && slices.Contains(c.Args, "remove") {
+			t.Errorf("branch strategy Dispose issued a worktree remove: %v", c.Args)
+		}
+	}
+}
+
+// TestSetup_BranchStrategy_BaseRef pins ONLY the BaseRef delta of the in-place
+// branch seam (#129 + #83): with cfg.Strategy == workshop.StrategyBranch and a non-empty
+// BaseRef, Setup fetches origin BEFORE branching (so the ref — and origin/main,
+// which the agent may merge — are current) and then creates req.Branch FROM that
+// ref's tip via `git switch -c <branch> <baseref>`. This pins the fetch-before-
+// switch ordering, the start-point-bearing switch argv, and the fetch argv. The
+// full in-place sequence shape and the no-gitcommon/worktrees no-remount fact are
+// covered by TestSetup_BranchStrategy, which shares this prepareBranch path.
+func TestSetup_BranchStrategy_BaseRef(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Strategy = workshop.StrategyBranch
+	fc := &fakeCommander{errFn: failOnVerb("info")} // absent -> launch
+	r := New(cfg, fc)
+
+	if _, err := r.Setup(context.Background(), RunRequest{
+		Branch:  "agent/x",
+		BaseRef: "origin/main",
+		Prompt:  "...",
+	}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	// The ref must be current before we branch from it, so fetch precedes switch.
+	verbs := fc.verbs()
+	if slices.Index(verbs, "fetch") >= slices.Index(verbs, "switch") {
+		t.Errorf("fetch must precede switch, got verbs = %v", verbs)
+	}
+
+	// The switch starts the run's branch FROM the base ref (the trailing
+	// start-point arg distinguishes BaseRef from the plain in-place path).
+	var sw exec.Cmd
+	for _, c := range fc.snapshot() {
+		if c.Name == "git" && slices.Contains(c.Args, "switch") {
+			sw = c
+			break
+		}
+	}
+	wantSwitch := []string{"-C", cfg.RepoPath, "switch", "-c", "agent/x", "origin/main"}
+	if !slices.Equal(sw.Args, wantSwitch) {
+		t.Errorf("switch args =\n  %v\nwant\n  %v", sw.Args, wantSwitch)
+	}
+
+	// origin is fetched (in the checkout) so the base ref is current locally.
+	var fetch exec.Cmd
+	for _, c := range fc.snapshot() {
+		if c.Name == "git" && slices.Contains(c.Args, "fetch") {
+			fetch = c
+			break
+		}
+	}
+	wantFetch := []string{"-C", cfg.RepoPath, "fetch", "origin"}
+	if !slices.Equal(fetch.Args, wantFetch) {
+		t.Errorf("fetch args =\n  %v\nwant\n  %v", fetch.Args, wantFetch)
+	}
+}
+
+// TestSetup_RejectsUnknownStrategy pins the validation guard: a strategy that is
+// neither "branch" nor "worktree" (nor empty) is a typo, and silently falling
+// through to the worktree path — the heavy path the branch strategy exists to
+// avoid — would hide it. Setup must fail loudly before doing any work.
+func TestSetup_RejectsUnknownStrategy(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Strategy = "brnach" // typo
+	fc := &fakeCommander{}
+	r := New(cfg, fc)
+
+	_, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err == nil {
+		t.Fatal("Setup with an unknown strategy returned nil error, want a failure")
+	}
+	if !strings.Contains(err.Error(), "unknown strategy") {
+		t.Errorf("error = %q, want it to mention the unknown strategy", err)
+	}
+	// It must fail before issuing any command (no workshop materialized/launched).
+	if got := fc.verbs(); len(got) != 0 {
+		t.Errorf("issued commands %v, want none before the strategy is validated", got)
+	}
+}
+
+// TestSetup_BranchStrategy_RefusesDirtyCheckout pins the clean-tree guard: the
+// branch strategy switches the checkout in place, so a dirty tree (uncommitted
+// changes, modeled by a non-empty `git status --porcelain`) must abort Setup
+// before `git switch -c` carries that state onto the agent's branch.
+func TestSetup_BranchStrategy_RefusesDirtyCheckout(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Strategy = workshop.StrategyBranch
+	fc := &fakeCommander{
+		errFn: failOnVerb("info"), // absent -> launch
+		stdoutFn: func(c exec.Cmd) string {
+			if c.Name == "git" && slices.Contains(c.Args, "status") {
+				return " M internal/run/runner.go\n" // a pending change
+			}
+			return ""
+		},
+	}
+	r := New(cfg, fc)
+
+	_, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err == nil {
+		t.Fatal("Setup over a dirty checkout returned nil error, want a failure")
+	}
+	if !strings.Contains(err.Error(), "clean checkout") {
+		t.Errorf("error = %q, want it to mention a clean checkout", err)
+	}
+	// The guard must run before the branch is created: no `git switch` issued.
+	if slices.Contains(fc.verbs(), "switch") {
+		t.Errorf("verbs %v contain switch; the dirty-tree guard must abort first", fc.verbs())
+	}
+}
+
+// TestSetup_WorktreeStrategy_DisposeRemovesWorktree pins the other half of the
+// strategy seam (#129): the default (worktree) path's Dispose STILL tears the
+// linked worktree down with `git -C <repo> worktree remove <worktreePath>`,
+// where TestSetup_BranchStrategy proves the in-place path's Dispose is a no-op.
+// Dispose short-circuits on os.Stat when the worktree dir is absent (the fake
+// commander never creates real dirs), so the worktree dir is materialized on
+// disk first to reach the removal call.
+func TestSetup_WorktreeStrategy_DisposeRemovesWorktree(t *testing.T) {
+	cfg := testConfig(t) // no Strategy set -> the default worktree path
+	fc := &fakeCommander{errFn: failOnVerb("info")}
+	r := New(cfg, fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	// dispose's os.Stat guard short-circuits to success when the worktree dir is
+	// gone; the fake commander records calls without creating dirs, so create it
+	// to exercise the real removal path.
+	if err := os.MkdirAll(res.handle.worktreePath, 0o750); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
+
+	if err := res.Dispose(); err != nil {
+		t.Fatalf("Dispose: %v", err)
+	}
+
+	// Dispose issued `git -C <repo> worktree remove <worktreePath>` against the
+	// host repo and this run's worktree.
+	want := []string{"-C", cfg.RepoPath, "worktree", "remove", res.handle.worktreePath}
+	var found bool
+	for _, c := range fc.snapshot() {
+		if c.Name == "git" && slices.Equal(c.Args, want) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Dispose did not issue %v; recorded git calls: %v", want, fc.verbs())
+	}
+}
+
 // findCallN returns the nth (0-based) recorded Cmd whose verb matches, or fails.
 func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) exec.Cmd {
 	t.Helper()
@@ -621,6 +846,25 @@ func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) exec.Cmd {
 	}
 	t.Fatalf("no call #%d with verb %q in %v", n, verb, f.verbs())
 	return exec.Cmd{}
+}
+
+// assertNoRemount fails if any recorded remount targets one of the named plugs
+// (matched as the ":<plug>" suffix workshop.RemountArgs appends), so a strategy
+// can assert it never repointed a mount it must not touch. Unlike findRemount
+// (which t.Fatals on absence), this scans the raw calls instead.
+func (f *fakeCommander) assertNoRemount(t *testing.T, plugs ...string) {
+	t.Helper()
+	for _, c := range f.snapshot() {
+		if verbOf(c) != "remount" {
+			continue
+		}
+		target := argAfter(c.Args, "remount")
+		for _, plug := range plugs {
+			if strings.HasSuffix(target, ":"+plug) {
+				t.Errorf("forbidden remount %q: %v", target, c.Args)
+			}
+		}
+	}
 }
 
 // findRemount returns the remount call whose plug target ends with ":<plug>", so
@@ -652,11 +896,11 @@ func TestRun_PerRunSequence(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// The verified recipe order: ensure (info+launch) -> worktree add ->
-	// stop -> remount workspace -> remount gitcommon -> remount worktrees ->
-	// remount sessions -> start -> exec. The sessions remount is present because
-	// OpenCode is a session-capable agent.
-	wantSeq := []string{"info", "launch", "worktree", "stop", "remount", "remount", "remount", "remount", "start", "exec", "rev-parse"}
+	// The verified recipe order: worktree add (host-side git, now BEFORE the
+	// workshop launch) -> ensure (info+launch) -> stop -> remount workspace ->
+	// remount gitcommon -> remount worktrees -> remount sessions -> start -> exec.
+	// The sessions remount is present because OpenCode is a session-capable agent.
+	wantSeq := []string{"worktree", "info", "launch", "stop", "remount", "remount", "remount", "remount", "start", "exec", "rev-parse"}
 	if got := fc.verbs(); !slices.Equal(got, wantSeq) {
 		t.Fatalf("sequence =\n  %v\nwant\n  %v", got, wantSeq)
 	}

@@ -1,6 +1,7 @@
 package workshop
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/josecabralf/taboo/internal/agent"
@@ -25,7 +26,36 @@ type Config struct {
 	// SourceDefinition is the selected source-definition name; empty means
 	// auto-resolve the project's single workshop definition.
 	SourceDefinition string
+	// Strategy selects the workspace seam: omitted or "worktree" uses a linked
+	// worktree path, "branch" operates in place on the checkout, and any other
+	// value is rejected by Validate (a closed enum, not a fall-through). See
+	// CONTEXT.md.
+	Strategy BranchingStrategy
 }
+
+// BranchingStrategy is a named string for the workspace seam — named for godoc
+// grouping and named-value safety; Validate guards typos.
+type BranchingStrategy string
+
+// Validate rejects an unrecognized strategy so a typo fails loudly instead of
+// silently selecting a path. Empty is valid: it means the worktree default
+// (config.LoadConfig likewise defaults an omitted strategy to worktree).
+func (s BranchingStrategy) Validate() error {
+	switch s {
+	case "", StrategyBranch, StrategyWorktree:
+		return nil
+	default:
+		return fmt.Errorf("unknown strategy %q: want %q or %q", s, StrategyBranch, StrategyWorktree)
+	}
+}
+
+// StrategyBranch and StrategyWorktree are the recognized Config.Strategy values.
+// They live here because this package owns the field, the single source of truth
+// for the run and config packages. See CONTEXT.md.
+const (
+	StrategyBranch   BranchingStrategy = "branch"
+	StrategyWorktree BranchingStrategy = "worktree"
+)
 
 type sdkDef struct {
 	Name  string          `yaml:"name"`
@@ -81,4 +111,22 @@ func GitCommonTarget(repoPath string) string {
 // (formerly two-) mount rule; see CONTEXT.md and docs/adr/0011.
 func WorktreesCommonTarget(projectDir string) string {
 	return filepath.Join(projectDir, "worktrees")
+}
+
+// GitMount is one extra (plug, target) mount a strategy layers on top of the
+// workspace. Target is both the plug's workshop-target and the remount source
+// (an identical-path mount; see CONTEXT.md).
+type GitMount struct{ Plug, Target string }
+
+// StrategyGitMounts returns the extra git mounts a strategy needs beyond the
+// single workspace mount. The branch strategy is self-contained and needs none;
+// the worktree strategy needs gitcommon + worktrees (in that order).
+func StrategyGitMounts(cfg Config) []GitMount {
+	if cfg.Strategy == StrategyBranch {
+		return nil
+	}
+	return []GitMount{
+		{Plug: "gitcommon", Target: GitCommonTarget(cfg.RepoPath)},
+		{Plug: "worktrees", Target: WorktreesCommonTarget(cfg.ProjectDir)},
+	}
 }
