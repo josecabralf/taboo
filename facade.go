@@ -159,6 +159,16 @@ func Substitute(tmpl string, vars map[string]string) (string, error) {
 // Config describes a taboo-managed workshop and the agent that runs inside it.
 type Config = workshop.Config
 
+// BranchingStrategy is the workspace seam a run takes: StrategyBranch or StrategyWorktree.
+type BranchingStrategy = workshop.BranchingStrategy
+
+// Named strategy constants for the public API. Use these with Config.Strategy or
+// ProjectConfig.Strategy instead of literal strings.
+const (
+	StrategyBranch   = workshop.StrategyBranch
+	StrategyWorktree = workshop.StrategyWorktree
+)
+
 // DryRunDerive validates that taboo could derive the agent's workshop from a
 // source without launching anything or writing to the host filesystem.
 func DryRunDerive(cfg Config, source []byte) (projectNames []string, err error) {
@@ -213,7 +223,9 @@ const StopSignal = run.StopSignal
 // StopMaxIterations means the loop exhausted MaxIterations without the signal.
 const StopMaxIterations = run.StopMaxIterations
 
-// NewPool returns a Pool that fans runs out across at most limit concurrent workshops.
+// NewPool returns a Pool that fans runs out across at most limit concurrent
+// workshops. A Pool always fans out with the worktree strategy: each slot gets
+// its own branch and worktree, so a branch-strategy config is run as worktree.
 func NewPool(cfg Config, limit int, cmd Commander) *Pool { return run.NewPool(cfg, limit, cmd) }
 
 // NewResultWithWorktree returns a RunResult whose Artifact reads from an existing worktree directory.

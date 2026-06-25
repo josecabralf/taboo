@@ -48,18 +48,19 @@ model: `+claudeCodeModel+`
 	}
 }
 
-// TestLoadConfig_Strategy defaults Strategy to "branch" when omitted and
-// otherwise preserves whatever is written — including a non-default value — so
-// the field stays a forward-compatible seam rather than a closed enum.
+// TestLoadConfig_Strategy defaults Strategy to "worktree" when omitted and
+// otherwise preserves a recognized value. The strategy is a closed set
+// ("worktree" or "branch"), so each valid input round-trips unchanged; an
+// unrecognized value is rejected by TestLoadConfig_RejectsUnknownStrategy.
 func TestLoadConfig_Strategy(t *testing.T) {
 	tests := []struct {
 		name     string
 		strategy string // line to inject; empty omits the key entirely
 		want     string
 	}{
-		{name: "omitted defaults to branch", strategy: "", want: "branch"},
+		{name: "omitted defaults to worktree", strategy: "", want: "worktree"},
+		{name: "explicit worktree preserved", strategy: "strategy: worktree", want: "worktree"},
 		{name: "explicit branch preserved", strategy: "strategy: branch", want: "branch"},
-		{name: "non-default preserved", strategy: "strategy: merge", want: "merge"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,10 +69,25 @@ func TestLoadConfig_Strategy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadConfig() error = %v, want nil", err)
 			}
-			if cfg.Strategy != tt.want {
+			if string(cfg.Strategy) != tt.want {
 				t.Errorf("cfg.Strategy = %q, want %q", cfg.Strategy, tt.want)
 			}
 		})
+	}
+}
+
+// TestLoadConfig_RejectsUnknownStrategy proves the strategy is a closed enum:
+// an unrecognized value like a "wroktree" typo is rejected at load (as a wrapped
+// ErrConfigParse naming the bad value) so taboo validate / doctor catch it
+// instead of letting it fail at run time.
+func TestLoadConfig_RejectsUnknownStrategy(t *testing.T) {
+	path := writeConfig(t, "workshop: demo\nstrategy: merge\n")
+	_, err := LoadConfig(path)
+	if !errors.Is(err, ErrConfigParse) {
+		t.Fatalf("error = %v, want errors.Is(err, ErrConfigParse)", err)
+	}
+	if !strings.Contains(err.Error(), "merge") {
+		t.Errorf("error %q, want it to name the bad strategy %q", err, "merge")
 	}
 }
 
@@ -148,7 +164,7 @@ model: `+claudeCodeModel+`
 }
 
 // TestLoadConfig_EmptyFile treats an empty document as an empty config rather
-// than an error: Decode returns io.EOF, Strategy still defaults to "branch", and
+// than an error: Decode returns io.EOF, Strategy still defaults to "worktree", and
 // with no agent the top-level Profile stays nil.
 func TestLoadConfig_EmptyFile(t *testing.T) {
 	path := writeConfig(t, "")
@@ -156,7 +172,7 @@ func TestLoadConfig_EmptyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v, want nil on empty file", err)
 	}
-	if got, want := cfg.Strategy, "branch"; got != want {
+	if got, want := string(cfg.Strategy), "worktree"; got != want {
 		t.Errorf("cfg.Strategy = %q, want %q", got, want)
 	}
 	if cfg.Profile != nil {

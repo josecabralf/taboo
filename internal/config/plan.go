@@ -95,6 +95,7 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 			RepoPath:         repoPath,
 			ProjectDir:       projectDir,
 			SourceDefinition: sourceDefinition,
+			Strategy:         c.Strategy,
 		},
 		Request: run.OrchestratedRequest{
 			RunRequest:       run.RunRequest{Branch: branch, BaseRef: ov.BaseRef, Prompt: promptText, Timeout: timeout, Stdout: stdout, Stderr: stderr},
