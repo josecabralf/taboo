@@ -129,10 +129,11 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 	}
 
 	if opts.dryRun {
-		printPlan(env, plan)
+		printPlan(env, plan, vars)
 		return nil
 	}
 
+	warnPromptVars(env, plan, vars)
 	if err := runPreflight(ctx, env); err != nil {
 		return err
 	}
@@ -500,8 +501,9 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 // branch, agent, and the scalar run params, so a user can confirm what a real run
 // would do without any host side effects. Every label is padded to one width so
 // the values line up in a single column; the longest label
-// ("completion-signal:") sets that width.
-func printPlan(env Env, plan *taboo.Plan) {
+// ("completion-signal:") sets that width. vars are the caller-supplied template
+// variables, rendered against the plan's placeholder set on the vars: line.
+func printPlan(env Env, plan *taboo.Plan, vars map[string]string) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo run (dry run) — resolved plan:")
 	planLabel, planTarget := "workflow:", plan.Workflow
 	if plan.Workflow == "" {
@@ -520,6 +522,62 @@ func printPlan(env Env, plan *taboo.Plan) {
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %d\n", "max-iterations:", plan.Request.MaxIterations)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "completion-signal:", plan.Request.CompletionSignal)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "prompt:", promptSummary(plan.Request.Prompt))
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "vars:", varsSummary(plan.Placeholders, vars))
+}
+
+// warnPromptVars surfaces the two silent vars footguns on stderr before a real
+// run: supplied keys that match no {{VAR}} placeholder (Substitute only checks
+// the reverse direction, so they vanish without a trace), and a no-vars run
+// whose prompt carries placeholders (the documented pass-through sends them to
+// the agent literally). Warnings only — the run proceeds identically, and they
+// go to stderr (never stdout, the clean-stdout contract) before the confirmRun
+// y/N prompt so an interactive user can still abort.
+func warnPromptVars(env Env, plan *taboo.Plan, vars map[string]string) {
+	if unused := unusedVarKeys(plan.Placeholders, vars); len(unused) > 0 {
+		_, _ = fmt.Fprintf(env.Stderr, "warning: supplied var(s) match no {{VAR}} placeholder in the prompt: %s\n",
+			strings.Join(unused, ", "))
+	}
+	if len(vars) == 0 && len(plan.Placeholders) > 0 {
+		_, _ = fmt.Fprintf(env.Stderr, "warning: the prompt references {{VAR}} placeholder(s) that will reach the agent literally: %s (supply --var/--vars-file)\n",
+			strings.Join(plan.Placeholders, ", "))
+	}
+}
+
+// varsSummary renders the dry-run plan's vars: value from the prompt's
+// placeholder set and the caller-supplied variables. Plan already fails fast
+// when supplied vars leave a placeholder unfilled, so a rendered plan has
+// exactly three states: no placeholders at all; placeholders present and vars
+// supplied (all filled, by construction), with any supplied-but-unused keys
+// named; placeholders present and no vars supplied, which pass through to the
+// agent literally (the documented no-vars rule).
+func varsSummary(placeholders []string, vars map[string]string) string {
+	unused := unusedVarKeys(placeholders, vars)
+	unusedSuffix := ""
+	if len(unused) > 0 {
+		unusedSuffix = " — unused: " + strings.Join(unused, ", ")
+	}
+	switch {
+	case len(placeholders) == 0:
+		return "(none)" + unusedSuffix
+	case len(vars) > 0:
+		return strings.Join(placeholders, ", ") + " (supplied)" + unusedSuffix
+	default:
+		return strings.Join(placeholders, ", ") + " (unfilled — will pass through literally; supply --var/--vars-file)"
+	}
+}
+
+// unusedVarKeys returns the sorted supplied variable keys that match no
+// placeholder in the prompt — the keys Substitute silently ignores (it only
+// checks the reverse direction), which would otherwise vanish without a trace.
+func unusedVarKeys(placeholders []string, vars map[string]string) []string {
+	var out []string
+	for key := range vars {
+		if !slices.Contains(placeholders, key) {
+			out = append(out, key)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // promptSummary renders a prompt on one line so a multi-line (often

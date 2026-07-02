@@ -49,10 +49,11 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 func (p *Plan) Run(ctx context.Context, cmd Commander) (OrchestratedResult, error)
 
 type Plan struct {
-    Config   Config              // the resolved workshop runner input
-    Request  OrchestratedRequest // the resolved looped run
-    Workflow string              // originating workflow name ("" = ad-hoc)
-    Model    string              // resolved model string (informational)
+    Config       Config              // the resolved workshop runner input
+    Request      OrchestratedRequest // the resolved looped run
+    Workflow     string              // originating workflow name ("" = ad-hoc)
+    Model        string              // resolved model string (informational)
+    Placeholders []string            // sorted, deduped {{VAR}} names of the pre-substitution prompt
 }
 ```
 
@@ -61,6 +62,10 @@ resolves a `workflow` plus per-call `PlanOverrides` into a `Plan`: a pure,
 inspectable description of one run (modulo reading a prompt file). Inspect or
 adjust `Plan.Config` and `Plan.Request` before running. `(*Plan).Run` executes
 the resolved plan — the sole side effect — driving the iteration loop over `cmd`.
+`Plan.Placeholders` records which `{{VAR}}` placeholders the resolved
+pre-substitution prompt referenced (`Request.Prompt` is the post-substitution
+text, so the names are not recoverable from it); see
+[run variables](../run-vars.md#discovering-a-workflows-variables).
 
 This path exposes the resolved run for inspection or adjustment before it
 executes; `RunWorkflow` is the same pipeline collapsed into one call.
@@ -353,6 +358,20 @@ matching key returns an error of the form
 `prompt template: undefined variable(s): ...`. The bridge runs `vars` through
 this only when the map is non-empty; with no vars the prompt's `{{VAR}}`
 placeholders are left untouched and produce no error.
+
+### Placeholders
+
+```go
+func Placeholders(tmpl string) []string
+```
+
+`Placeholders` returns the distinct `{{VAR}}` placeholder names `tmpl`
+references, sorted ascending. It is pure and shares `Substitute`'s grammar
+(`[A-Za-z_][A-Za-z0-9_]*`), so text that is not a placeholder — `{{ VAR }}`,
+`{{1ST}}`, `{{a-b}}` — is ignored exactly as `Substitute` ignores it. An empty
+or placeholder-free template yields an empty result. Use it to discover which
+variables a prompt template takes before filling it; see
+[run variables](../run-vars.md#discovering-a-workflows-variables).
 
 ### Hook and Hooks
 

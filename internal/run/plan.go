@@ -41,6 +41,12 @@ type Plan struct {
 	Request  OrchestratedRequest
 	Workflow string
 	Model    string
+	// Placeholders are the sorted, deduped {{VAR}} placeholder names of the
+	// resolved pre-substitution prompt. Request.Prompt is the post-substitution
+	// text, so this field is the only record of which variables the template
+	// referenced (a caller cannot recover them once substitution has filled
+	// them). Empty for a placeholder-free prompt.
+	Placeholders []string
 }
 
 // Run executes the resolved Plan over cmd, driving the orchestrator loop. It is

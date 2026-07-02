@@ -60,6 +60,11 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 	if err != nil {
 		return nil, err
 	}
+	// Record the template's placeholder set before substitution: the post-
+	// substitution prompt no longer carries the {{VAR}} names, and callers (the
+	// CLI's dry-run vars line and run warnings) need them to detect unused
+	// supplied keys and unfilled placeholders.
+	placeholders := prompt.Placeholders(promptText)
 	if len(vars) > 0 {
 		promptText, err = prompt.Substitute(promptText, vars)
 		if err != nil {
@@ -101,8 +106,9 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 			MaxIterations:    maxIter,
 			CompletionSignal: signal,
 		},
-		Workflow: workflow,
-		Model:    model,
+		Workflow:     workflow,
+		Model:        model,
+		Placeholders: placeholders,
 	}, nil
 }
 

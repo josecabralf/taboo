@@ -477,6 +477,98 @@ func TestRun_DryRunFromOverridesSourceDefinition(t *testing.T) {
 	}
 }
 
+// TestRun_DryRunVarsLine covers the three states of the dry-run plan's vars:
+// line: a placeholder-free prompt renders "(none)"; a prompt whose placeholders
+// were all filled lists them as supplied and names any supplied-but-unused
+// keys; a no-vars run over a parameterized prompt lists the names as unfilled
+// so the user learns what to supply before a real run.
+func TestRun_DryRunVarsLine(t *testing.T) {
+	parameterized := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"workflows:\n  triage:\n    prompt: 'T: {{ISSUE_TITLE}} B: {{ISSUE_BODY}}'\n"
+
+	t.Run("no placeholders renders (none)", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "vars:") || !strings.Contains(stdout, "(none)") {
+			t.Errorf("plan missing 'vars: (none)' line:\n%s", stdout)
+		}
+	})
+
+	t.Run("supplied vars listed with unused keys named", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterized)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "triage", "--dry-run",
+			"--var", "ISSUE_TITLE=t", "--var", "ISSUE_BODY=b", "--var", "TYPO=x")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "ISSUE_BODY, ISSUE_TITLE") {
+			t.Errorf("plan vars line missing the sorted placeholder names:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "supplied") {
+			t.Errorf("plan vars line missing the supplied marker:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "unused: TYPO") {
+			t.Errorf("plan vars line missing the unused key TYPO:\n%s", stdout)
+		}
+	})
+
+	t.Run("no vars over placeholders listed as unfilled", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterized)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "triage", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "ISSUE_BODY, ISSUE_TITLE") {
+			t.Errorf("plan vars line missing the sorted placeholder names:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "unfilled") || !strings.Contains(stdout, "--var") {
+			t.Errorf("plan vars line missing the unfilled hint:\n%s", stdout)
+		}
+	})
+}
+
+// TestVarsSummary pins the pure vars-line renderer directly: the three states
+// the dry-run plan can show, plus unused supplied keys named in sorted order.
+func TestVarsSummary(t *testing.T) {
+	cases := []struct {
+		name         string
+		placeholders []string
+		vars         map[string]string
+		want         string
+	}{
+		{"no placeholders, no vars", nil, nil, "(none)"},
+		{"no placeholders, unused vars named", nil, map[string]string{"TYPO": "x"},
+			"(none) — unused: TYPO"},
+		{"supplied", []string{"A", "B"}, map[string]string{"A": "1", "B": "2"},
+			"A, B (supplied)"},
+		{"supplied with unused keys sorted", []string{"A"}, map[string]string{"A": "1", "Z": "9", "M": "5"},
+			"A (supplied) — unused: M, Z"},
+		{"unfilled", []string{"A", "B"}, nil,
+			"A, B (unfilled — will pass through literally; supply --var/--vars-file)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := varsSummary(tc.placeholders, tc.vars); got != tc.want {
+				t.Errorf("varsSummary(%v, %v) = %q, want %q", tc.placeholders, tc.vars, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestPromptSummary covers the one-line preview promptSummary renders for the
 // dry-run plan: a short single-line prompt is shown verbatim, a multi-line or
 // over-long prompt is collapsed to its (truncated) first line plus a correctly
@@ -1024,6 +1116,84 @@ func TestRun_VarsErrors(t *testing.T) {
 				t.Errorf("a vars error must not execute; calls: %v", invocations(fake))
 			}
 		})
+	}
+}
+
+// TestRun_WarnsUnusedVarKeys asserts a real run warns on stderr when supplied
+// keys match no {{VAR}} placeholder (today they vanish silently), naming the
+// unused keys, while the run proceeds unchanged and stdout stays clean.
+func TestRun_WarnsUnusedVarKeys(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"workflows:\n  fix:\n    prompt: 'Title: {{ISSUE_TITLE}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--var", "ISSUE_TITLE=t", "--var", "TYPO=x")
+	if err != nil {
+		t.Fatalf("run error = %v, want nil (warnings must not fail the run)", err)
+	}
+	if !strings.Contains(stderr, "TYPO") {
+		t.Errorf("stderr does not name the unused key TYPO:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "TYPO") {
+		t.Errorf("warning leaked onto stdout (clean-stdout contract):\n%s", stdout)
+	}
+	if findInvocation(fake, "exec", "Title: t") == nil {
+		t.Errorf("the run did not proceed with the substituted prompt; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_WarnsUnfilledPlaceholders asserts a no-vars run over a parameterized
+// prompt warns on stderr, naming the placeholders that will reach the agent
+// literally, while the documented pass-through behavior stays: the run proceeds
+// and the raw {{VAR}} text is what the agent receives.
+func TestRun_WarnsUnfilledPlaceholders(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"workflows:\n  triage:\n    prompt: 'T: {{ISSUE_TITLE}} B: {{ISSUE_BODY}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "triage")
+	if err != nil {
+		t.Fatalf("run error = %v, want nil (pass-through is documented behavior)", err)
+	}
+	if !strings.Contains(stderr, "ISSUE_BODY") || !strings.Contains(stderr, "ISSUE_TITLE") {
+		t.Errorf("stderr does not name the unfilled placeholders:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "ISSUE_TITLE") {
+		t.Errorf("warning leaked onto stdout (clean-stdout contract):\n%s", stdout)
+	}
+	if findInvocation(fake, "exec", "T: {{ISSUE_TITLE}} B: {{ISSUE_BODY}}") == nil {
+		t.Errorf("the literal pass-through prompt did not reach the agent; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_NoVarsWarningWhenAllFilled asserts the quiet path: a run whose
+// supplied vars exactly cover the prompt's placeholders emits no vars warning.
+func TestRun_NoVarsWarningWhenAllFilled(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"workflows:\n  fix:\n    prompt: 'Title: {{ISSUE_TITLE}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	_, stderr, err := runCmd(t, env, "fix", "--var", "ISSUE_TITLE=t")
+	if err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if strings.Contains(stderr, "warning") {
+		t.Errorf("a fully-filled run must emit no vars warning:\n%s", stderr)
 	}
 }
 

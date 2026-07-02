@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -411,6 +412,63 @@ func TestPlan_PromptResolutionAndVars(t *testing.T) {
 		}
 		if plan.Request.Prompt != "hello world" {
 			t.Errorf("Request.Prompt = %q, want %q", plan.Request.Prompt, "hello world")
+		}
+	})
+
+	t.Run("plan records pre-substitution placeholders with vars supplied", func(t *testing.T) {
+		configDir := filepath.Join(t.TempDir(), "repo", ".taboo")
+		cfg := &ProjectConfig{
+			Agent: "opencode",
+			Model: "m",
+			Workflows: map[string]Workflow{
+				"implement": {Prompt: "{{B}} then {{A}} then {{B}}"},
+			},
+		}
+
+		plan, err := cfg.Plan(configDir, "implement", map[string]string{"A": "x", "B": "y"}, run.PlanOverrides{Branch: "b"})
+		if err != nil {
+			t.Fatalf("Plan: unexpected error: %v", err)
+		}
+		if want := []string{"A", "B"}; !slices.Equal(plan.Placeholders, want) {
+			t.Errorf("plan.Placeholders = %v, want %v (sorted, deduped, pre-substitution)", plan.Placeholders, want)
+		}
+	})
+
+	t.Run("plan records placeholders on a no-vars run", func(t *testing.T) {
+		configDir := filepath.Join(t.TempDir(), "repo", ".taboo")
+		cfg := &ProjectConfig{
+			Agent: "opencode",
+			Model: "m",
+			Workflows: map[string]Workflow{
+				"implement": {Prompt: "raw {{X}}"},
+			},
+		}
+
+		plan, err := cfg.Plan(configDir, "implement", nil, run.PlanOverrides{Branch: "b"})
+		if err != nil {
+			t.Fatalf("Plan: unexpected error: %v", err)
+		}
+		if want := []string{"X"}; !slices.Equal(plan.Placeholders, want) {
+			t.Errorf("plan.Placeholders = %v, want %v", plan.Placeholders, want)
+		}
+	})
+
+	t.Run("plan records no placeholders for a plain prompt", func(t *testing.T) {
+		configDir := filepath.Join(t.TempDir(), "repo", ".taboo")
+		cfg := &ProjectConfig{
+			Agent: "opencode",
+			Model: "m",
+			Workflows: map[string]Workflow{
+				"implement": {Prompt: "no vars here"},
+			},
+		}
+
+		plan, err := cfg.Plan(configDir, "implement", nil, run.PlanOverrides{Branch: "b"})
+		if err != nil {
+			t.Fatalf("Plan: unexpected error: %v", err)
+		}
+		if len(plan.Placeholders) != 0 {
+			t.Errorf("plan.Placeholders = %v, want empty", plan.Placeholders)
 		}
 	})
 

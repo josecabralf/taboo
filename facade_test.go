@@ -133,6 +133,17 @@ func TestFacade_OutputCapturesStdoutAcrossBoundary(t *testing.T) {
 	}
 }
 
+// TestFacade_PlaceholdersForwards pins the Placeholders re-export: the facade
+// wrapper forwards to internal/prompt.Placeholders, so a public caller can ask
+// which {{VAR}} names a template references without importing internals.
+func TestFacade_PlaceholdersForwards(t *testing.T) {
+	got := taboo.Placeholders("Title: {{ISSUE_TITLE}}\n\n{{ISSUE_BODY}} and {{ISSUE_TITLE}} again, not {{ a b }}")
+	want := []string{"ISSUE_BODY", "ISSUE_TITLE"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Placeholders = %v, want %v", got, want)
+	}
+}
+
 func TestFacade_JSONResultRoundTrip(t *testing.T) {
 	type review struct {
 		Summary string `json:"summary"`

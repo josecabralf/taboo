@@ -154,6 +154,11 @@ func Substitute(tmpl string, vars map[string]string) (string, error) {
 	return prompt.Substitute(tmpl, vars)
 }
 
+// Placeholders returns the distinct {{VAR}} placeholder names tmpl references, sorted ascending.
+func Placeholders(tmpl string) []string {
+	return prompt.Placeholders(tmpl)
+}
+
 // --- internal/workshop: the workshop runner input and the CLI-support facet ---
 
 // Config describes a taboo-managed workshop and the agent that runs inside it.

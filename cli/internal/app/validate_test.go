@@ -413,6 +413,120 @@ func findCheck(checks []check, name string) *check {
 	return nil
 }
 
+// TestValidate_VarsChecks covers the per-workflow vars/ OK-level check: a
+// workflow whose effective prompt references {{VAR}} placeholders emits an ok
+// check naming them sorted — from an inline prompt, a prompt-file's contents,
+// or the defaults layer the workflow falls back to — while a placeholder-free
+// workflow emits nothing (mirroring modelChecks' clean-config silence) and a
+// missing prompt-file emits no vars check (promptFileChecks already hard-fails
+// it; don't double-report).
+func TestValidate_VarsChecks(t *testing.T) {
+	t.Parallel()
+	base := "" +
+		"workshop: demo\n" +
+		"agent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\n" +
+		"repo: /home/me/repo\n"
+
+	t.Run("inline prompt placeholders named sorted", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt: 'B: {{ISSUE_TITLE}} A: {{ISSUE_BODY}}'\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/triage")
+		if c == nil {
+			t.Fatalf("no vars/triage check emitted\nchecks: %+v", checks)
+		}
+		if c.Status != statusOK {
+			t.Errorf("vars/triage status = %v, want ok", c.Status)
+		}
+		if !strings.Contains(c.Message, "ISSUE_BODY, ISSUE_TITLE") {
+			t.Errorf("vars/triage message = %q, want the sorted placeholder names", c.Message)
+		}
+	})
+
+	t.Run("prompt-file contents scanned when the file exists", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt-file: triage.md\n")
+		writePromptFile(t, root, "triage.md", "Title: {{ISSUE_TITLE}}\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/triage")
+		if c == nil {
+			t.Fatalf("no vars/triage check emitted for a prompt-file-backed workflow\nchecks: %+v", checks)
+		}
+		if !strings.Contains(c.Message, "ISSUE_TITLE") {
+			t.Errorf("vars/triage message = %q, want it to name ISSUE_TITLE", c.Message)
+		}
+	})
+
+	t.Run("defaults prompt backs a bare workflow", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  prompt: 'do {{TASK}}'\n"+
+			"workflows:\n  fix: {}\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/fix")
+		if c == nil {
+			t.Fatalf("no vars/fix check for a defaults-backed workflow\nchecks: %+v", checks)
+		}
+		if !strings.Contains(c.Message, "TASK") {
+			t.Errorf("vars/fix message = %q, want it to name TASK", c.Message)
+		}
+	})
+
+	t.Run("placeholder-free workflow emits nothing", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  fix:\n    prompt: no vars at all\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "vars/fix"); c != nil {
+			t.Errorf("placeholder-free workflow emitted %+v, want no vars check", *c)
+		}
+	})
+
+	t.Run("missing prompt-file emits no vars check", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt-file: gone.md\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "vars/triage"); c != nil {
+			t.Errorf("missing prompt-file emitted %+v, want no vars check (promptFileChecks owns the failure)", *c)
+		}
+		if c := findCheck(checks, "prompt-file/gone.md"); c == nil || c.Status != statusError {
+			t.Errorf("prompt-file/gone.md check = %+v, want the existing hard failure", c)
+		}
+	})
+
+	t.Run("run preflight is unaffected", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt: 'T: {{ISSUE_TITLE}}'\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := runConfigChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "vars/triage"); c != nil {
+			t.Errorf("run's preflight emitted %+v; the vars group is validate-only", *c)
+		}
+	})
+}
+
 // TestValidate_BadModelFormatWarns asserts a model that does not match the
 // agent's format hint produces a WARN, never an error, and the command still
 // exits 0: the heuristic is advisory, so a deliberate but unusual model is

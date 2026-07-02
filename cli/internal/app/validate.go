@@ -102,6 +102,7 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 	checks = append(checks, modelChecks(cfg)...)
 	if includePromptFiles {
 		checks = append(checks, promptFileChecks(cfg, path, statFile)...)
+		checks = append(checks, varsChecks(cfg, path, statFile)...)
 	}
 	// Resolve the repo directory once, config-anchored (never the process CWD), so
 	// the repo checks and the derive check both speak about the same directory a
@@ -361,6 +362,79 @@ func promptFiles(cfg taboo.ProjectConfig) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// varsChecks reports, per workflow, the {{VAR}} placeholders its effective
+// prompt references — an OK-level discoverability surface ("what vars does this
+// workflow take?"), never a failure. It is gated behind includePromptFiles
+// (whole-config lint: validate only, never run's preflight, which has its own
+// stderr warning). The effective prompt mirrors resolvePrompt's config layers
+// (no CLI overrides exist here): workflow inline prompt, else workflow
+// prompt-file contents, else the defaults prompt/prompt-file. A prompt-file is
+// read only when the injected statFile says it exists — a missing one emits no
+// vars check (promptFileChecks already hard-fails it; don't double-report) —
+// and a placeholder-free workflow emits nothing, mirroring modelChecks'
+// clean-config silence.
+func varsChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string) bool) []check {
+	base := filepath.Dir(configPath)
+	names := make([]string, 0, len(cfg.Workflows))
+	for name := range cfg.Workflows {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var checks []check
+	for _, name := range names {
+		text, found := effectivePrompt(cfg, cfg.Workflows[name], base, statFile)
+		if !found {
+			continue
+		}
+		placeholders := taboo.Placeholders(text)
+		if len(placeholders) == 0 {
+			continue
+		}
+		checks = append(checks, ok("vars/"+name, "prompt references: "+strings.Join(placeholders, ", ")))
+	}
+	return checks
+}
+
+// effectivePrompt resolves a workflow's prompt text from the config layers
+// alone, mirroring the bridge's resolvePrompt precedence minus the CLI
+// overrides (validate has none): workflow inline → workflow prompt-file →
+// defaults inline → defaults prompt-file. It reports found=false when nothing
+// is configured or a configured prompt-file is absent/unreadable.
+func effectivePrompt(cfg taboo.ProjectConfig, wf taboo.Workflow, base string, statFile func(string) bool) (text string, found bool) {
+	defaults := cfg.Defaults
+	if defaults == nil {
+		defaults = &taboo.RunDefaults{}
+	}
+	switch {
+	case wf.Prompt != "":
+		return wf.Prompt, true
+	case wf.PromptFile != "":
+		return readExistingPromptFile(wf.PromptFile, base, statFile)
+	case defaults.Prompt != "":
+		return defaults.Prompt, true
+	case defaults.PromptFile != "":
+		return readExistingPromptFile(defaults.PromptFile, base, statFile)
+	default:
+		return "", false
+	}
+}
+
+// readExistingPromptFile reads a configured prompt-file's contents, resolving a
+// relative path against the config dir, but only when the injected statFile
+// says it exists — existence reporting stays promptFileChecks' job.
+func readExistingPromptFile(path, base string, statFile func(string) bool) (string, bool) {
+	resolved := resolvePromptFilePath(path, base)
+	if !statFile(resolved) {
+		return "", false
+	}
+	// resolved comes from the trusted config, like promptFileChecks' probe.
+	data, err := os.ReadFile(resolved) // #nosec G304
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
 }
 
 // promptFileChecks confirms every referenced prompt file exists, resolving a
