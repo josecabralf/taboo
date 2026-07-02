@@ -1,11 +1,13 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -15,20 +17,22 @@ import (
 )
 
 // newListCmd builds the `list` subcommand: a read-only, per-.taboo lifecycle
-// view of the project's workshops, worktrees, and branches. It loads the
-// project config and probes the host through the Commander seam to report
-// current state, mutating nothing.
+// view of the project's workshops, worktrees, branches, and configured
+// workflows. It loads the project config and probes the host through the
+// Commander seam to report current state, mutating nothing; the workflows
+// section is computed from the config alone.
 func newListCmd(env Env) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List the project's workshops, worktrees, and branches",
+		Short: "List the project's workshops, worktrees, branches, and workflows",
 		Long: "list reports the lifecycle state of the current taboo project: each configured " +
-			"workshop and its state, the repo's worktrees, and its branches. It reads the host " +
+			"workshop and its state, the repo's worktrees, its branches, and the configured " +
+			"workflows with their effective agent, model, and prompt. It reads the host " +
 			"through the same command seam as the rest of taboo and never mutates anything.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runList(cmd.Context(), env, asJSON)
+			return runList(cmd.Context(), env, asJSON, statFileExists)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the listing as JSON")
@@ -47,20 +51,40 @@ type jsonWorktree struct {
 	Path   string `json:"path"`
 }
 
-// jsonListResult is the machine shape `list --json` emits: the same three
-// sections the human view renders.
+// jsonWorkflow is one configured workflow entry in the --json document: the
+// name, whether it is the config's default-workflow, the effective agent and
+// model (the workflow's own value falling back to the top level, mirroring
+// referencedAgents/referencedModels precedence), the one-line prompt preview
+// (empty when the prompt is unavailable), whether the effective prompt
+// resolved, and the {{VAR}} placeholder names it references.
+type jsonWorkflow struct {
+	Name            string   `json:"name"`
+	Default         bool     `json:"default"`
+	Agent           string   `json:"agent"`
+	Model           string   `json:"model"`
+	Prompt          string   `json:"prompt"`
+	PromptAvailable bool     `json:"promptAvailable"`
+	Placeholders    []string `json:"placeholders"`
+}
+
+// jsonListResult is the machine shape `list --json` emits: the same four
+// sections the human view renders. Workflows is declared last so the three
+// pre-existing keys marshal byte-identically to before the section existed.
 type jsonListResult struct {
 	Workshops []jsonWorkshop `json:"workshops"`
 	Worktrees []jsonWorktree `json:"worktrees"`
 	Branches  []string       `json:"branches"`
+	Workflows []jsonWorkflow `json:"workflows"`
 }
 
 // runList discovers and loads the project config, gathers the three lifecycle
-// sections (workshops, worktrees, branches) by probing the host once, then
-// emits them — as a JSON document when asJSON, otherwise as the human view.
-// A workshop-info probe error means that workshop is not provisioned (normal,
-// not fatal); a git probe error is fatal.
-func runList(ctx context.Context, env Env, asJSON bool) error {
+// sections (workshops, worktrees, branches) by probing the host once, plus the
+// workflows section computed from the loaded config alone (no host probes),
+// then emits them — as a JSON document when asJSON, otherwise as the human
+// view. A workshop-info probe error means that workshop is not provisioned
+// (normal, not fatal); a git probe error is fatal. The injected statFile
+// resolves prompt-file-backed workflow prompts, mirroring validate.
+func runList(ctx context.Context, env Env, asJSON bool, statFile func(string) bool) error {
 	configPath, cfg, err := loadProjectConfig(env)
 	if err != nil {
 		return err
@@ -84,7 +108,9 @@ func runList(ctx context.Context, env Env, asJSON bool) error {
 		return err
 	}
 
-	result := jsonListResult{Workshops: workshops, Worktrees: worktrees, Branches: branches}
+	workflows := gatherWorkflows(cfg, projectDir, statFile)
+
+	result := jsonListResult{Workshops: workshops, Worktrees: worktrees, Branches: branches, Workflows: workflows}
 	if asJSON {
 		// The gather helpers return empty (never nil) slices, so each section
 		// marshals as the conventional machine shape [] rather than null.
@@ -97,10 +123,10 @@ func runList(ctx context.Context, env Env, asJSON bool) error {
 }
 
 // renderListResult writes the human view of the gathered listing to env.Stdout:
-// a header followed by the workshops, worktrees, and branches sections, each
-// falling back to "  (none)" when empty.
+// a header followed by the workshops, worktrees, branches, and workflows
+// sections, each falling back to "  (none)" when empty.
 func renderListResult(env Env, r jsonListResult) {
-	_, _ = fmt.Fprintln(env.Stdout, "taboo list — workshops, worktrees, branches")
+	_, _ = fmt.Fprintln(env.Stdout, "taboo list — workshops, worktrees, branches, workflows")
 
 	workshops := make([]string, 0, len(r.Workshops))
 	for _, w := range r.Workshops {
@@ -111,6 +137,71 @@ func renderListResult(env Env, r jsonListResult) {
 	renderSection(env.Stdout, "worktrees:", worktreeLines(r.Worktrees))
 
 	renderSection(env.Stdout, "branches:", r.Branches)
+
+	renderSection(env.Stdout, "workflows:", workflowLines(r.Workflows))
+}
+
+// workflowLines formats workflows as human section lines: the name (with a
+// "(default)" marker when it is the config's default-workflow), the effective
+// agent and model, the one-line prompt preview — "(unavailable)" when the
+// effective prompt did not resolve — and, when the prompt references any, its
+// {{VAR}} placeholder names.
+func workflowLines(wfs []jsonWorkflow) []string {
+	lines := make([]string, 0, len(wfs))
+	for _, wf := range wfs {
+		name := wf.Name
+		if wf.Default {
+			name += " (default)"
+		}
+		prompt := "(unavailable)"
+		if wf.PromptAvailable {
+			prompt = wf.Prompt
+		}
+		line := name + "  agent: " + wf.Agent + "  model: " + wf.Model + "  prompt: " + prompt
+		if len(wf.Placeholders) > 0 {
+			line += "  vars: " + strings.Join(wf.Placeholders, ", ")
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+// gatherWorkflows computes the workflows section from the loaded config alone —
+// no host probes. One entry per configured workflow, sorted by name, carrying
+// the default marker (name equals cfg.DefaultWorkflow), the effective agent and
+// model (workflow value falling back to the top level, exactly the
+// referencedAgents/referencedModels precedence), and the effective prompt's
+// one-line summary plus {{VAR}} placeholders. The prompt resolves through
+// effectivePrompt with the injected statFile (workflow inline → workflow
+// prompt-file → defaults inline → defaults prompt-file); an absent or
+// unreadable prompt-file degrades to PromptAvailable=false rather than failing
+// the listing — existence policing stays validate's job.
+func gatherWorkflows(cfg *taboo.ProjectConfig, base string, statFile func(string) bool) []jsonWorkflow {
+	names := make([]string, 0, len(cfg.Workflows))
+	for name := range cfg.Workflows {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	out := []jsonWorkflow{}
+	for _, name := range names {
+		wf := cfg.Workflows[name]
+		entry := jsonWorkflow{
+			Name:         name,
+			Default:      name == cfg.DefaultWorkflow,
+			Agent:        string(cmp.Or(wf.Agent, cfg.Agent)),
+			Model:        cmp.Or(wf.Model, cfg.Model),
+			Placeholders: []string{},
+		}
+		if text, found := effectivePrompt(*cfg, wf, base, statFile); found {
+			entry.Prompt = promptSummary(text)
+			entry.PromptAvailable = true
+			if placeholders := taboo.Placeholders(text); placeholders != nil {
+				entry.Placeholders = placeholders
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // worktreeLines formats worktrees as "<branch>  <path>" section lines, shared by

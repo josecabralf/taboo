@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -518,7 +519,7 @@ func TestList_EmptyListingHuman(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list error = %v, want nil", err)
 	}
-	for _, header := range []string{"workshops:", "worktrees:", "branches:"} {
+	for _, header := range []string{"workshops:", "worktrees:", "branches:", "workflows:"} {
 		section := listSection(stdout, header)
 		if !strings.Contains(section, "(none)") {
 			t.Errorf("section %q missing the (none) fallback:\n%s", header, section)
@@ -547,13 +548,13 @@ func TestList_EmptyListingJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
 	}
-	if doc.Workshops == nil || doc.Worktrees == nil || doc.Branches == nil {
+	if doc.Workshops == nil || doc.Worktrees == nil || doc.Branches == nil || doc.Workflows == nil {
 		t.Errorf("empty sections decoded to nil, want empty slices: %+v", doc)
 	}
-	if len(doc.Workshops) != 0 || len(doc.Worktrees) != 0 || len(doc.Branches) != 0 {
+	if len(doc.Workshops) != 0 || len(doc.Worktrees) != 0 || len(doc.Branches) != 0 || len(doc.Workflows) != 0 {
 		t.Errorf("empty listing has non-empty sections: %+v", doc)
 	}
-	for _, want := range []string{`"workshops": []`, `"worktrees": []`, `"branches": []`} {
+	for _, want := range []string{`"workshops": []`, `"worktrees": []`, `"branches": []`, `"workflows": []`} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("raw JSON missing %s (must be [] not null):\n%s", want, stdout)
 		}
@@ -561,6 +562,304 @@ func TestList_EmptyListingJSON(t *testing.T) {
 	if strings.Contains(stdout, "null") {
 		t.Errorf("raw JSON contains null; empty sections must serialize as []:\n%s", stdout)
 	}
+}
+
+// TestList_WorkflowsSection locks the workflows section's tracer path: a
+// configured workflow renders one line under the "workflows:" header showing
+// its name, its effective agent and model (here both falling back to the
+// top-level values, matching referencedAgents/referencedModels precedence),
+// and a one-line preview of its inline prompt. The section is pure config —
+// no new host probes.
+func TestList_WorkflowsSection(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	body := listProjectBody + "workflows:\n  fix:\n    prompt: fix the bug\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: listFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, _, err := listCmd(t, env)
+	if err != nil {
+		t.Fatalf("list error = %v, want nil", err)
+	}
+	section := workflowsSection(stdout)
+	for _, want := range []string{"fix", "opencode", "anthropic/claude", "fix the bug"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("workflows section missing %q:\n%s", want, section)
+		}
+	}
+	// The workflows section is pure config: adding it must not add host probes.
+	// With one distinct agent the listing issues exactly the pre-existing three
+	// probes — workshop info, git worktree list, git for-each-ref.
+	if got := len(invocations(fake)); got != 3 {
+		t.Errorf("list issued %d probes, want the pre-existing 3 (workflows adds none): %v", got, invocations(fake))
+	}
+}
+
+// TestList_WorkflowsSortedWithDefaultMarker locks the section's ordering and
+// default contract: workflows render sorted by name (not map order), the one
+// named by default-workflow carries a "(default)" marker, the others do not,
+// and a workflow's own agent/model override the top level on its line.
+func TestList_WorkflowsSortedWithDefaultMarker(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	body := listProjectBody +
+		"workflows:\n" +
+		"  refactor:\n    agent: claude-code\n    model: claude-sonnet-4-5\n    prompt: refactor it\n" +
+		"  fix:\n    prompt: fix the bug\n" +
+		"default-workflow: fix\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: listFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, _, err := listCmd(t, env)
+	if err != nil {
+		t.Fatalf("list error = %v, want nil", err)
+	}
+	section := workflowsSection(stdout)
+	fixIdx := strings.Index(section, "fix")
+	refactorIdx := strings.Index(section, "refactor")
+	if fixIdx < 0 || refactorIdx < 0 {
+		t.Fatalf("workflows section missing a workflow:\n%s", section)
+	}
+	if fixIdx > refactorIdx {
+		t.Errorf("workflows not sorted by name (fix must precede refactor):\n%s", section)
+	}
+	if !strings.Contains(section, "fix (default)") {
+		t.Errorf("workflows section missing the (default) marker on fix:\n%s", section)
+	}
+	if strings.Contains(section, "refactor (default)") {
+		t.Errorf("(default) marker leaked onto a non-default workflow:\n%s", section)
+	}
+	// refactor's own agent/model must override the top level on its line.
+	refactorLine := lineContaining(section, "refactor")
+	if !strings.Contains(refactorLine, "claude-code") || !strings.Contains(refactorLine, "claude-sonnet-4-5") {
+		t.Errorf("refactor line missing its own agent/model override: %q", refactorLine)
+	}
+	if strings.Contains(refactorLine, "opencode") {
+		t.Errorf("refactor line should not fall back to the top-level agent: %q", refactorLine)
+	}
+}
+
+// TestList_WorkflowPromptFileAndPlaceholders locks the prompt-file path: a
+// workflow whose prompt lives in a prompt-file (resolved relative to the config
+// dir through the injected statFile) renders a one-line promptSummary preview —
+// first line plus line count for a multi-line file — and the sorted {{VAR}}
+// placeholder names the file references.
+func TestList_WorkflowPromptFileAndPlaceholders(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	body := listProjectBody + "workflows:\n  fix:\n    prompt-file: prompts/fix.md\n"
+	writeTabooProject(t, root, body)
+	promptDir := filepath.Join(root, ".taboo", "prompts")
+	if err := os.MkdirAll(promptDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	content := "Fix issue {{ISSUE}} in {{REPO}}\nthen reference {{ISSUE}} in the commit"
+	if err := os.WriteFile(filepath.Join(promptDir, "fix.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeCommander{stdoutFn: listFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, _, err := listCmd(t, env)
+	if err != nil {
+		t.Fatalf("list error = %v, want nil", err)
+	}
+	section := workflowsSection(stdout)
+	if !strings.Contains(section, "Fix issue {{ISSUE}} in {{REPO}} (2 lines)") {
+		t.Errorf("workflows section missing the promptSummary preview of the prompt-file:\n%s", section)
+	}
+	// Placeholders come sorted and deduped: ISSUE (referenced twice) then REPO.
+	if !strings.Contains(section, "ISSUE, REPO") {
+		t.Errorf("workflows section missing the sorted, deduped placeholders:\n%s", section)
+	}
+}
+
+// TestList_WorkflowMissingPromptFileDegrades locks the degradation contract: a
+// workflow whose prompt-file does not exist still lists — with "prompt:
+// (unavailable)" and no placeholders — rather than failing the listing.
+// Existence policing stays validate's job (promptFileChecks).
+func TestList_WorkflowMissingPromptFileDegrades(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	body := listProjectBody + "workflows:\n  fix:\n    prompt-file: prompts/ghost.md\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: listFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, _, err := listCmd(t, env)
+	if err != nil {
+		t.Fatalf("list error = %v, want nil (a missing prompt-file must not fail the listing)", err)
+	}
+	section := workflowsSection(stdout)
+	if !strings.Contains(section, "fix") {
+		t.Errorf("workflows section missing the workflow with the absent prompt-file:\n%s", section)
+	}
+	if !strings.Contains(section, "prompt: (unavailable)") {
+		t.Errorf("workflows section missing the (unavailable) prompt fallback:\n%s", section)
+	}
+}
+
+// TestList_WorkflowsJSON locks the machine view of the workflows section: with
+// --json the document gains a "workflows" array — sorted by name, each entry
+// carrying the name, the default flag, the effective agent/model, the prompt
+// summary with its availability flag, and the placeholder names (empty-slice,
+// never null) — while the pre-existing workshops/worktrees/branches sections
+// keep the exact shape TestList_JSON locks.
+func TestList_WorkflowsJSON(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	body := listProjectBody +
+		"workflows:\n" +
+		"  refactor:\n    agent: claude-code\n    model: claude-sonnet-4-5\n    prompt: refactor {{TARGET}}\n" +
+		"  fix:\n    prompt-file: prompts/ghost.md\n" +
+		"default-workflow: refactor\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: listFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, _, err := listCmd(t, env, "--json")
+	if err != nil {
+		t.Fatalf("list --json error = %v, want nil", err)
+	}
+
+	var doc jsonListResult
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
+	}
+
+	if len(doc.Workflows) != 2 {
+		t.Fatalf("workflows = %+v, want two entries", doc.Workflows)
+	}
+	fix, refactor := doc.Workflows[0], doc.Workflows[1]
+	if fix.Name != "fix" || refactor.Name != "refactor" {
+		t.Fatalf("workflows not sorted by name: %+v", doc.Workflows)
+	}
+	if fix.Default || !refactor.Default {
+		t.Errorf("default flags = fix:%v refactor:%v, want the marker on refactor only", fix.Default, refactor.Default)
+	}
+	// fix falls back to the top level; its prompt-file is absent so the prompt
+	// is unavailable and the placeholders are the empty (never nil) slice.
+	if fix.Agent != "opencode" || fix.Model != "anthropic/claude" {
+		t.Errorf("fix effective agent/model = %q/%q, want top-level fallback opencode/anthropic-claude", fix.Agent, fix.Model)
+	}
+	if fix.PromptAvailable || fix.Prompt != "" {
+		t.Errorf("fix prompt = %+v, want unavailable with an empty summary", fix)
+	}
+	if fix.Placeholders == nil || len(fix.Placeholders) != 0 {
+		t.Errorf("fix placeholders = %#v, want the empty slice", fix.Placeholders)
+	}
+	// refactor carries its own agent/model, an available inline prompt, and its
+	// placeholder.
+	if refactor.Agent != "claude-code" || refactor.Model != "claude-sonnet-4-5" {
+		t.Errorf("refactor effective agent/model = %q/%q, want its own values", refactor.Agent, refactor.Model)
+	}
+	if !refactor.PromptAvailable || refactor.Prompt != "refactor {{TARGET}}" {
+		t.Errorf("refactor prompt = %+v, want the available inline prompt", refactor)
+	}
+	if len(refactor.Placeholders) != 1 || refactor.Placeholders[0] != "TARGET" {
+		t.Errorf("refactor placeholders = %v, want [TARGET]", refactor.Placeholders)
+	}
+
+	// The pre-existing sections keep their shape: adding workflows must not
+	// disturb them.
+	if len(doc.Workshops) == 0 || len(doc.Worktrees) == 0 || len(doc.Branches) == 0 {
+		t.Errorf("pre-existing sections went empty after adding workflows: %+v", doc)
+	}
+	for _, key := range []string{`"workshops"`, `"worktrees"`, `"branches"`, `"workflows"`} {
+		if !strings.Contains(stdout, key) {
+			t.Errorf("raw JSON missing the %s key:\n%s", key, stdout)
+		}
+	}
+}
+
+// TestWorkflowLines locks the pure line formatter: the "(default)" marker, the
+// agent/model fields, the "(unavailable)" prompt fallback, and the vars suffix
+// appearing only when the prompt references placeholders.
+func TestWorkflowLines(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		wf   jsonWorkflow
+		want string
+	}{
+		{
+			name: "default with placeholders",
+			wf: jsonWorkflow{Name: "fix", Default: true, Agent: "opencode", Model: "anthropic/claude",
+				Prompt: "fix {{ISSUE}}", PromptAvailable: true, Placeholders: []string{"ISSUE"}},
+			want: "fix (default)  agent: opencode  model: anthropic/claude  prompt: fix {{ISSUE}}  vars: ISSUE",
+		},
+		{
+			name: "non-default without placeholders",
+			wf: jsonWorkflow{Name: "refactor", Agent: "claude-code", Model: "claude-sonnet-4-5",
+				Prompt: "refactor it", PromptAvailable: true, Placeholders: []string{}},
+			want: "refactor  agent: claude-code  model: claude-sonnet-4-5  prompt: refactor it",
+		},
+		{
+			name: "unavailable prompt",
+			wf:   jsonWorkflow{Name: "fix", Agent: "opencode", Model: "anthropic/claude", Placeholders: []string{}},
+			want: "fix  agent: opencode  model: anthropic/claude  prompt: (unavailable)",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := workflowLines([]jsonWorkflow{tc.wf})
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("workflowLines = %q, want [%q]", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGatherWorkflows_InjectedStatFile locks gatherWorkflows' statFile seam
+// directly: a prompt-file the injected statFile denies degrades that workflow
+// to an unavailable prompt without touching the filesystem outcome for the
+// others, and a config with no workflows yields the empty (never nil) slice.
+func TestGatherWorkflows_InjectedStatFile(t *testing.T) {
+	t.Parallel()
+	cfg := &taboo.ProjectConfig{
+		Agent: "opencode",
+		Model: "anthropic/claude",
+		Workflows: map[string]taboo.Workflow{
+			"fix": {PromptFile: "prompts/fix.md"},
+		},
+	}
+	denyAll := func(string) bool { return false }
+	got := gatherWorkflows(cfg, t.TempDir(), denyAll)
+	if len(got) != 1 {
+		t.Fatalf("gatherWorkflows = %+v, want one entry", got)
+	}
+	if got[0].PromptAvailable || got[0].Prompt != "" {
+		t.Errorf("denied prompt-file should be unavailable: %+v", got[0])
+	}
+	if got[0].Placeholders == nil {
+		t.Errorf("placeholders must be the empty slice, not nil: %+v", got[0])
+	}
+
+	empty := gatherWorkflows(&taboo.ProjectConfig{}, t.TempDir(), denyAll)
+	if empty == nil || len(empty) != 0 {
+		t.Errorf("gatherWorkflows with no workflows = %#v, want the empty (non-nil) slice", empty)
+	}
+}
+
+// lineContaining returns the first line of text containing substr.
+func lineContaining(text, substr string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, substr) {
+			return line
+		}
+	}
+	return ""
+}
+
+// workflowsSection returns just the lines under the "workflows:" header, so
+// assertions about the workflows listed there cannot false-positive on text
+// from other sections (e.g. an agent name in a workshop line).
+func workflowsSection(stdout string) string {
+	return listSection(stdout, "workflows:")
 }
 
 // branchesSection returns just the lines under the "branches:" header, so

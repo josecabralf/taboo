@@ -285,7 +285,7 @@ Warnings (a missing Go toolchain, missing credentials) do not fail the command.
 
 ## list
 
-List the project's workshops, worktrees, and branches
+List the project's workshops, worktrees, branches, and workflows
 (`cli/internal/app/list.go`, `newListCmd`). Read-only: it loads the config,
 probes the host through the command seam, and mutates nothing.
 
@@ -310,12 +310,26 @@ Sections (`runList`):
 - branches: the branches under the configured `branch-prefix`, from
   `git for-each-ref refs/heads/` (`gatherBranches`). An empty prefix returns
   every branch.
+- workflows: one entry per configured workflow, sorted by name, computed from
+  the loaded config alone — no host probes (`gatherWorkflows`). Each line shows
+  the name (with a `(default)` marker when it equals `default-workflow`), the
+  effective agent and model (the workflow's own value falling back to the top
+  level), a one-line preview of the effective prompt (workflow inline →
+  workflow `prompt-file` → defaults inline → defaults `prompt-file`, via
+  `effectivePrompt` + `promptSummary`), and the `{{VAR}}` placeholder names it
+  references. An absent or unreadable prompt-file degrades to
+  `prompt: (unavailable)` rather than failing the listing — existence policing
+  stays `validate`'s job.
 
 Output routing: the listing goes to stdout. The human form prints a header and
-the three sections, each falling back to `(none)` when empty
+the four sections, each falling back to `(none)` when empty
 (`renderListResult`). With `--json`, stdout carries
 `{"workshops": [{"name","status"}], "worktrees": [{"branch","path"}],
-"branches": []}` (`jsonListResult`); empty sections marshal as `[]`.
+"branches": [], "workflows": [{"name","default","agent","model","prompt",
+"promptAvailable","placeholders"}]}` (`jsonListResult`); empty sections marshal
+as `[]`. `prompt` is the one-line summary (empty when `promptAvailable` is
+`false`) and `placeholders` is the sorted `{{VAR}}` name list, `[]` when there
+are none.
 
 Exit behaviour: non-zero on a config-load error or a fatal git probe error. A
 workshop-info probe error is not fatal (it reports `not provisioned`).
