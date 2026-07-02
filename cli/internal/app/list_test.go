@@ -701,6 +701,39 @@ func TestList_WorkflowMissingPromptFileDegrades(t *testing.T) {
 	}
 }
 
+// TestList_WorkflowDefaultsPromptFallback locks the defaults-layer rung of the
+// list-side prompt contract: a bare workflow with no prompt/prompt-file of its
+// own resolves its effective prompt from the config's `defaults: prompt:`
+// layer (effectivePrompt's third rung), so its workflows-section line carries
+// the defaults prompt preview and its {{VAR}} placeholders rather than the
+// "(unavailable)" fallback.
+func TestList_WorkflowDefaultsPromptFallback(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// listProjectBody ends inside its defaults block, so the appended prompt
+	// line joins that block; the workflow itself is bare.
+	body := listProjectBody + "  prompt: fix {{ISSUE}} by default\nworkflows:\n  fix: {}\n"
+	writeTabooProject(t, root, body)
+	fake := &fakeCommander{stdoutFn: listFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, _, err := listCmd(t, env)
+	if err != nil {
+		t.Fatalf("list error = %v, want nil", err)
+	}
+	section := workflowsSection(stdout)
+	fixLine := lineContaining(section, "fix")
+	if !strings.Contains(fixLine, "prompt: fix {{ISSUE}} by default") {
+		t.Errorf("fix line missing the defaults-layer prompt preview: %q", fixLine)
+	}
+	if !strings.Contains(fixLine, "vars: ISSUE") {
+		t.Errorf("fix line missing the defaults prompt's placeholder: %q", fixLine)
+	}
+	if strings.Contains(section, "(unavailable)") {
+		t.Errorf("defaults-layer prompt should resolve, not degrade to (unavailable):\n%s", section)
+	}
+}
+
 // TestList_WorkflowsJSON locks the machine view of the workflows section: with
 // --json the document gains a "workflows" array — sorted by name, each entry
 // carrying the name, the default flag, the effective agent/model, the prompt
