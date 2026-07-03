@@ -46,6 +46,9 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 1. **Fetch** the issue title/body via `gh` (`internal/ghio`).
 2. **Run** the `implement` workflow on `taboo`: the agent runs inside a
    taboo-provisioned workshop and **commits in place** — it is git-**push-denied**.
+   A run that produced no commits is refused right here, before the push: no
+   branch reaches origin, no PR is opened, and `afk` exits non-zero naming the
+   issue and branch.
 3. **Push** the run's branch to origin.
 4. **Open a draft PR** whose body is the agent's plan (read from `.taboo-plan.md`
    in the worktree), prefixed with `Closes #N`.

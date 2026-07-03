@@ -296,6 +296,18 @@ func implement(ctx context.Context, startDir string, issue int, gh ghClient, run
 		return fmt.Errorf("run implement agent: %w", err)
 	}
 
+	// runWorkflow's error return already covers the failed-run case, so an
+	// unchanged result here genuinely means "ran fine, committed nothing". Refuse
+	// before the push: origin never sees an empty branch and GitHub never emits
+	// its opaque no-commits error at CreateDraftPR. The worktree is still freed,
+	// best-effort, like the happy path's dispose.
+	if !res.Changed() {
+		if derr := res.Dispose(); derr != nil {
+			fmt.Fprintf(os.Stderr, "afk: dispose worktree for #%d: %v\n", iss.Number, derr)
+		}
+		return fmt.Errorf("implement run for issue #%d produced no commits on %q — nothing to push or open a PR for", iss.Number, branch)
+	}
+
 	if err := gh.PushBranch(ctx, branch); err != nil {
 		return fmt.Errorf("push branch: %w", err)
 	}

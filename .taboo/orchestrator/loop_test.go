@@ -107,11 +107,31 @@ func fakePool(calls *[]poolCall) poolRunner {
 // is errs[i] (nil where unset), so a test can drive the mixed-outcome wave where
 // some runs fail and some succeed without aborting the batch.
 func fakePoolWithErrs(calls *[]poolCall, errs map[int]error) poolRunner {
+	return fakePoolWithOutcomes(calls, errs, nil, nil, nil)
+}
+
+// fakePoolWithOutcomes is the general canned pool: results[i].Err is errs[i]
+// (nil where unset), and every result carries Commit/BaseCommit the way
+// production populates them after a successful Exec — distinct shas (the run
+// committed), or an equal pair where unchanged[i] is set (the run committed
+// nothing, so Changed() reports false). When worktrees is non-nil, results[i]
+// is backed by worktrees[i] through rec so a test can record each Dispose.
+func fakePoolWithOutcomes(calls *[]poolCall, errs map[int]error, unchanged map[int]bool, worktrees []string, rec *recordingDisposer) poolRunner {
 	return func(_ context.Context, cfg taboo.Config, limit int, _ taboo.Commander, reqs []taboo.RunRequest) ([]taboo.RunResult, error) {
 		*calls = append(*calls, poolCall{cfg: cfg, limit: limit, reqs: reqs})
 		results := make([]taboo.RunResult, len(reqs))
 		for i, r := range reqs {
-			results[i] = taboo.RunResult{Branch: r.Branch, Err: errs[i]}
+			res := taboo.RunResult{}
+			if worktrees != nil {
+				res = taboo.NewResultWithWorktreeCmd(worktrees[i], rec)
+			}
+			res.Branch = r.Branch
+			res.Err = errs[i]
+			res.Commit, res.BaseCommit = "bbbb111", "aaaa000"
+			if unchanged[i] {
+				res.Commit = res.BaseCommit
+			}
+			results[i] = res
 		}
 		return results, nil
 	}
@@ -282,6 +302,96 @@ func TestLoopBlocksFailedIssueWithoutAbortingBatch(t *testing.T) {
 	for _, item := range batch {
 		n := strconv.Itoa(item.Number)
 		assertContains(t, gh.removed, n+":"+inProgressLabel, "release should remove in-progress on every item")
+	}
+}
+
+// TestLoopBlocksUnchangedRunWithNoChangeComment drives a wave mixing a changed,
+// a failed, and an unchanged (nil-Err, no-commit) run. The unchanged issue is a
+// third settle outcome: it gets agent:blocked plus the dedicated no-change
+// comment (not the failure comment), the failed one keeps its diagnostic
+// comment, the changed one gets neither — and for all three the in-progress
+// claim is released and the run's worktree is disposed.
+func TestLoopBlocksUnchangedRunWithNoChangeComment(t *testing.T) {
+	t.Parallel()
+
+	gh := &fakeLoopGH{issues: map[int]ghio.Issue{
+		1: {Number: 1, Title: "first", Body: "b1"},
+		2: {Number: 2, Title: "second", Body: "b2"},
+		3: {Number: 3, Title: "third", Body: "b3"},
+	}}
+	batch := []planItem{
+		{Number: 1, Title: "first", Branch: "agent/issue-1-first"},
+		{Number: 2, Title: "second", Branch: "agent/issue-2-second"},
+		{Number: 3, Title: "third", Branch: "agent/issue-3-third"},
+	}
+	planBatch := fakeBatchPlanner(batch)
+	var resolves []resolveCall
+	resolve := fakeResolve(taboo.Config{Workshop: "ws"}, &resolves)
+	var pools []poolCall
+	// Index 0 changed, index 1 failed, index 2 ran fine but committed nothing.
+	rec := &recordingDisposer{}
+	worktrees := []string{t.TempDir(), t.TempDir(), t.TempDir()}
+	runPool := fakePoolWithOutcomes(&pools, map[int]error{1: errors.New("boom")}, map[int]bool{2: true}, worktrees, rec)
+
+	opts := loopOptions{maxIterations: defaultLoopMaxIterations, parallelism: defaultLoopParallelism}
+	if err := loop(context.Background(), t.TempDir(), opts, io.Discard, gh, planBatch, resolve, runPool); err != nil {
+		t.Fatalf("loop returned error: %v", err)
+	}
+
+	// The unchanged issue is blocked and gets the dedicated no-change comment.
+	assertContains(t, gh.added, "3:"+blockedLabel, "unchanged issue should be blocked")
+	var noChange string
+	for _, c := range gh.comments {
+		if strings.HasPrefix(c, "3:") {
+			noChange = c
+		}
+	}
+	if noChange == "" {
+		t.Fatalf("no comment posted on unchanged issue #3, comments = %v", gh.comments)
+	}
+	if !strings.Contains(noChange, "#3") {
+		t.Errorf("comment %q should name the issue number", noChange)
+	}
+	if !strings.Contains(noChange, "no commits") {
+		t.Errorf("comment %q should say the run produced no commits", noChange)
+	}
+	if !strings.Contains(noChange, readyLabel) {
+		t.Errorf("comment %q should give the retry hint (re-add %q)", noChange, readyLabel)
+	}
+
+	// The failed issue still gets the failure treatment.
+	assertContains(t, gh.added, "2:"+blockedLabel, "failed issue should stay blocked")
+	var failComment string
+	for _, c := range gh.comments {
+		if strings.HasPrefix(c, "2:") {
+			failComment = c
+		}
+	}
+	if failComment == "" {
+		t.Fatalf("no comment posted on failed issue #2, comments = %v", gh.comments)
+	}
+	if !strings.Contains(failComment, "boom") {
+		t.Errorf("comment %q should carry the run error", failComment)
+	}
+
+	// The changed issue is neither blocked nor commented on.
+	if containsStr(gh.added, "1:"+blockedLabel) {
+		t.Errorf("issue #1 changed but got blocked label; added = %v", gh.added)
+	}
+	for _, c := range gh.comments {
+		if strings.HasPrefix(c, "1:") {
+			t.Errorf("issue #1 changed but got a comment %q", c)
+		}
+	}
+
+	// Every item — changed, failed, or unchanged — has its claim released and its
+	// worktree disposed.
+	for _, item := range batch {
+		n := strconv.Itoa(item.Number)
+		assertContains(t, gh.removed, n+":"+inProgressLabel, "release should remove in-progress on every item")
+	}
+	if got := rec.removeCount(); got != len(batch) {
+		t.Errorf("worktree-remove count = %d, want %d (every result must be disposed)", got, len(batch))
 	}
 }
 
@@ -530,6 +640,8 @@ func TestSettleResultDisposesWorktree(t *testing.T) {
 	worktree := t.TempDir()
 	rec := &recordingDisposer{}
 	res := taboo.NewResultWithWorktreeCmd(worktree, rec)
+	// Distinct shas: this pins the changed (implemented) settle path's disposal.
+	res.Commit, res.BaseCommit = "bbbb111", "aaaa000"
 
 	gh := &fakeLoopGH{}
 	settleResult(context.Background(), gh, planItem{Number: 7, Branch: "agent/x"}, res)
