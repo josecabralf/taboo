@@ -1060,7 +1060,7 @@ func TestValidate_LoopChecks(t *testing.T) {
 
 		checks := validateChecks(context.Background(), env, realStat)
 		if c := findCheck(checks, "loop/iterate"); c != nil {
-			t.Errorf("signalled loop emitted %+v, want no loop check", *c)
+			t.Errorf("signaled loop emitted %+v, want no loop check", *c)
 		}
 	})
 

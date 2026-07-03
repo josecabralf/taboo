@@ -85,21 +85,9 @@ func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
 		return errors.New("--json requires --dry-run")
 	}
 
-	configPath, cfg, err := loadProjectConfig(env)
+	cfg, projectDir, repo, prefix, err := resolveCleanScope(env, opts)
 	if err != nil {
 		return err
-	}
-	projectDir := filepath.Dir(configPath)
-	repo, err := filepath.Abs(cfg.Repo)
-	if err != nil {
-		return fmt.Errorf("resolve repo path %q: %w", cfg.Repo, err)
-	}
-
-	prefix := branchPrefix(cfg)
-	// An empty branch-prefix makes every branch a match, so pruning would delete
-	// the user's own branches. Refuse rather than guess which are taboo's.
-	if opts.pruneBranches && prefix == "" {
-		return errors.New("--prune-branches needs a configured branch-prefix; without one every branch would match")
 	}
 
 	plan, err := buildCleanPlan(ctx, env, cfg, projectDir, repo, prefix, opts)
@@ -108,16 +96,9 @@ func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
 	}
 
 	// A dry run only describes the plan, so it short-circuits before the refusal
-	// gate: it never errors and never mutates anything. --json swaps the human
-	// preview for the machine document; the plan itself is identical.
+	// gate: it never errors and never mutates anything.
 	if opts.dryRun {
-		if opts.asJSON {
-			enc := json.NewEncoder(env.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(cleanPlanToJSON(plan))
-		}
-		printCleanPlan(env.Stdout, plan)
-		return nil
+		return emitCleanPlan(env, plan, opts.asJSON)
 	}
 
 	// Refuse the whole command before any mutation when an unmerged branch would
@@ -139,6 +120,40 @@ func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
 	}
 
 	return executeClean(ctx, env, plan)
+}
+
+// resolveCleanScope loads the project config and resolves the context a clean
+// operates on: the parsed config, its directory, the absolute repo path, and
+// the run-branch prefix. An empty branch-prefix makes every branch a match, so
+// pruning would delete the user's own branches — refuse --prune-branches
+// rather than guess which are taboo's.
+func resolveCleanScope(env Env, opts *cleanOptions) (cfg *taboo.ProjectConfig, projectDir, repo, prefix string, err error) {
+	configPath, cfg, err := loadProjectConfig(env)
+	if err != nil {
+		return nil, "", "", "", err
+	}
+	projectDir = filepath.Dir(configPath)
+	repo, err = filepath.Abs(cfg.Repo)
+	if err != nil {
+		return nil, "", "", "", fmt.Errorf("resolve repo path %q: %w", cfg.Repo, err)
+	}
+	prefix = branchPrefix(cfg)
+	if opts.pruneBranches && prefix == "" {
+		return nil, "", "", "", errors.New("--prune-branches needs a configured branch-prefix; without one every branch would match")
+	}
+	return cfg, projectDir, repo, prefix, nil
+}
+
+// emitCleanPlan writes the dry-run teardown plan: the machine document under
+// --json, the human preview otherwise. The plan itself is identical either way.
+func emitCleanPlan(env Env, plan cleanPlan, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(env.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(cleanPlanToJSON(plan))
+	}
+	printCleanPlan(env.Stdout, plan)
+	return nil
 }
 
 // branchPrefix returns the configured run-branch prefix, or "" when the config
@@ -247,11 +262,11 @@ func planBranches(ctx context.Context, env Env, repo, prefix string, force bool)
 // jsonCleanPlan is the --dry-run --json machine shape: printCleanPlan's
 // sections as one flat object, so a script or CI teardown can inspect what a
 // real clean would remove — including which unmerged branches it would refuse —
-// without parsing the human preview. worktrees reuses the jsonWorktree shape
-// ({"branch","path"}), byte-compatible with list --json's worktrees section.
-// unmergedBranches is always present, unlike the human plan's conditional
-// section; every slice marshals as [] (never null), the jsonListResult
-// convention.
+// without parsing the human preview. The worktrees key reuses the jsonWorktree
+// shape ({"branch","path"}), byte-compatible with list --json's worktrees
+// section. The unmergedBranches key is always present, unlike the human
+// plan's conditional section; every slice marshals as [] (never null), the
+// jsonListResult convention.
 type jsonCleanPlan struct {
 	Repo             string         `json:"repo"`
 	ProjectDir       string         `json:"projectDir"`
@@ -264,7 +279,7 @@ type jsonCleanPlan struct {
 
 // cleanPlanToJSON projects a resolved teardown plan into the jsonCleanPlan
 // machine shape. It is pure (no Env, no I/O) — the dry-run branch owns the
-// encoding. buildCleanPlan's helpers can leave sections nil (out-of-scope
+// encoding. The buildCleanPlan helpers can leave sections nil (out-of-scope
 // artifact kinds, or empty discovery like provisionedWorkshops and
 // discoverSDKLinks); normalization to empty slices lives here, not in
 // discovery, so each key marshals as [].

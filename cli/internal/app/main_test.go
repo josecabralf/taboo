@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 
 // execRoot drives executeRoot — the seam the taboo binary maps every command
 // through — with argv args (the invocation minus the binary name), returning
-// the exit code and the captured stdout/stderr. cobra reads os.Args inside
+// the exit code and the captured stdout/stderr. Cobra reads os.Args inside
 // ExecuteContext, so the helper swaps it for the call; tests using it must
 // stay serial (no t.Parallel) to avoid racing on the swap.
 func execRoot(t *testing.T, env Env, args ...string) (int, string, string) {

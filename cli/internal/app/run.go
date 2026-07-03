@@ -529,9 +529,9 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 }
 
 // jsonPlanVars is the dry-run plan's vars object: a structured mirror of
-// varsSummary's three states. supplied is the sorted caller-supplied keys ([]
-// when none), unused the sorted supplied keys matching no {{VAR}} placeholder
-// (the keys Substitute silently ignores), and unfilled is true exactly when
+// varsSummary's three states. The supplied key is the sorted caller-supplied
+// keys ([] when none), unused the sorted supplied keys matching no {{VAR}}
+// placeholder (the keys Substitute silently ignores), and unfilled is true exactly when
 // placeholders exist and no vars were supplied — the documented case where they
 // reach the agent literally. Plan already fails fast on a partial fill, so
 // these three states are exhaustive for a rendered plan.
@@ -543,7 +543,7 @@ type jsonPlanVars struct {
 
 // jsonPlan is the --dry-run --json machine shape: printPlan's fields as one
 // flat object, so a script or agent can inspect what a real run would do
-// without parsing the aligned human plan. prompt carries the same one-line
+// without parsing the aligned human plan. The prompt key carries the same one-line
 // promptSummary preview the human plan and list show, never the full resolved
 // prompt; sourceDefinition is "" when unset (the human plan omits the line, the
 // JSON key is always present); timeout is the Go duration string printPlan
@@ -569,8 +569,8 @@ type jsonPlan struct {
 
 // planToJSON projects a resolved plan and the caller-supplied vars into the
 // jsonPlan machine shape. It is pure (no Env, no I/O) — the dry-run branch owns
-// the encoding. adhoc mirrors printPlan's label switch: true exactly when the
-// human plan would print "run: ad-hoc (--prompt)" instead of a workflow name.
+// the encoding. The adhoc field mirrors printPlan's label switch: true exactly
+// when the human plan would print "run: ad-hoc (--prompt)" instead of a workflow name.
 func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
 	supplied := make([]string, 0, len(vars))
 	for key := range vars {
@@ -612,8 +612,9 @@ func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
 // branch, agent, and the scalar run params, so a user can confirm what a real run
 // would do without any host side effects. Every label is padded to one width so
 // the values line up in a single column; the longest label
-// ("completion-signal:") sets that width. vars are the caller-supplied template
-// variables, rendered against the plan's placeholder set on the vars: line.
+// ("completion-signal:") sets that width. The vars argument holds the
+// caller-supplied template variables, rendered against the plan's placeholder
+// set on the vars: line.
 func printPlan(env Env, plan *taboo.Plan, vars map[string]string) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo run (dry run) — resolved plan:")
 	planLabel, planTarget := "workflow:", plan.Workflow
