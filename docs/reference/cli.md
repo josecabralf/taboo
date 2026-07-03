@@ -413,6 +413,7 @@ Positional arguments: none (`cobra.NoArgs`).
 | `--force` | `false` | Delete branches even when not merged. |
 | `--dry-run` | `false` | Print the plan without removing anything. |
 | `--yes` | `false` | Skip the interactive confirmation. |
+| `--json` | `false` | Emit the dry-run teardown plan as JSON (requires `--dry-run`). |
 
 Scope (`buildCleanPlan`): worktrees are removed with `git worktree remove`;
 `--workshops` switches to tearing down the derived workshops (`workshop remove`)
@@ -433,7 +434,40 @@ a `y/N` answer before any destructive action; declining prints `Aborted.`
 Output routing: `--dry-run` and the `Nothing to clean.` message go to stdout;
 per-artifact progress (`removed worktree ...`, `tore down workshop ...`,
 `removed SDK link ...`, `deleted branch ...`) and warnings go to stderr
-(`executeClean`). There is no `--json` flag.
+(`executeClean`). With `--dry-run --json`, stdout carries the resolved teardown
+plan as one indented JSON object instead of the human preview
+(`cleanPlanToJSON`); `--dry-run` without `--json` is unchanged. `--json`
+without `--dry-run` is refused up front (`--json requires --dry-run`), before
+any config load or host probe — the mutating path streams per-artifact
+progress and has no single result document to emit.
+
+The `--dry-run --json` shape (`jsonCleanPlan`):
+
+```json
+{
+  "repo": "/home/user/repo",
+  "projectDir": "/home/user/repo/.taboo",
+  "worktrees": [
+    {
+      "branch": "taboo/fix-123",
+      "path": "/home/user/repo/.taboo/worktrees/taboo-fix-123"
+    }
+  ],
+  "workshops": ["demo-opencode"],
+  "sdkLinks": ["/home/user/repo/.taboo/.workshop/mylib"],
+  "branches": ["taboo/fix-123"],
+  "unmergedBranches": ["taboo/refactor-456"]
+}
+```
+
+`worktrees` entries reuse the `{"branch","path"}` shape of `list --json`'s
+worktrees section. `workshops` and `sdkLinks` are populated only under
+`--workshops`/`--all`, and `branches`/`unmergedBranches` only under
+`--prune-branches` — `branches` is what a real clean would delete (merged
+branches, or all of them under `--force`) and `unmergedBranches` is what it
+would refuse without `--force`. Every key is always present; empty sections
+marshal as `[]` (never `null`), including `unmergedBranches`, which the human
+plan omits when empty.
 
 Exit behaviour: teardown is best-effort. A failure on one artifact warns and
 continues; every failure is joined into the returned error so the command still

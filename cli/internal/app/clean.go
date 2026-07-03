@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,10 @@ type cleanOptions struct {
 	force         bool
 	dryRun        bool
 	yes           bool
+	// asJSON emits the --dry-run teardown plan as a JSON object instead of the
+	// human preview; it requires dryRun (the mutating path has no single result
+	// document to emit).
+	asJSON bool
 }
 
 // cleanPlan is the resolved set of taboo-managed artifacts clean will tear down,
@@ -64,6 +69,7 @@ func newCleanCmd(env Env) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.force, "force", false, "delete branches even when not merged")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "print the plan without removing anything")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "skip the interactive confirmation")
+	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit the dry-run teardown plan as JSON (requires --dry-run)")
 	return cmd
 }
 
@@ -71,6 +77,14 @@ func newCleanCmd(env Env) *cobra.Command {
 // scope into a plan, and executes the teardown. The default scope is worktrees;
 // --workshops or --all widen it.
 func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
+	// The machine view exists only for the dry-run plan: the mutating path
+	// streams per-artifact progress to stderr and has no single result document
+	// to emit. Refuse up front — before any config load or host probe — rather
+	// than silently ignore the flag.
+	if opts.asJSON && !opts.dryRun {
+		return errors.New("--json requires --dry-run")
+	}
+
 	configPath, cfg, err := loadProjectConfig(env)
 	if err != nil {
 		return err
@@ -94,8 +108,14 @@ func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
 	}
 
 	// A dry run only describes the plan, so it short-circuits before the refusal
-	// gate: it never errors and never mutates anything.
+	// gate: it never errors and never mutates anything. --json swaps the human
+	// preview for the machine document; the plan itself is identical.
 	if opts.dryRun {
+		if opts.asJSON {
+			enc := json.NewEncoder(env.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(cleanPlanToJSON(plan))
+		}
 		printCleanPlan(env.Stdout, plan)
 		return nil
 	}
@@ -222,6 +242,55 @@ func planBranches(ctx context.Context, env Env, repo, prefix string, force bool)
 		unmerged = append(unmerged, b)
 	}
 	return toDelete, unmerged, nil
+}
+
+// jsonCleanPlan is the --dry-run --json machine shape: printCleanPlan's
+// sections as one flat object, so a script or CI teardown can inspect what a
+// real clean would remove — including which unmerged branches it would refuse —
+// without parsing the human preview. worktrees reuses the jsonWorktree shape
+// ({"branch","path"}), byte-compatible with list --json's worktrees section.
+// unmergedBranches is always present, unlike the human plan's conditional
+// section; every slice marshals as [] (never null), the jsonListResult
+// convention.
+type jsonCleanPlan struct {
+	Repo             string         `json:"repo"`
+	ProjectDir       string         `json:"projectDir"`
+	Worktrees        []jsonWorktree `json:"worktrees"`
+	Workshops        []string       `json:"workshops"`
+	SDKLinks         []string       `json:"sdkLinks"`
+	Branches         []string       `json:"branches"`
+	UnmergedBranches []string       `json:"unmergedBranches"`
+}
+
+// cleanPlanToJSON projects a resolved teardown plan into the jsonCleanPlan
+// machine shape. It is pure (no Env, no I/O) — the dry-run branch owns the
+// encoding. buildCleanPlan's helpers can leave sections nil (out-of-scope
+// artifact kinds, or empty discovery like provisionedWorkshops and
+// discoverSDKLinks); normalization to empty slices lives here, not in
+// discovery, so each key marshals as [].
+func cleanPlanToJSON(plan cleanPlan) jsonCleanPlan {
+	worktrees := plan.worktrees
+	if worktrees == nil {
+		worktrees = []jsonWorktree{}
+	}
+	return jsonCleanPlan{
+		Repo:             plan.repo,
+		ProjectDir:       plan.projectDir,
+		Worktrees:        worktrees,
+		Workshops:        emptyIfNil(plan.workshops),
+		SDKLinks:         emptyIfNil(plan.sdkLinks),
+		Branches:         emptyIfNil(plan.branches),
+		UnmergedBranches: emptyIfNil(plan.unmerged),
+	}
+}
+
+// emptyIfNil normalizes a nil string slice to an empty one so it marshals as
+// the conventional machine shape [] rather than null.
+func emptyIfNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // printCleanPlan writes the --dry-run teardown preview: one section per artifact
