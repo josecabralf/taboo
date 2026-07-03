@@ -387,6 +387,32 @@ func TestOrchestrator_StopOnNoChangeStopsAtStall(t *testing.T) {
 	}
 }
 
+// TestOrchestrator_StopOnNoChangeFinalIterationTieBreak pins the tie-break: a
+// stall on the LAST allowed iteration reports StopNoChange, not
+// StopMaxIterations — the check runs after every Exec including the final one,
+// and the budget running out at the same moment doesn't change that the tip
+// stopped moving.
+func TestOrchestrator_StopOnNoChangeFinalIterationTieBreak(t *testing.T) {
+	// base, iter1 moves the tip, iter2 (the last allowed) stalls on the same SHA.
+	fc := &fakeCommander{stdoutFn: shaSequence("base0001", "head0001", "head0001")}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:     RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:  2,
+		StopOnNoChange: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopNoChange {
+		t.Errorf("StopReason = %q, want %q (no-change wins the final-iteration tie)", res.StopReason, StopNoChange)
+	}
+	if res.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2", res.Iterations)
+	}
+}
+
 // TestOrchestrator_StopOnNoChangeFirstIterationNoOp pins the seed: prev starts
 // at Setup's BaseCommit, so a first Exec whose capture equals the base stops
 // the loop at iteration 1 — the agent did nothing at all.

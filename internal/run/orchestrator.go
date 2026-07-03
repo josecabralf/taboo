@@ -75,7 +75,8 @@ type OrchestratedResult struct {
 // Orchestrator composes a Runner into an iteration loop. It prepares the
 // worktree once via Runner.Setup, then re-runs the agent with Runner.Exec up to
 // MaxIterations, stopping early once the completion signal appears in the
-// agent's stdout.
+// agent's stdout or — when StopOnNoChange is set — once an iteration leaves the
+// branch tip unmoved.
 type Orchestrator struct {
 	runner *Runner
 }
@@ -87,7 +88,8 @@ func NewOrchestrator(runner *Runner) *Orchestrator {
 
 // Run prepares the worktree once, then re-execs the agent up to
 // req.MaxIterations times in that same worktree, stopping early once the
-// completion signal appears in the agent's stdout. On a Setup or Exec failure it
+// completion signal appears in the agent's stdout or, with req.StopOnNoChange
+// set, once an iteration produces no new commit. On a Setup or Exec failure it
 // returns the populated result so far alongside the error, with StopReason left
 // at its zero value; StopReason is only meaningful when the returned error is nil.
 func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (OrchestratedResult, error) {
@@ -140,7 +142,7 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 
 // extract runs req.ResultExtractor once over the final iteration's output and
 // records the typed value on res.Result. It is the single post-loop step shared
-// by both stop paths. On extraction failure res stays fully populated (the
+// by all three stop paths. On extraction failure res stays fully populated (the
 // agent's commit is never discarded) and the wrapped sentinel error is
 // returned alongside it.
 func (o *Orchestrator) extract(req OrchestratedRequest, res OrchestratedResult) (OrchestratedResult, error) {
