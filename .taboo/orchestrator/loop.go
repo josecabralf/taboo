@@ -11,8 +11,9 @@
 //
 // The label state machine an issue moves through is what makes the drain
 // terminate. At claim time the loop removes ready-for-agent and adds
-// agent:in-progress; on success it removes agent:in-progress, and on failure it
-// also adds agent:blocked plus a diagnostic comment before releasing in-progress.
+// agent:in-progress; on success it removes agent:in-progress; on failure it adds
+// agent:blocked plus a diagnostic comment; on a no-commit run it also adds
+// agent:blocked plus a no-change comment. All three settle the in-progress claim.
 // Claiming takes an issue out of the next wave's candidate set two independent
 // ways: removing ready-for-agent drops it from the planner's
 // ListOpenIssuesByLabel(ready-for-agent) listing, and adding agent:in-progress

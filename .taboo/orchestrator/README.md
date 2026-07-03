@@ -120,9 +120,10 @@ drains the whole `ready-for-agent` backlog wave by wave:
    in flight.
 3. **Fan out** the `implement` workflow across the batch through `taboo.Pool`,
    bounded by `--parallelism` (default 3) concurrent runs per wave.
-4. **Settle** each run: a success releases `agent:in-progress`; a failure also
-   adds `agent:blocked` plus a diagnostic comment, taking the issue out of the
-   ready pool until a human re-adds the label.
+4. **Settle** each run: a success releases `agent:in-progress`; a failure adds
+   `agent:blocked` plus a diagnostic comment; a no-commit run also adds
+   `agent:blocked` plus a no-change comment. All take the issue out of the ready
+   pool until a human re-adds the label.
 
 It repeats up to `--max-iterations` (default 10) waves — a safety bound against a
 queue that never empties. `--dry-run` plans and prints the first batch without
