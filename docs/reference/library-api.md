@@ -480,13 +480,14 @@ internal config package, so callers set it through the YAML, not as a Go value.
 
 ```go
 type Workflow struct {
-    Prompt        string       `yaml:"prompt,omitempty"`
-    PromptFile    string       `yaml:"prompt-file,omitempty"`
-    Model         string       `yaml:"model,omitempty"`
-    Agent         AgentName    `yaml:"agent,omitempty"`
-    MaxIterations int          `yaml:"max-iterations,omitempty"`
-    Timeout       Duration     `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
-    Profile       AgentProfile `yaml:"-"`
+    Prompt           string       `yaml:"prompt,omitempty"`
+    PromptFile       string       `yaml:"prompt-file,omitempty"`
+    Model            string       `yaml:"model,omitempty"`
+    Agent            AgentName    `yaml:"agent,omitempty"`
+    MaxIterations    int          `yaml:"max-iterations,omitempty"`
+    Timeout          Duration     `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
+    CompletionSignal string       `yaml:"completion-signal,omitempty"`
+    Profile          AgentProfile `yaml:"-"`
 }
 ```
 

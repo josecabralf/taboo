@@ -36,8 +36,9 @@ yet` would stop a loop watching for `DONE`.
 ## Configure the loop in taboo.yaml
 
 The loop knobs live in your `taboo.yaml`, so the one-call bridge picks them up
-without extra Go code. `max-iterations` can sit on a workflow or in `defaults`;
-`completion-signal` is a `defaults`-only key:
+without extra Go code. All three — `max-iterations`, `timeout`, and
+`completion-signal` — can sit on a workflow or in `defaults`; a workflow value
+overrides the `defaults` one:
 
 ```yaml title="taboo.yaml"
 workshop: demo
@@ -51,12 +52,23 @@ workflows:
   iterate:
     prompt: "Fix the failing tests. Print DONE when all tests pass."
     max-iterations: 5
+  review:
+    prompt: "Review the diff. Print REVIEW COMPLETE when satisfied."
+    max-iterations: 3
+    completion-signal: REVIEW COMPLETE
 ```
 
-!!! warning "`completion-signal` is `defaults`-only"
-    `taboo.yaml` is parsed with unknown keys rejected. A workflow has no
-    `completion-signal` field, so putting it under `workflows.iterate` makes
-    `LoadConfig` fail with `ErrConfigParse`. Set it under `defaults`.
+Here `iterate` sets no signal of its own, so it falls through to the
+`defaults` sentinel `DONE`, while `review` watches for its own
+`REVIEW COMPLETE`. Sentinels are per-task semantics: give each workflow the
+token its prompt asks the agent to print, and keep `defaults` as the shared
+fallback.
+
+!!! note "Per-workflow `completion-signal` overrides `defaults`"
+    The signal resolves like the other loop knobs — CLI flag (`--signal`) →
+    workflow → `defaults`, first non-empty wins. A workflow with no
+    `completion-signal` inherits the `defaults` one; `--signal` beats both for
+    a single invocation.
 
 `RunWorkflow` locates this config above the start directory, resolves the
 `iterate` workflow into a plan, and runs the loop over a `Commander`:

@@ -477,6 +477,40 @@ func TestRun_DryRunFromOverridesSourceDefinition(t *testing.T) {
 	}
 }
 
+// TestRun_DryRunWorkflowCompletionSignal asserts a workflow-level
+// completion-signal reaches the dry-run plan through the existing printPlan
+// wiring: the plan's completion-signal: line shows the workflow's own sentinel,
+// not the defaults one it overrides. Dry-run only — no commander calls.
+func TestRun_DryRunWorkflowCompletionSignal(t *testing.T) {
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"defaults:\n" +
+		"  completion-signal: DEFAULT-DONE\n" +
+		"workflows:\n" +
+		"  review:\n" +
+		"    prompt: review the diff, print REVIEW COMPLETE when done\n" +
+		"    completion-signal: REVIEW COMPLETE\n"
+	root := t.TempDir()
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, _, err := runCmd(t, env, "review", "--dry-run")
+	if err != nil {
+		t.Fatalf("run --dry-run error = %v, want nil", err)
+	}
+	if !strings.Contains(stdout, "completion-signal: REVIEW COMPLETE") {
+		t.Errorf("plan missing the workflow-level completion-signal:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "DEFAULT-DONE") {
+		t.Errorf("plan shows the defaults signal the workflow overrides:\n%s", stdout)
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("--dry-run must not touch the commander; calls: %v", invocations(fake))
+	}
+}
+
 // TestRun_DryRunVarsLine covers the three states of the dry-run plan's vars:
 // line: a placeholder-free prompt renders "(none)"; a prompt whose placeholders
 // were all filled lists them as supplied and names any supplied-but-unused

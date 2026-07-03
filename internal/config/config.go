@@ -124,6 +124,8 @@ type Workflow struct {
 	MaxIterations int `yaml:"max-iterations,omitempty"`
 	// Timeout overrides the default per-invocation timeout, e.g. "30m".
 	Timeout Duration `yaml:"timeout,omitempty"`
+	// CompletionSignal overrides the default loop-stop sentinel for this workflow.
+	CompletionSignal string `yaml:"completion-signal,omitempty"`
 	// Profile is the resolved effective profile (workflow agent/model, falling
 	// back to the top level). Not serialized.
 	Profile agent.AgentProfile `yaml:"-"`

@@ -81,11 +81,11 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 	sourceDefinition := cmp.Or(ov.From, c.SourceDefinition)
 
 	// Precedence is override → workflow → defaults, first non-zero wins. defaults
-	// is non-nil here (defaulted just above), so cmp.Or covers every layer; there
-	// is no workflow-level completion signal, so that one is override → defaults.
+	// is non-nil here (defaulted just above), so cmp.Or covers every layer for
+	// all three loop knobs.
 	timeout := cmp.Or(ov.Timeout, time.Duration(wf.Timeout), time.Duration(defaults.Timeout))
 	maxIter := cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)
-	signal := cmp.Or(ov.CompletionSignal, defaults.CompletionSignal)
+	signal := cmp.Or(ov.CompletionSignal, wf.CompletionSignal, defaults.CompletionSignal)
 
 	branch := resolveBranch(ov, defaults, workflow)
 

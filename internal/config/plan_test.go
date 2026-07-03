@@ -143,11 +143,12 @@ func TestPlan_OverridesBeatWorkflowAndTopLevel(t *testing.T) {
 		},
 		Workflows: map[string]Workflow{
 			"implement": {
-				Prompt:        "p",
-				Agent:         "claude-code",
-				Model:         "wf-model",
-				Timeout:       Duration(20 * time.Minute),
-				MaxIterations: 5,
+				Prompt:           "p",
+				Agent:            "claude-code",
+				Model:            "wf-model",
+				Timeout:          Duration(20 * time.Minute),
+				MaxIterations:    5,
+				CompletionSignal: "WF_DONE",
 			},
 		},
 	}
@@ -206,14 +207,82 @@ func TestPlan_OverridesBeatWorkflowAndTopLevel(t *testing.T) {
 		if plan.Request.MaxIterations != 5 {
 			t.Errorf("Request.MaxIterations = %d, want %d", plan.Request.MaxIterations, 5)
 		}
-		// No workflow layer for CompletionSignal: it falls through to defaults.
-		if plan.Request.CompletionSignal != "TOP_DONE" {
-			t.Errorf("Request.CompletionSignal = %q, want %q", plan.Request.CompletionSignal, "TOP_DONE")
+		if plan.Request.CompletionSignal != "WF_DONE" {
+			t.Errorf("Request.CompletionSignal = %q, want %q", plan.Request.CompletionSignal, "WF_DONE")
 		}
 		if plan.Config.SourceDefinition != "src-top" {
 			t.Errorf("Config.SourceDefinition = %q, want %q", plan.Config.SourceDefinition, "src-top")
 		}
 	})
+}
+
+// TestPlan_CompletionSignalPrecedence pins the completion signal's three-layer
+// resolution — override → workflow → defaults, first non-empty wins — through
+// every fall-through: the workflow's own signal beats defaults, --signal
+// (ov.CompletionSignal) beats the workflow, an empty workflow field falls
+// through to defaults, and an adhoc (no-workflow) run resolves straight to
+// defaults exactly as before the workflow layer existed.
+func TestPlan_CompletionSignalPrecedence(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "repo", ".taboo")
+	newCfg := func(workflowSignal string) *ProjectConfig {
+		return &ProjectConfig{
+			Agent: "opencode",
+			Model: "m",
+			Defaults: &RunDefaults{
+				Prompt:           "default prompt",
+				CompletionSignal: "DEFAULTS_DONE",
+			},
+			Workflows: map[string]Workflow{
+				"review": {Prompt: "p", CompletionSignal: workflowSignal},
+			},
+		}
+	}
+
+	tests := []struct {
+		name           string
+		workflowSignal string // signal on the "review" workflow; empty leaves the field unset
+		workflow       string // workflow to plan; empty is an adhoc run
+		ov             run.PlanOverrides
+		want           string
+	}{
+		{
+			name:           "workflow signal beats defaults",
+			workflowSignal: "REVIEW COMPLETE",
+			workflow:       "review",
+			want:           "REVIEW COMPLETE",
+		},
+		{
+			name:           "override (--signal) beats the workflow",
+			workflowSignal: "REVIEW COMPLETE",
+			workflow:       "review",
+			ov:             run.PlanOverrides{CompletionSignal: "FLAG_DONE"},
+			want:           "FLAG_DONE",
+		},
+		{
+			name:           "empty workflow field falls through to defaults",
+			workflowSignal: "",
+			workflow:       "review",
+			want:           "DEFAULTS_DONE",
+		},
+		{
+			name:     "adhoc run resolves defaults directly",
+			workflow: "",
+			want:     "DEFAULTS_DONE",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ov := tt.ov
+			ov.Branch = "b"
+			plan, err := newCfg(tt.workflowSignal).Plan(configDir, tt.workflow, nil, ov)
+			if err != nil {
+				t.Fatalf("Plan: unexpected error: %v", err)
+			}
+			if plan.Request.CompletionSignal != tt.want {
+				t.Errorf("Request.CompletionSignal = %q, want %q", plan.Request.CompletionSignal, tt.want)
+			}
+		})
+	}
 }
 
 // TestPlan_RepoPathConfigAnchored pins the RepoPath resolution rule and the

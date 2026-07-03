@@ -124,8 +124,7 @@ independently):
 
 - `agent` and `model`: flag > workflow block > top-level config.
 - `--timeout` and `--iterations`: flag > workflow block > the `defaults:` block.
-- `--signal` (completion signal): flag > the `defaults:` block only. There is no
-  workflow-level completion signal.
+- `--signal` (completion signal): flag > workflow block > the `defaults:` block.
 - `--from` (source-definition): flag > top-level `source-definition`.
 
 Template variables are layered last: `--var KEY=VALUE` flags override matching

@@ -270,6 +270,51 @@ workflows:
 	}
 }
 
+// TestLoadConfig_WorkflowCompletionSignal proves the strict decoder accepts a
+// workflow-level completion-signal — the exact document that failed with
+// ErrConfigParse before Workflow carried the field — and that the value both
+// lands on the workflow and survives a marshal round-trip.
+func TestLoadConfig_WorkflowCompletionSignal(t *testing.T) {
+	path := writeConfig(t, `
+workshop: demo
+base: ubuntu@24.04
+repo: /home/me/repo
+agent: claude-code
+model: `+claudeCodeModel+`
+defaults:
+  completion-signal: DONE
+workflows:
+  iterate:
+    prompt: fix the tests, print REVIEW COMPLETE when green
+    completion-signal: REVIEW COMPLETE
+`)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v, want nil", err)
+	}
+	wf, ok := cfg.Workflows["iterate"]
+	if !ok {
+		t.Fatalf("cfg.Workflows[%q] missing", "iterate")
+	}
+	if got, want := wf.CompletionSignal, "REVIEW COMPLETE"; got != want {
+		t.Errorf("workflow CompletionSignal = %q, want %q", got, want)
+	}
+
+	// Marshal round-trip: the field re-serializes under its kebab-case key and
+	// decodes back to the same value.
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v, want nil", err)
+	}
+	var reloaded ProjectConfig
+	if err := yaml.Unmarshal(out, &reloaded); err != nil {
+		t.Fatalf("yaml.Unmarshal(round-trip) error = %v, want nil", err)
+	}
+	if got, want := reloaded.Workflows["iterate"].CompletionSignal, "REVIEW COMPLETE"; got != want {
+		t.Errorf("round-tripped workflow CompletionSignal = %q, want %q", got, want)
+	}
+}
+
 // TestLoadConfig_UnknownTopLevelAgent surfaces an unresolvable top-level agent
 // as a wrapped ErrUnknownAgent, with a message that names both the offending
 // agent and the config path so the CLI can quote them back.
