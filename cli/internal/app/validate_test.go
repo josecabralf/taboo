@@ -1064,6 +1064,20 @@ func TestValidate_LoopChecks(t *testing.T) {
 		}
 	})
 
+	t.Run("capped loop with stop-on-no-change is silent", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  stop-on-no-change: true\n"+
+			"workflows:\n  iterate:\n    prompt: fix the tests\n    max-iterations: 5\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "loop/iterate"); c != nil {
+			t.Errorf("stop-on-no-change loop emitted %+v, want no loop check (the knob IS an early stop)", *c)
+		}
+	})
+
 	t.Run("single run is silent", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
@@ -1182,6 +1196,32 @@ func TestLoopChecks(t *testing.T) {
 				Workflows: map[string]taboo.Workflow{"iterate": {Prompt: "p", MaxIterations: 2}},
 			},
 			want: []string{"loop/iterate"},
+		},
+		{
+			name: "stop-on-no-change on defaults silences the loop warn",
+			cfg: taboo.ProjectConfig{
+				Defaults:  &taboo.RunDefaults{MaxIterations: 3, StopOnNoChange: true},
+				Workflows: map[string]taboo.Workflow{"iterate": {Prompt: "p"}},
+			},
+			want: nil,
+		},
+		{
+			name: "stop-on-no-change on the workflow silences the loop warn",
+			cfg: taboo.ProjectConfig{
+				Defaults:  &taboo.RunDefaults{MaxIterations: 3},
+				Workflows: map[string]taboo.Workflow{"iterate": {Prompt: "p", StopOnNoChange: true}},
+			},
+			want: nil,
+		},
+		{
+			name: "stop-on-no-change does not silence the signal warn",
+			cfg: taboo.ProjectConfig{
+				Defaults: &taboo.RunDefaults{MaxIterations: 3},
+				Workflows: map[string]taboo.Workflow{
+					"iterate": {Prompt: "no mention", CompletionSignal: "DONE", StopOnNoChange: true},
+				},
+			},
+			want: []string{"signal/iterate"},
 		},
 	}
 	for _, tt := range tests {

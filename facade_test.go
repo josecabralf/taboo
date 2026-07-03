@@ -65,7 +65,7 @@ func TestFacade_ExternalAgentProfileSatisfiesInterface(t *testing.T) {
 }
 
 func TestFacade_StopReasonConstBranching(t *testing.T) {
-	// describe must compile and branch over BOTH re-exported StopReason consts,
+	// describe must compile and branch over ALL re-exported StopReason consts,
 	// proving they keep their typed identity through the facade.
 	describe := func(r taboo.StopReason) string {
 		switch r {
@@ -73,6 +73,8 @@ func TestFacade_StopReasonConstBranching(t *testing.T) {
 			return "signal"
 		case taboo.StopMaxIterations:
 			return "max-iterations"
+		case taboo.StopNoChange:
+			return "no-change"
 		default:
 			return "unknown"
 		}
@@ -83,6 +85,9 @@ func TestFacade_StopReasonConstBranching(t *testing.T) {
 	}
 	if got := describe(taboo.StopMaxIterations); got != "max-iterations" {
 		t.Errorf("describe(StopMaxIterations) = %q, want %q", got, "max-iterations")
+	}
+	if got := describe(taboo.StopNoChange); got != "no-change" {
+		t.Errorf("describe(StopNoChange) = %q, want %q", got, "no-change")
 	}
 }
 

@@ -429,7 +429,11 @@ func varsChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string
 //     every run pays the full N iterations by construction. Needs no prompt
 //     resolution, so it fires even for a workflow whose prompt is
 //     unresolvable. Silent at max-iterations <= 1 (single run, nothing to
-//     stop).
+//     stop), and when the effective stop-on-no-change —
+//     wf.StopOnNoChange || defaults.StopOnNoChange, the same config layers,
+//     OR-resolved because the knob is enable-only — is on: the knob IS an
+//     early stop, so the warning's premise is false. It does NOT silence
+//     signal/: stop-on-no-change cannot fix a mistyped sentinel.
 //
 // Gated behind includePromptFiles: whole-config linting is validate's job, run's
 // preflight stays untouched.
@@ -444,6 +448,9 @@ func loopChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string
 		wf := cfg.Workflows[name]
 		signal := cmp.Or(wf.CompletionSignal, defaults.CompletionSignal)
 		if signal == "" {
+			if wf.StopOnNoChange || defaults.StopOnNoChange {
+				continue // stop-on-no-change is an early stop: the loop warn's premise is false
+			}
 			if maxIter := cmp.Or(wf.MaxIterations, defaults.MaxIterations); maxIter > 1 {
 				checks = append(checks, warn("loop/"+name,
 					"max-iterations is "+strconv.Itoa(maxIter)+" but no completion-signal is set "+

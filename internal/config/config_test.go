@@ -315,6 +315,51 @@ workflows:
 	}
 }
 
+// TestLoadConfig_StopOnNoChange proves the strict decoder accepts
+// stop-on-no-change on both the defaults block and a workflow — the exact
+// document that would fail with ErrConfigParse before the fields existed —
+// and that both values survive a marshal round-trip.
+func TestLoadConfig_StopOnNoChange(t *testing.T) {
+	path := writeConfig(t, `
+workshop: demo
+base: ubuntu@24.04
+repo: /home/me/repo
+agent: claude-code
+model: `+claudeCodeModel+`
+defaults:
+  stop-on-no-change: true
+workflows:
+  iterate:
+    prompt: fix the tests
+    stop-on-no-change: true
+`)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v, want nil", err)
+	}
+	if !cfg.Defaults.StopOnNoChange {
+		t.Error("Defaults.StopOnNoChange = false, want true")
+	}
+	if !cfg.Workflows["iterate"].StopOnNoChange {
+		t.Error("workflow StopOnNoChange = false, want true")
+	}
+
+	// Marshal round-trip: both fields re-serialize under the kebab-case key and
+	// decode back to the same values.
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v, want nil", err)
+	}
+	var reloaded ProjectConfig
+	if err := yaml.Unmarshal(out, &reloaded); err != nil {
+		t.Fatalf("yaml.Unmarshal(round-trip) error = %v, want nil", err)
+	}
+	if !reloaded.Defaults.StopOnNoChange || !reloaded.Workflows["iterate"].StopOnNoChange {
+		t.Errorf("round-tripped stop-on-no-change = defaults:%v workflow:%v, want both true",
+			reloaded.Defaults.StopOnNoChange, reloaded.Workflows["iterate"].StopOnNoChange)
+	}
+}
+
 // TestLoadConfig_UnknownTopLevelAgent surfaces an unresolvable top-level agent
 // as a wrapped ErrUnknownAgent, with a message that names both the offending
 // agent and the config path so the CLI can quote them back.

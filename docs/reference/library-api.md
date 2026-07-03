@@ -210,13 +210,18 @@ type OrchestratedRequest struct {
     RunRequest                       // embedded
     MaxIterations    int             // zero or negative = a single run
     CompletionSignal string          // sentinel in stdout that stops the loop early
+    StopOnNoChange   bool            // opt-in: stop when an iteration lands no new commit
     ResultExtractor  ResultExtractor // optional; parses a typed result post-loop
 }
 ```
 
 `OrchestratedRequest` describes a looped run: an embedded `RunRequest` plus the
 loop's own knobs. It is the type of `Plan.Request`. `ResultExtractor` is nil to
-skip extraction, leaving `OrchestratedResult.Result` nil.
+skip extraction, leaving `OrchestratedResult.Result` nil. `StopOnNoChange`
+stops the loop early when an iteration produces no new commit (the branch tip
+after `Exec` equals the tip before it) — see `StopNoChange` below. It is off by
+default, deliberately: a loop whose work product is output rather than commits
+would otherwise stop after one iteration.
 
 ### OrchestratedResult
 
@@ -242,12 +247,20 @@ type StopReason string
 
 const StopMaxIterations StopReason = "max-iterations"
 const StopSignal        StopReason = "signal"
+const StopNoChange      StopReason = "no-change"
 ```
 
 `StopReason` explains why an orchestrated run's iteration loop ended.
 `StopMaxIterations` means the loop exhausted `MaxIterations` without seeing the
 completion signal. `StopSignal` means the agent emitted the completion signal and
-the loop stopped early.
+the loop stopped early. `StopNoChange` means `StopOnNoChange` was enabled and an
+iteration ended with the branch tip unmoved — a fixed point: every iteration
+re-runs the same request in the same worktree, so the next `Exec` would replay
+an identical prompt against identical state. The check runs after every `Exec`
+including the last (a final-iteration stall reports `StopNoChange`, not
+`StopMaxIterations`, mirroring the signal check's placement), and the signal
+outranks it: an iteration that both prints the sentinel and lands no commit
+reports `StopSignal`.
 
 ## Building blocks
 
@@ -482,11 +495,14 @@ type RunDefaults struct {
     Timeout          Duration `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
     MaxIterations    int      `yaml:"max-iterations,omitempty"`
     CompletionSignal string   `yaml:"completion-signal,omitempty"`
+    StopOnNoChange   bool     `yaml:"stop-on-no-change,omitempty"`
 }
 ```
 
 `RunDefaults` are scalar-only run settings applied when a workflow or flag does
-not override them. `Timeout` is a `Duration` (a named `time.Duration`) written in
+not override them. `StopOnNoChange` is enable-only: the effective value is the
+OR across the override/workflow/defaults layers, so any layer can turn it on
+and none can turn it off (see [taboo-yaml.md](taboo-yaml.md)). `Timeout` is a `Duration` (a named `time.Duration`) written in
 `taboo.yaml` as a duration string such as `30m` or `1h30m`. The type lives in the
 internal config package, so callers set it through the YAML, not as a Go value.
 
@@ -501,6 +517,7 @@ type Workflow struct {
     MaxIterations    int          `yaml:"max-iterations,omitempty"`
     Timeout          Duration     `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
     CompletionSignal string       `yaml:"completion-signal,omitempty"`
+    StopOnNoChange   bool         `yaml:"stop-on-no-change,omitempty"`
     Profile          AgentProfile `yaml:"-"`
 }
 ```

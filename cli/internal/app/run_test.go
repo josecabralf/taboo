@@ -875,6 +875,129 @@ func TestPlanToJSON(t *testing.T) {
 	})
 }
 
+// TestRun_StopOnNoChangeThreadsToPlan asserts the --stop-on-no-change flag (and
+// its config-level equivalents) reach the resolved plan, observed through both
+// dry-run surfaces: the jsonPlan's additive stopOnNoChange field and the
+// printed plan's stop-on-no-change: line. Off by default; the OR resolution
+// means any of flag/workflow/defaults turns it on.
+func TestRun_StopOnNoChangeThreadsToPlan(t *testing.T) {
+	t.Run("off by default", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if doc := decodeJSONPlan(t, stdout); doc.StopOnNoChange {
+			t.Errorf("stopOnNoChange = true, want false (knob is opt-in)")
+		}
+	})
+
+	t.Run("--stop-on-no-change flag enables", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json", "--stop-on-no-change")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if doc := decodeJSONPlan(t, stdout); !doc.StopOnNoChange {
+			t.Errorf("stopOnNoChange = false, want true (--stop-on-no-change set)")
+		}
+	})
+
+	t.Run("workflow-level knob shows in the printed plan", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody+"    stop-on-no-change: true\n")
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "stop-on-no-change: true") {
+			t.Errorf("plan missing the effective stop-on-no-change line:\n%s", stdout)
+		}
+	})
+
+	t.Run("printed plan shows false when off", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "stop-on-no-change: false") {
+			t.Errorf("plan missing the stop-on-no-change line:\n%s", stdout)
+		}
+	})
+}
+
+// TestRun_JSONNoChangeStopReason asserts a run stopped by the commit-based
+// early stop emits "stopReason": "no-change" through the existing frozen key:
+// with stop-on-no-change on defaults and the standard fake (every rev-parse
+// answers the same SHA — a first-iteration no-op), the loop stops after one
+// exec instead of paying the cap, and the document's key set stays exactly
+// the #134 frozen five plus the #141 additive pair.
+func TestRun_JSONNoChangeStopReason(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"agent: opencode\n" +
+		"model: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"defaults:\n" +
+		"  branch-prefix: taboo/\n" +
+		"  max-iterations: 4\n" +
+		"  stop-on-no-change: true\n" +
+		"workflows:\n" +
+		"  fix:\n" +
+		"    prompt: fix it\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake() // every rev-parse answers deadbeefcafe: tip never moves
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, _, err := runCmd(t, env, "fix", "--json", "--branch", "agent/custom")
+	if err != nil {
+		t.Fatalf("run --json error = %v, want nil", err)
+	}
+	var res jsonRunResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	if res.StopReason != "no-change" {
+		t.Errorf("stopReason = %q, want %q", res.StopReason, "no-change")
+	}
+	if res.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1 (first exec is already the fixed point)", res.Iterations)
+	}
+	if got := countInvocations(fake, "exec"); got != 1 {
+		t.Errorf("exec calls = %d, want 1 (stopped at the fixed point); calls: %v", got, invocations(fake))
+	}
+
+	// The frozen keys hold: exactly the five #134 keys plus the two #141
+	// additive ones — "no-change" is a new value, not a new key.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	wantKeys := []string{"baseCommit", "branch", "changed", "commit", "iterations", "output", "stopReason"}
+	gotKeys := make([]string, 0, len(m))
+	for k := range m {
+		gotKeys = append(gotKeys, k)
+	}
+	slices.Sort(gotKeys)
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("--json keys = %v, want %v", gotKeys, wantKeys)
+	}
+}
+
 // TestVarsSummary pins the pure vars-line renderer directly: the three states
 // the dry-run plan can show, plus unused supplied keys named in sorted order.
 func TestVarsSummary(t *testing.T) {
@@ -2070,7 +2193,8 @@ func TestRun_DefaultWorkflowUndefined(t *testing.T) {
 func TestRun_FlagSet(t *testing.T) {
 	want := []string{
 		"prompt", "prompt-file", "vars-file", "var", "branch", "model", "agent",
-		"timeout", "iterations", "signal", "dry-run", "yes", "json", "from",
+		"timeout", "iterations", "signal", "stop-on-no-change", "dry-run", "yes",
+		"json", "from",
 	}
 	var got []string
 	newRunCmd(Env{}).Flags().VisitAll(func(f *pflag.Flag) {

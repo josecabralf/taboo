@@ -285,6 +285,61 @@ func TestPlan_CompletionSignalPrecedence(t *testing.T) {
 	}
 }
 
+// TestPlan_StopOnNoChangeORAcrossLayers pins the knob's resolution semantic:
+// a boolean OR across override → workflow → defaults, enable-only. Unlike the
+// scalar loop knobs (cmp.Or, first non-zero wins), any layer can turn it on
+// and no layer combination yields "on below, off effective" — there is no
+// tri-state disable.
+func TestPlan_StopOnNoChangeORAcrossLayers(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "repo", ".taboo")
+	newCfg := func(defaultsOn, workflowOn bool) *ProjectConfig {
+		return &ProjectConfig{
+			Agent: "opencode",
+			Model: "m",
+			Defaults: &RunDefaults{
+				Prompt:         "default prompt",
+				StopOnNoChange: defaultsOn,
+			},
+			Workflows: map[string]Workflow{
+				"fix": {Prompt: "p", StopOnNoChange: workflowOn},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                   string
+		defaultsOn, workflowOn bool
+		ov                     run.PlanOverrides
+		want                   bool
+	}{
+		{name: "all off resolves off", want: false},
+		{name: "defaults-only on enables", defaultsOn: true, want: true},
+		{name: "workflow-only on enables", workflowOn: true, want: true},
+		{name: "override-only on enables", ov: run.PlanOverrides{StopOnNoChange: true}, want: true},
+		{
+			name:       "defaults on cannot be disabled above (enable-only, no tri-state)",
+			defaultsOn: true,
+			ov:         run.PlanOverrides{StopOnNoChange: false},
+			want:       true,
+		},
+		{name: "every layer on stays on", defaultsOn: true, workflowOn: true,
+			ov: run.PlanOverrides{StopOnNoChange: true}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ov := tt.ov
+			ov.Branch = "b"
+			plan, err := newCfg(tt.defaultsOn, tt.workflowOn).Plan(configDir, "fix", nil, ov)
+			if err != nil {
+				t.Fatalf("Plan: unexpected error: %v", err)
+			}
+			if plan.Request.StopOnNoChange != tt.want {
+				t.Errorf("Request.StopOnNoChange = %v, want %v", plan.Request.StopOnNoChange, tt.want)
+			}
+		})
+	}
+}
+
 // TestPlan_RepoPathConfigAnchored pins the RepoPath resolution rule and the
 // structural ProjectDir == RepoPath/.taboo invariant. RepoPath is ALWAYS
 // absolute. The cases: adopter layout (configDir under .taboo, no override →

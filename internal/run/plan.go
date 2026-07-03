@@ -21,7 +21,12 @@ type PlanOverrides struct {
 	Timeout          time.Duration
 	MaxIterations    int
 	CompletionSignal string
-	Branch           string
+	// StopOnNoChange enables the commit-based early stop for this run. It is
+	// enable-only, not part of the first-non-zero precedence chain: the effective
+	// value is the OR of this field and the workflow/defaults layers, so a false
+	// here cannot disable a config-level enable.
+	StopOnNoChange bool
+	Branch         string
 	// BaseRef is threaded straight onto RunRequest.BaseRef (a per-call concern with
 	// no config/workflow layer); see that field for the behavior. Empty = default.
 	BaseRef            string

@@ -106,6 +106,9 @@ type RunDefaults struct {
 	// CompletionSignal is the string whose appearance in agent output ends the
 	// run early.
 	CompletionSignal string `yaml:"completion-signal,omitempty"`
+	// StopOnNoChange stops a looped run early when an iteration produces no
+	// new commit. Enable-only: any layer can turn it on, none can turn it off.
+	StopOnNoChange bool `yaml:"stop-on-no-change,omitempty"`
 }
 
 // Workflow is a named, reusable task type that overrides scalar run params. Like
@@ -126,6 +129,10 @@ type Workflow struct {
 	Timeout Duration `yaml:"timeout,omitempty"`
 	// CompletionSignal overrides the default loop-stop sentinel for this workflow.
 	CompletionSignal string `yaml:"completion-signal,omitempty"`
+	// StopOnNoChange stops a looped run of this workflow early when an iteration
+	// produces no new commit. Enable-only: it can turn the knob on for the
+	// workflow, but cannot turn off a defaults-level enable.
+	StopOnNoChange bool `yaml:"stop-on-no-change,omitempty"`
 	// Profile is the resolved effective profile (workflow agent/model, falling
 	// back to the top level). Not serialized.
 	Profile agent.AgentProfile `yaml:"-"`

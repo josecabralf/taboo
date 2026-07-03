@@ -117,6 +117,7 @@ config. With neither a positional workflow, a prompt flag, nor a
 | `--timeout` | `0` | Override the per-exec timeout, e.g. `30m` (Go duration). Zero leaves it unset. |
 | `--iterations` | `0` | Override the max iteration cap. Zero or less leaves it unset. |
 | `--signal` | `""` | String that, when it appears in agent output, stops the iteration loop early. |
+| `--stop-on-no-change` | `false` | Stop the iteration loop early when an iteration produces no new commit (the branch tip stops moving). Enable-only: it cannot disable a config-level enable. |
 | `--branch` | auto-generated | Branch name for this run. The default is composed of the prefix, the workflow (or `adhoc`), and a timestamp. |
 | `--from` | `""` | The workshop definition to derive the agent workshop from; overrides `taboo.yaml`'s source-definition for this run. |
 | `--dry-run` | `false` | Resolve and print the plan without running anything. |
@@ -130,6 +131,9 @@ independently):
 - `agent` and `model`: flag > workflow block > top-level config.
 - `--timeout` and `--iterations`: flag > workflow block > the `defaults:` block.
 - `--signal` (completion signal): flag > workflow block > the `defaults:` block.
+- `--stop-on-no-change`: the OR of the flag, the workflow block, and the
+  `defaults:` block — not a precedence chain. Any layer can enable, none can
+  disable (see [taboo-yaml.md](taboo-yaml.md)).
 - `--from` (source-definition): flag > top-level `source-definition`.
 
 Template variables are layered last: `--var KEY=VALUE` flags override matching
@@ -194,7 +198,9 @@ carries an indented JSON object (`jsonRunResult`):
 ```
 
 The `stopReason` field is the `StopReason` flattened to a string
-(`max-iterations` or `signal`). `baseCommit` is the tip the run's branch
+(`max-iterations`, `signal`, or `no-change` — the last only when the effective
+`stop-on-no-change` is on and an iteration moved no commit; it is a new value
+in the frozen key, not a new key). `baseCommit` is the tip the run's branch
 started from (`res.BaseCommit`, captured at setup time) and `changed` is
 `res.Changed()` — true iff the run produced at least one new commit. Both are
 additive: the five keys that predate them (`branch`, `commit`, `output`,
@@ -220,6 +226,7 @@ plan as an indented JSON object (`jsonPlan`, built by the pure `planToJSON`):
   "timeout": "30m0s",
   "maxIterations": 3,
   "completionSignal": "DONE",
+  "stopOnNoChange": false,
   "prompt": "please fix the failing tests",
   "placeholders": [],
   "vars": {
@@ -233,7 +240,9 @@ plan as an indented JSON object (`jsonPlan`, built by the pure `planToJSON`):
 `workflow` is `""` and `adhoc` is `true` for an ad-hoc `--prompt` run.
 `sourceDefinition` is `""` when unset (the human plan omits the line; the JSON
 key is always present). `timeout` is the Go duration string the human plan
-renders. `prompt` is the same one-line preview (`promptSummary`) the human plan
+renders. `stopOnNoChange` is the effective (OR-resolved) commit-based
+early-stop knob, mirroring the human plan's `stop-on-no-change:` line; it is
+additive on the dry-run document, which carries no key freeze. `prompt` is the same one-line preview (`promptSummary`) the human plan
 and `list` show — the full resolved prompt is deliberately not embedded.
 `placeholders` is the prompt's sorted `{{VAR}}` names, marshalled as `[]`
 (never `null`) when there are none. `vars` mirrors the human plan's `vars:`
@@ -299,8 +308,11 @@ Checks (`validateChecks` -> `configCorrectnessChecks`):
 - `loop/<workflow>`: a `warn` when the effective `max-iterations` (workflow
   over `defaults`) is greater than 1 with no effective `completion-signal`
   anywhere — the loop has no early stop, so every run pays the full N
-  iterations. Silent at `max-iterations <= 1` or when a signal exists
-  (`loopChecks`).
+  iterations. Silent at `max-iterations <= 1`, when a signal exists, or when
+  the effective `stop-on-no-change` (workflow OR `defaults`) is enabled — the
+  knob is itself an early stop, so the warning's premise no longer holds. It
+  does not silence `signal/`: stop-on-no-change cannot fix a mistyped
+  sentinel (`loopChecks`).
 - `repo`/`repo-path`/`repo-git`: the repo must be set, on persistent storage
   (not under `/tmp` or `/run`), and a git work tree (`repoValidateChecks`).
 - `source-definition`/`derive`: a `<repo>/workshop.yaml` source must exist, and

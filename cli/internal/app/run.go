@@ -44,6 +44,10 @@ type runOptions struct {
 	iterations int
 	// signal overrides the completion signal that ends the iteration loop early.
 	signal string
+	// stopOnNoChange enables the commit-based early stop: the loop ends when an
+	// iteration produces no new commit. Enable-only (false leaves the config
+	// layers in charge; it cannot disable a config-level enable).
+	stopOnNoChange bool
 	// branch overrides the auto-generated per-run branch verbatim.
 	branch string
 	// from selects the workshop definition to derive the agent workshop from,
@@ -97,6 +101,7 @@ func newRunCmd(env Env) *cobra.Command {
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", 0, "override the per-exec timeout, e.g. 30m")
 	cmd.Flags().IntVar(&opts.iterations, "iterations", 0, "override the max iteration cap for this run")
 	cmd.Flags().StringVar(&opts.signal, "signal", "", "string that, when it appears in agent output, stops the iteration loop early (run treated as complete)")
+	cmd.Flags().BoolVar(&opts.stopOnNoChange, "stop-on-no-change", false, "stop the iteration loop early when an iteration produces no new commit")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", "branch name for this run (default: auto-generated from the workflow name — or \"adhoc\" for a --prompt run — and a timestamp)")
 	cmd.Flags().StringVar(&opts.from, "from", "", "the workshop definition to derive the agent workshop from; overrides taboo.yaml source-definition")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "resolve and print the plan without running anything")
@@ -186,7 +191,8 @@ func planOverrides(env Env, opts *runOptions) taboo.PlanOverrides {
 	return taboo.PlanOverrides{
 		Agent: taboo.AgentName(opts.agent), Model: opts.model,
 		Timeout: opts.timeout, MaxIterations: opts.iterations,
-		CompletionSignal: opts.signal, Branch: opts.branch, From: opts.from,
+		CompletionSignal: opts.signal, StopOnNoChange: opts.stopOnNoChange,
+		Branch: opts.branch, From: opts.from,
 		Prompt: opts.prompt, PromptFile: opts.promptFile,
 		Stdout: env.Stderr, Stderr: env.Stderr,
 	}
@@ -555,6 +561,7 @@ type jsonPlan struct {
 	Timeout          string       `json:"timeout"`
 	MaxIterations    int          `json:"maxIterations"`
 	CompletionSignal string       `json:"completionSignal"`
+	StopOnNoChange   bool         `json:"stopOnNoChange"`
 	Prompt           string       `json:"prompt"`
 	Placeholders     []string     `json:"placeholders"`
 	Vars             jsonPlanVars `json:"vars"`
@@ -590,6 +597,7 @@ func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
 		Timeout:          plan.Request.Timeout.String(),
 		MaxIterations:    plan.Request.MaxIterations,
 		CompletionSignal: plan.Request.CompletionSignal,
+		StopOnNoChange:   plan.Request.StopOnNoChange,
 		Prompt:           promptSummary(plan.Request.Prompt),
 		Placeholders:     placeholders,
 		Vars: jsonPlanVars{
@@ -624,6 +632,7 @@ func printPlan(env Env, plan *taboo.Plan, vars map[string]string) {
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "timeout:", plan.Request.Timeout)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %d\n", "max-iterations:", plan.Request.MaxIterations)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "completion-signal:", plan.Request.CompletionSignal)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %t\n", "stop-on-no-change:", plan.Request.StopOnNoChange)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "prompt:", promptSummary(plan.Request.Prompt))
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "vars:", varsSummary(plan.Placeholders, vars))
 }

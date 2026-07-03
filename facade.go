@@ -218,6 +218,10 @@ const StopSignal = run.StopSignal
 // StopMaxIterations means the loop exhausted MaxIterations without the signal.
 const StopMaxIterations = run.StopMaxIterations
 
+// StopNoChange means stop-on-no-change was enabled and an iteration ended with
+// the branch tip unmoved, so the loop stopped at the fixed point.
+const StopNoChange = run.StopNoChange
+
 // NewPool returns a Pool that fans runs out across at most limit concurrent workshops.
 func NewPool(cfg Config, limit int, cmd Commander) *Pool { return run.NewPool(cfg, limit, cmd) }
 
