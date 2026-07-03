@@ -116,7 +116,7 @@ config. With neither a positional workflow, a prompt flag, nor a
 | `--from` | `""` | The workshop definition to derive the agent workshop from; overrides `taboo.yaml`'s source-definition for this run. |
 | `--dry-run` | `false` | Resolve and print the plan without running anything. |
 | `--yes` | `false` | Skip the interactive pre-run confirmation. |
-| `--json` | `false` | Emit the run result as JSON. |
+| `--json` | `false` | Emit the run result — or, with `--dry-run`, the resolved plan — as JSON. |
 
 Parameter precedence is per field, not one blanket rule (`cli/internal/app/run.go`
 packs the flags into `taboo.PlanOverrides`; the library resolves each field
@@ -146,8 +146,10 @@ the run is refused with `errRunFailed`. At a TTY without `--yes`, `run` then
 prints a one-line summary to stderr and reads a `y/N` answer from stdin; a blank
 line, EOF, or anything but `y`/`yes` declines and prints `Aborted.`
 (`confirmRun`, `promptYesNo`). A non-interactive caller or `--yes` proceeds
-without prompting. A `--dry-run` invocation prints the resolved plan and never
-reaches the preflight.
+without prompting. A `--dry-run` invocation emits the resolved plan — the human
+form, or a JSON document with `--json` — and never reaches the preflight (or
+the vars warnings: the JSON document carries the vars state itself, so dry-run
+writes nothing to stderr).
 
 Output routing: live agent output (both the agent's stdout and stderr) and all
 progress stream to stderr, so the machine result on stdout stays clean
@@ -177,7 +179,44 @@ With `--json`, stdout carries an indented JSON object (`jsonRunResult`):
 The `stopReason` field is the `StopReason` flattened to a string
 (`max-iterations` or `signal`). A `--dry-run` plan prints to stdout under
 `taboo run (dry run) — resolved plan:` with one aligned label per line
-(`printPlan`).
+(`printPlan`). With `--dry-run --json`, stdout instead carries the resolved
+plan as an indented JSON object (`jsonPlan`, built by the pure `planToJSON`):
+
+```json
+{
+  "workflow": "fix",
+  "adhoc": false,
+  "branch": "taboo/fix-20260617-101500-000000001",
+  "agent": "opencode",
+  "model": "anthropic/claude-sonnet-4-5",
+  "workshop": "demo-opencode",
+  "repo": "/home/user/project",
+  "sourceDefinition": "",
+  "timeout": "30m0s",
+  "maxIterations": 3,
+  "completionSignal": "DONE",
+  "prompt": "please fix the failing tests",
+  "placeholders": [],
+  "vars": {
+    "supplied": [],
+    "unused": [],
+    "unfilled": false
+  }
+}
+```
+
+`workflow` is `""` and `adhoc` is `true` for an ad-hoc `--prompt` run.
+`sourceDefinition` is `""` when unset (the human plan omits the line; the JSON
+key is always present). `timeout` is the Go duration string the human plan
+renders. `prompt` is the same one-line preview (`promptSummary`) the human plan
+and `list` show — the full resolved prompt is deliberately not embedded.
+`placeholders` is the prompt's sorted `{{VAR}}` names, marshalled as `[]`
+(never `null`) when there are none. `vars` mirrors the human plan's `vars:`
+line as structured data: `supplied` is the sorted caller-supplied keys,
+`unused` the sorted supplied keys matching no placeholder (which substitution
+silently ignores), and `unfilled` is `true` exactly when the prompt has
+placeholders but no vars were supplied (they reach the agent literally). The
+run-result `jsonRunResult` shape above is unchanged.
 
 Exit behaviour: non-zero on a config/selection error, a preflight failure
 (`errRunFailed`), or a failure inside the run. A declined confirmation returns
@@ -216,6 +255,12 @@ Checks (`validateChecks` -> `configCorrectnessChecks`):
   is a `warn`, not an error (`modelChecks`, `MatchModelFormat`).
 - `prompt-file/<path>`: every referenced prompt file exists, resolved relative
   to the config file's directory (`promptFileChecks`).
+- `vars/<workflow>`: an `ok`-level per-workflow check listing the `{{VAR}}`
+  placeholders the workflow's effective prompt references (`prompt references:
+  <names>`) — a discoverability surface ("what vars does this workflow
+  take?"), never a failure. Silent for a placeholder-free workflow, and
+  skipped when the effective prompt is unresolvable (`prompt-file/` already
+  fails it) (`varsChecks`).
 - `default-workflow`: a set `default-workflow` must name a configured workflow
   — a hard failure with the same wording `taboo run` uses at run time; `ok`
   when it resolves, and no check at all when unset (unset is legal)

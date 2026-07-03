@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -571,6 +573,281 @@ func TestRun_DryRunVarsLine(t *testing.T) {
 		}
 		if !strings.Contains(stdout, "unfilled") || !strings.Contains(stdout, "--var") {
 			t.Errorf("plan vars line missing the unfilled hint:\n%s", stdout)
+		}
+	})
+}
+
+// decodeJSONPlan parses stdout as the run --dry-run --json document, failing
+// the test on invalid JSON.
+func decodeJSONPlan(t *testing.T, stdout string) jsonPlan {
+	t.Helper()
+	var doc jsonPlan
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
+	}
+	return doc
+}
+
+// TestRun_DryRunJSON is the tracer bullet for the --dry-run --json machine
+// plan: a workflow dry run emits one JSON object to stdout carrying the
+// resolved plan fields, writes nothing to stderr, and stays completely
+// host-free (zero commander calls), exactly like the human dry run.
+func TestRun_DryRunJSON(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("run --dry-run --json error = %v, want nil", err)
+	}
+	doc := decodeJSONPlan(t, stdout)
+	if doc.Workflow != "fix" || doc.Adhoc {
+		t.Errorf("workflow = %q, adhoc = %v, want \"fix\", false", doc.Workflow, doc.Adhoc)
+	}
+	if !strings.HasPrefix(doc.Branch, "taboo/fix-") {
+		t.Errorf("branch = %q, want prefix %q", doc.Branch, "taboo/fix-")
+	}
+	if doc.Agent != "opencode" {
+		t.Errorf("agent = %q, want opencode", doc.Agent)
+	}
+	if doc.Model != "anthropic/claude" {
+		t.Errorf("model = %q, want anthropic/claude", doc.Model)
+	}
+	if doc.Workshop != "demo-opencode" {
+		t.Errorf("workshop = %q, want the derived per-agent name demo-opencode", doc.Workshop)
+	}
+	if doc.Prompt != "please fix the failing tests" {
+		t.Errorf("prompt = %q, want the workflow prompt preview", doc.Prompt)
+	}
+	if stderr != "" {
+		t.Errorf("dry-run --json must write nothing to stderr, got:\n%s", stderr)
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("--dry-run --json must not touch the commander; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_DryRunJSONAdhoc asserts an ad-hoc --prompt dry run carries
+// workflow:"" and adhoc:true — the machine mirror of the human plan's
+// "run: ad-hoc (--prompt)" label — and stays host-free.
+func TestRun_DryRunJSONAdhoc(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "--prompt", "tidy the imports", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("run --prompt --dry-run --json error = %v, want nil", err)
+	}
+	doc := decodeJSONPlan(t, stdout)
+	if doc.Workflow != "" || !doc.Adhoc {
+		t.Errorf("workflow = %q, adhoc = %v, want \"\", true", doc.Workflow, doc.Adhoc)
+	}
+	if !strings.HasPrefix(doc.Branch, "taboo/adhoc-") {
+		t.Errorf("branch = %q, want prefix %q", doc.Branch, "taboo/adhoc-")
+	}
+	if doc.Prompt != "tidy the imports" {
+		t.Errorf("prompt = %q, want the --prompt preview", doc.Prompt)
+	}
+	if stderr != "" {
+		t.Errorf("dry-run --json must write nothing to stderr, got:\n%s", stderr)
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("--dry-run --json must not touch the commander; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_DryRunJSONVars covers the machine plan's vars object across
+// varsSummary's three exhaustive states: a placeholder-free prompt marshals
+// placeholders as [] (never null) with an all-empty vars object; a fully
+// supplied run lists the sorted supplied keys and names the unused ones; a
+// no-vars run over a parameterized prompt reports unfilled:true.
+func TestRun_DryRunJSONVars(t *testing.T) {
+	parameterized := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"workflows:\n  triage:\n    prompt: 'T: {{ISSUE_TITLE}} B: {{ISSUE_BODY}}'\n"
+
+	t.Run("no placeholders marshals empty vars and []", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "\"placeholders\": []") {
+			t.Errorf("placeholders must marshal as [] (never null):\n%s", stdout)
+		}
+		doc := decodeJSONPlan(t, stdout)
+		if len(doc.Vars.Supplied) != 0 || len(doc.Vars.Unused) != 0 || doc.Vars.Unfilled {
+			t.Errorf("vars = %+v, want all-empty, unfilled=false", doc.Vars)
+		}
+	})
+
+	t.Run("supplied vars sorted with unused keys named", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterized)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "triage", "--dry-run", "--json",
+			"--var", "TYPO=x", "--var", "ISSUE_TITLE=t", "--var", "ISSUE_BODY=b")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		doc := decodeJSONPlan(t, stdout)
+		if !slices.Equal(doc.Placeholders, []string{"ISSUE_BODY", "ISSUE_TITLE"}) {
+			t.Errorf("placeholders = %v, want sorted [ISSUE_BODY ISSUE_TITLE]", doc.Placeholders)
+		}
+		if !slices.Equal(doc.Vars.Supplied, []string{"ISSUE_BODY", "ISSUE_TITLE", "TYPO"}) {
+			t.Errorf("vars.supplied = %v, want sorted [ISSUE_BODY ISSUE_TITLE TYPO]", doc.Vars.Supplied)
+		}
+		if !slices.Equal(doc.Vars.Unused, []string{"TYPO"}) {
+			t.Errorf("vars.unused = %v, want [TYPO]", doc.Vars.Unused)
+		}
+		if doc.Vars.Unfilled {
+			t.Errorf("vars.unfilled = true, want false (all placeholders filled)")
+		}
+	})
+
+	t.Run("no vars over placeholders reports unfilled", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterized)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, stderr, err := runCmd(t, env, "triage", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		doc := decodeJSONPlan(t, stdout)
+		if !doc.Vars.Unfilled {
+			t.Errorf("vars.unfilled = false, want true (placeholders with no vars)")
+		}
+		if len(doc.Vars.Supplied) != 0 || len(doc.Vars.Unused) != 0 {
+			t.Errorf("vars = %+v, want empty supplied/unused", doc.Vars)
+		}
+		if stderr != "" {
+			t.Errorf("the JSON document carries the vars state; stderr must stay warning-free, got:\n%s", stderr)
+		}
+	})
+}
+
+// TestRun_DryRunJSONSourceDefinition asserts sourceDefinition is "" when the
+// config sets none (the key is always present, unlike the human plan's omitted
+// line) and carries the --from value when set, and that timeout is the Go
+// duration string the human plan renders.
+func TestRun_DryRunJSONSourceDefinition(t *testing.T) {
+	t.Run("unset marshals as empty string", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json", "--timeout", "30m")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "\"sourceDefinition\": \"\"") {
+			t.Errorf("sourceDefinition key must be present and empty when unset:\n%s", stdout)
+		}
+		doc := decodeJSONPlan(t, stdout)
+		if doc.Timeout != "30m0s" {
+			t.Errorf("timeout = %q, want the Go duration string %q", doc.Timeout, "30m0s")
+		}
+	})
+
+	t.Run("--from value carried", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody+"source-definition: configured\n")
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json", "--from", "somedef")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		doc := decodeJSONPlan(t, stdout)
+		if doc.SourceDefinition != "somedef" {
+			t.Errorf("sourceDefinition = %q, want the --from value somedef", doc.SourceDefinition)
+		}
+	})
+}
+
+// TestPlanToJSON pins the pure projection directly over hand-built plans, like
+// TestVarsSummary/TestPromptSummary: every printPlan field lands on its
+// camelCase key, adhoc flips on an empty workflow, timeout renders as the Go
+// duration string, the prompt is the one-line preview (never the full text),
+// nil placeholders/unused normalize to empty slices, and the vars object
+// mirrors varsSummary's three states.
+func TestPlanToJSON(t *testing.T) {
+	profile, err := taboo.NewProfile(taboo.OpenCode, "anthropic/claude")
+	if err != nil {
+		t.Fatalf("NewProfile: %v", err)
+	}
+	base := taboo.Plan{
+		Config: taboo.Config{
+			Workshop: "demo-opencode", Agent: profile,
+			RepoPath: "/home/user/repo", SourceDefinition: "somedef",
+		},
+		Request: taboo.OrchestratedRequest{
+			RunRequest: taboo.RunRequest{
+				Prompt: "first line\nsecond line", Branch: "taboo/fix-1", Timeout: 30 * time.Minute,
+			},
+			MaxIterations: 3, CompletionSignal: "DONE",
+		},
+		Workflow: "fix",
+		Model:    "anthropic/claude",
+	}
+
+	t.Run("workflow plan maps every field", func(t *testing.T) {
+		plan := base
+		plan.Placeholders = []string{"A", "B"}
+		got := planToJSON(&plan, map[string]string{"A": "1", "B": "2", "Z": "9"})
+		want := jsonPlan{
+			Workflow: "fix", Adhoc: false, Branch: "taboo/fix-1",
+			Agent: "opencode", Model: "anthropic/claude", Workshop: "demo-opencode",
+			Repo: "/home/user/repo", SourceDefinition: "somedef",
+			Timeout: "30m0s", MaxIterations: 3, CompletionSignal: "DONE",
+			Prompt:       "first line (2 lines)",
+			Placeholders: []string{"A", "B"},
+			Vars:         jsonPlanVars{Supplied: []string{"A", "B", "Z"}, Unused: []string{"Z"}, Unfilled: false},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("planToJSON = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("ad-hoc plan flips adhoc and empties workflow", func(t *testing.T) {
+		plan := base
+		plan.Workflow = ""
+		got := planToJSON(&plan, nil)
+		if got.Workflow != "" || !got.Adhoc {
+			t.Errorf("workflow = %q, adhoc = %v, want \"\", true", got.Workflow, got.Adhoc)
+		}
+	})
+
+	t.Run("nil placeholders and vars normalize to empty slices", func(t *testing.T) {
+		plan := base
+		got := planToJSON(&plan, nil)
+		if got.Placeholders == nil || len(got.Placeholders) != 0 {
+			t.Errorf("placeholders = %#v, want non-nil empty slice", got.Placeholders)
+		}
+		if got.Vars.Supplied == nil || got.Vars.Unused == nil {
+			t.Errorf("vars slices = %#v, want non-nil empty slices", got.Vars)
+		}
+		if got.Vars.Unfilled {
+			t.Errorf("unfilled = true, want false for a placeholder-free prompt")
+		}
+	})
+
+	t.Run("placeholders with no vars are unfilled", func(t *testing.T) {
+		plan := base
+		plan.Placeholders = []string{"A"}
+		got := planToJSON(&plan, nil)
+		if !got.Vars.Unfilled {
+			t.Errorf("unfilled = false, want true (placeholders, no vars)")
 		}
 	})
 }

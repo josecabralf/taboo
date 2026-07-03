@@ -52,7 +52,8 @@ type runOptions struct {
 	dryRun bool
 	// yes skips the interactive pre-run confirmation (for non-interactive callers).
 	yes bool
-	// asJSON emits the machine result as a JSON object instead of the plain form.
+	// asJSON emits the machine result as a JSON object instead of the plain form:
+	// the run result, or the resolved plan under dryRun.
 	asJSON bool
 	// varsFile is a JSON file of {"VAR":"value"} pairs substituted literally into
 	// {{VAR}} placeholders in the resolved prompt (no shell expansion of the values).
@@ -99,14 +100,17 @@ func newRunCmd(env Env) *cobra.Command {
 	cmd.Flags().StringVar(&opts.from, "from", "", "the workshop definition to derive the agent workshop from; overrides taboo.yaml source-definition")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "resolve and print the plan without running anything")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "skip the interactive pre-run confirmation")
-	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit the run result as JSON")
+	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit the run result (or, with --dry-run, the resolved plan) as JSON")
 	return cmd
 }
 
 // runRun is the run command's select-resolve-preflight-execute flow. It discovers
 // and loads the config, selects what to run (named workflow, ad-hoc, or default),
 // resolves that into a plan via the pkg/taboo config→run bridge, and then either
-// prints the plan (--dry-run) or runs a host preflight and executes it. Each
+// emits the resolved plan (--dry-run: the human form, or the jsonPlan document
+// under --json) or runs a host preflight and executes it. The dry-run branch
+// returns before warnPromptVars and the preflight, so it stays host-free and
+// warning-free on stderr — the JSON document carries the vars state itself. Each
 // stage's failure is surfaced before the next, so a misconfigured project never
 // reaches the workshop.
 func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error {
@@ -129,6 +133,11 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 	}
 
 	if opts.dryRun {
+		if opts.asJSON {
+			enc := json.NewEncoder(env.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(planToJSON(plan, vars))
+		}
 		printPlan(env, plan, vars)
 		return nil
 	}
@@ -495,6 +504,84 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 	_, _ = fmt.Fprintf(env.Stdout, "branch: %s\n", res.Branch)
 	_, _ = fmt.Fprintf(env.Stdout, "commit: %s\n", res.Commit)
 	return nil
+}
+
+// jsonPlanVars is the dry-run plan's vars object: a structured mirror of
+// varsSummary's three states. supplied is the sorted caller-supplied keys ([]
+// when none), unused the sorted supplied keys matching no {{VAR}} placeholder
+// (the keys Substitute silently ignores), and unfilled is true exactly when
+// placeholders exist and no vars were supplied — the documented case where they
+// reach the agent literally. Plan already fails fast on a partial fill, so
+// these three states are exhaustive for a rendered plan.
+type jsonPlanVars struct {
+	Supplied []string `json:"supplied"`
+	Unused   []string `json:"unused"`
+	Unfilled bool     `json:"unfilled"`
+}
+
+// jsonPlan is the --dry-run --json machine shape: printPlan's fields as one
+// flat object, so a script or agent can inspect what a real run would do
+// without parsing the aligned human plan. prompt carries the same one-line
+// promptSummary preview the human plan and list show, never the full resolved
+// prompt; sourceDefinition is "" when unset (the human plan omits the line, the
+// JSON key is always present); timeout is the Go duration string printPlan
+// renders; placeholders marshals as [] (never null) for a placeholder-free
+// prompt, the jsonWorkflow.Placeholders convention.
+type jsonPlan struct {
+	Workflow         string       `json:"workflow"`
+	Adhoc            bool         `json:"adhoc"`
+	Branch           string       `json:"branch"`
+	Agent            string       `json:"agent"`
+	Model            string       `json:"model"`
+	Workshop         string       `json:"workshop"`
+	Repo             string       `json:"repo"`
+	SourceDefinition string       `json:"sourceDefinition"`
+	Timeout          string       `json:"timeout"`
+	MaxIterations    int          `json:"maxIterations"`
+	CompletionSignal string       `json:"completionSignal"`
+	Prompt           string       `json:"prompt"`
+	Placeholders     []string     `json:"placeholders"`
+	Vars             jsonPlanVars `json:"vars"`
+}
+
+// planToJSON projects a resolved plan and the caller-supplied vars into the
+// jsonPlan machine shape. It is pure (no Env, no I/O) — the dry-run branch owns
+// the encoding. adhoc mirrors printPlan's label switch: true exactly when the
+// human plan would print "run: ad-hoc (--prompt)" instead of a workflow name.
+func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
+	supplied := make([]string, 0, len(vars))
+	for key := range vars {
+		supplied = append(supplied, key)
+	}
+	slices.Sort(supplied)
+	unused := unusedVarKeys(plan.Placeholders, vars)
+	if unused == nil {
+		unused = []string{}
+	}
+	placeholders := plan.Placeholders
+	if placeholders == nil {
+		placeholders = []string{}
+	}
+	return jsonPlan{
+		Workflow:         plan.Workflow,
+		Adhoc:            plan.Workflow == "",
+		Branch:           plan.Request.Branch,
+		Agent:            string(plan.Config.Agent.Name()),
+		Model:            plan.Model,
+		Workshop:         plan.Config.Workshop,
+		Repo:             plan.Config.RepoPath,
+		SourceDefinition: plan.Config.SourceDefinition,
+		Timeout:          plan.Request.Timeout.String(),
+		MaxIterations:    plan.Request.MaxIterations,
+		CompletionSignal: plan.Request.CompletionSignal,
+		Prompt:           promptSummary(plan.Request.Prompt),
+		Placeholders:     placeholders,
+		Vars: jsonPlanVars{
+			Supplied: supplied,
+			Unused:   unused,
+			Unfilled: len(vars) == 0 && len(plan.Placeholders) > 0,
+		},
+	}
 }
 
 // printPlan renders the resolved plan to stdout for --dry-run: the workflow,
