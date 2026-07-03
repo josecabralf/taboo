@@ -62,7 +62,9 @@ Here `iterate` sets no signal of its own, so it falls through to the
 `defaults` sentinel `DONE`, while `review` watches for its own
 `REVIEW COMPLETE`. Sentinels are per-task semantics: give each workflow the
 token its prompt asks the agent to print, and keep `defaults` as the shared
-fallback.
+fallback. `taboo validate` warns when a workflow's effective prompt never
+mentions its effective signal — an agent that is never told to print the
+sentinel never prints it, and the loop always exhausts `max-iterations`.
 
 !!! note "Per-workflow `completion-signal` overrides `defaults`"
     The signal resolves like the other loop knobs — CLI flag (`--signal`) →

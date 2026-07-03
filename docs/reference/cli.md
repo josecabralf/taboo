@@ -216,6 +216,21 @@ Checks (`validateChecks` -> `configCorrectnessChecks`):
   is a `warn`, not an error (`modelChecks`, `MatchModelFormat`).
 - `prompt-file/<path>`: every referenced prompt file exists, resolved relative
   to the config file's directory (`promptFileChecks`).
+- `default-workflow`: a set `default-workflow` must name a configured workflow
+  — a hard failure with the same wording `taboo run` uses at run time; `ok`
+  when it resolves, and no check at all when unset (unset is legal)
+  (`defaultWorkflowCheck`).
+- `signal/<workflow>`: a `warn` when the workflow's effective
+  `completion-signal` (workflow over `defaults`) never appears in its
+  effective prompt as a plain substring — the agent is never told to print the
+  sentinel, so the loop will always exhaust `max-iterations`; set it
+  intentionally to silence this. A workflow whose effective prompt is
+  unresolvable is skipped (`prompt-file/` already fails it) (`loopChecks`).
+- `loop/<workflow>`: a `warn` when the effective `max-iterations` (workflow
+  over `defaults`) is greater than 1 with no effective `completion-signal`
+  anywhere — the loop has no early stop, so every run pays the full N
+  iterations. Silent at `max-iterations <= 1` or when a signal exists
+  (`loopChecks`).
 - `repo`/`repo-path`/`repo-git`: the repo must be set, on persistent storage
   (not under `/tmp` or `/run`), and a git work tree (`repoValidateChecks`).
 - `source-definition`/`derive`: a `<repo>/workshop.yaml` source must exist, and

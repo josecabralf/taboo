@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -103,6 +104,8 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 	if includePromptFiles {
 		checks = append(checks, promptFileChecks(cfg, path, statFile)...)
 		checks = append(checks, varsChecks(cfg, path, statFile)...)
+		checks = append(checks, defaultWorkflowCheck(cfg)...)
+		checks = append(checks, loopChecks(cfg, path, statFile)...)
 	}
 	// Resolve the repo directory once, config-anchored (never the process CWD), so
 	// the repo checks and the derive check both speak about the same directory a
@@ -364,6 +367,18 @@ func promptFiles(cfg taboo.ProjectConfig) []string {
 	return out
 }
 
+// sortedWorkflowNames returns the config's workflow names in sorted order, the
+// deterministic iteration the per-workflow check groups (varsChecks,
+// loopChecks) share.
+func sortedWorkflowNames(cfg taboo.ProjectConfig) []string {
+	names := make([]string, 0, len(cfg.Workflows))
+	for name := range cfg.Workflows {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
 // varsChecks reports, per workflow, the {{VAR}} placeholders its effective
 // prompt references — an OK-level discoverability surface ("what vars does this
 // workflow take?"), never a failure. It is gated behind includePromptFiles
@@ -377,13 +392,8 @@ func promptFiles(cfg taboo.ProjectConfig) []string {
 // clean-config silence.
 func varsChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string) bool) []check {
 	base := filepath.Dir(configPath)
-	names := make([]string, 0, len(cfg.Workflows))
-	for name := range cfg.Workflows {
-		names = append(names, name)
-	}
-	slices.Sort(names)
 	var checks []check
-	for _, name := range names {
+	for _, name := range sortedWorkflowNames(cfg) {
 		text, found := effectivePrompt(cfg, cfg.Workflows[name], base, statFile)
 		if !found {
 			continue
@@ -395,6 +405,82 @@ func varsChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string
 		checks = append(checks, ok("vars/"+name, "prompt references: "+strings.Join(placeholders, ", ")))
 	}
 	return checks
+}
+
+// loopChecks reports, per workflow in sorted name order (like varsChecks), the
+// loop-knob misconfigurations validate can see from the config alone. At most
+// one of signal/ or loop/ fires per workflow — the conditions are mutually
+// exclusive (one needs a non-empty effective signal, the other an empty one):
+//
+//   - signal/<name> (warn): the effective signal — cmp.Or(wf.CompletionSignal,
+//     defaults.CompletionSignal), plan.go's precedence minus the CLI override
+//     layer — is non-empty but is not a strings.Contains hit in the effective
+//     prompt, the same substring semantics the orchestrator applies to stdout.
+//     The agent is never told to print the sentinel, so the loop will always
+//     exhaust max-iterations. Advisory only, mirroring modelChecks: a prompt
+//     can instruct the sentinel indirectly (an included file, agent memory).
+//     A workflow whose effective prompt is unresolvable is skipped —
+//     promptFileChecks already hard-fails a missing prompt-file; don't
+//     double-report (the same rule varsChecks follows).
+//   - loop/<name> (warn): the effective max-iterations —
+//     cmp.Or(wf.MaxIterations, defaults.MaxIterations) — is greater than 1
+//     with no effective signal anywhere, so the early stop is disabled and
+//     every run pays the full N iterations by construction. Needs no prompt
+//     resolution, so it fires even for a workflow whose prompt is
+//     unresolvable. Silent at max-iterations <= 1 (single run, nothing to
+//     stop).
+//
+// Gated behind includePromptFiles: whole-config linting is validate's job, run's
+// preflight stays untouched.
+func loopChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string) bool) []check {
+	defaults := cfg.Defaults
+	if defaults == nil {
+		defaults = &taboo.RunDefaults{}
+	}
+	base := filepath.Dir(configPath)
+	var checks []check
+	for _, name := range sortedWorkflowNames(cfg) {
+		wf := cfg.Workflows[name]
+		signal := cmp.Or(wf.CompletionSignal, defaults.CompletionSignal)
+		if signal == "" {
+			if maxIter := cmp.Or(wf.MaxIterations, defaults.MaxIterations); maxIter > 1 {
+				checks = append(checks, warn("loop/"+name,
+					"max-iterations is "+strconv.Itoa(maxIter)+" but no completion-signal is set "+
+						"(workflow or defaults): the loop has no early stop, so every run pays the "+
+						"full "+strconv.Itoa(maxIter)+" iterations"))
+			}
+			continue
+		}
+		prompt, found := effectivePrompt(cfg, wf, base, statFile)
+		if !found {
+			continue
+		}
+		if !strings.Contains(prompt, signal) {
+			checks = append(checks, warn("signal/"+name,
+				"completion-signal \""+signal+"\" never appears in the effective prompt: the agent "+
+					"is never told to print it, so the loop will always exhaust max-iterations; "+
+					"set it intentionally to silence this"))
+		}
+	}
+	return checks
+}
+
+// defaultWorkflowCheck verifies a configured default-workflow names a defined
+// workflow. It hard-fails with the same wording selectRun uses at run time —
+// validate's whole job is meeting that error before a run — is ok when the name
+// resolves, and emits nothing when default-workflow is unset (unset is legal: a
+// bare `taboo run` just refuses via noSelectionError). Gated behind
+// includePromptFiles like the other whole-config lints: selectRun already owns
+// the refusal at run time, so run's preflight stays untouched.
+func defaultWorkflowCheck(cfg taboo.ProjectConfig) []check {
+	if cfg.DefaultWorkflow == "" {
+		return nil
+	}
+	if _, defined := cfg.Workflows[cfg.DefaultWorkflow]; !defined {
+		return []check{fail("default-workflow", "default-workflow \""+cfg.DefaultWorkflow+
+			"\" is not defined (configured workflows: "+availableWorkflows(&cfg)+")")}
+	}
+	return []check{ok("default-workflow", "resolves to workflow \""+cfg.DefaultWorkflow+"\"")}
 }
 
 // effectivePrompt resolves a workflow's prompt text from the config layers
