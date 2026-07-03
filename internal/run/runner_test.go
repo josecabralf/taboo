@@ -605,6 +605,174 @@ func TestSetup_NoBaseRefSkipsFetchAndStartPoint(t *testing.T) {
 	}
 }
 
+// TestSetup_CapturesBaseCommit pins that Setup records the fresh worktree's
+// HEAD as the run's BaseCommit — the tip the branch started from — via a
+// rev-parse against the just-added worktree, before the swap stops the
+// workshop (so the capture is strategy-agnostic: it reads the fresh checkout,
+// not the running workshop).
+func TestSetup_CapturesBaseCommit(t *testing.T) {
+	fc := &fakeCommander{
+		errFn: failOnVerb("info"),
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "rev-parse" {
+				return "basecafe0001\n"
+			}
+			return ""
+		},
+	}
+	r := New(testConfig(t), fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if res.BaseCommit != "basecafe0001" {
+		t.Errorf("BaseCommit = %q, want basecafe0001", res.BaseCommit)
+	}
+
+	// The capture reads the fresh worktree, right after it is added and before
+	// the stop/remount/start swap.
+	rp := fc.findCallN(t, "rev-parse", 0)
+	if !slices.Contains(rp.Args, res.handle.worktreePath) {
+		t.Errorf("rev-parse not run against worktree %q: %v", res.handle.worktreePath, rp.Args)
+	}
+	verbs := fc.verbs()
+	ri, si := slices.Index(verbs, "rev-parse"), slices.Index(verbs, "stop")
+	if ri == -1 || si == -1 || ri > si {
+		t.Errorf("verbs %v: the base capture must precede the swap's stop", verbs)
+	}
+}
+
+// TestSetup_BaseRefCapturesBaseCommit pins that the BaseRef path records
+// BaseCommit too: the capture is unconditional and reads the fresh worktree,
+// whose HEAD is the base ref's tip when the branch starts from one.
+func TestSetup_BaseRefCapturesBaseCommit(t *testing.T) {
+	fc := &fakeCommander{
+		errFn: failOnVerb("info"),
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "rev-parse" {
+				return "reftip0002\n"
+			}
+			return ""
+		},
+	}
+	r := New(testConfig(t), fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{
+		Branch:  "agent/update-pr-12",
+		BaseRef: "origin/feature-x",
+		Prompt:  "merge main",
+	})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if res.BaseCommit != "reftip0002" {
+		t.Errorf("BaseCommit = %q, want reftip0002", res.BaseCommit)
+	}
+	rp := fc.findCallN(t, "rev-parse", 0)
+	if !slices.Contains(rp.Args, res.handle.worktreePath) {
+		t.Errorf("rev-parse not run against worktree %q: %v", res.handle.worktreePath, rp.Args)
+	}
+}
+
+// TestSetup_BaseCommitCaptureFailureErrors pins that a failed base capture
+// surfaces as a wrapped Setup error rather than silently leaving BaseCommit
+// empty — an empty base would make every later Changed() report a change.
+func TestSetup_BaseCommitCaptureFailureErrors(t *testing.T) {
+	fc := &fakeCommander{errFn: func(c exec.Cmd) error {
+		switch verbOf(c) {
+		case "info":
+			return fmt.Errorf("simulated failure for %q", "info") // absent -> launch
+		case "rev-parse":
+			return errors.New("simulated rev-parse failure")
+		}
+		return nil
+	}}
+	r := New(testConfig(t), fc)
+
+	_, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err == nil {
+		t.Fatal("Setup with failing base capture: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "rev-parse base HEAD") {
+		t.Errorf("error = %q, want it wrapped as the base-HEAD capture", err)
+	}
+}
+
+// TestRunResult_Changed pins the pure empty-run signal: a run changed the
+// branch iff the final Commit is set and differs from the BaseCommit the
+// worktree started at. Before a successful Exec, Commit is empty and Changed
+// is false — the "meaningful only after Exec" caveat.
+func TestRunResult_Changed(t *testing.T) {
+	cases := []struct {
+		name string
+		res  RunResult
+		want bool
+	}{
+		{"before exec, commit empty", RunResult{BaseCommit: "base0001"}, false},
+		{"zero result", RunResult{}, false},
+		{"no-op run, tip unchanged", RunResult{Commit: "base0001", BaseCommit: "base0001"}, false},
+		{"landed change", RunResult{Commit: "new00002", BaseCommit: "base0001"}, true},
+		{"commit without base", RunResult{Commit: "new00002"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.res.Changed(); got != tc.want {
+				t.Errorf("Changed() = %v, want %v (Commit=%q BaseCommit=%q)", got, tc.want, tc.res.Commit, tc.res.BaseCommit)
+			}
+		})
+	}
+}
+
+// TestRun_BaseCommitFlowsThroughExec pins the whole single-run signal: Setup's
+// base capture survives Exec's res := base copy, so the final result pairs the
+// last Commit with the original BaseCommit and Changed() distinguishes a
+// landed change from a no-op run with no extra plumbing.
+func TestRun_BaseCommitFlowsThroughExec(t *testing.T) {
+	cases := []struct {
+		name        string
+		execHead    string // what the post-exec rev-parse reports
+		wantChanged bool
+	}{
+		{"agent committed, tip advanced", "new00002", true},
+		{"agent produced no commits, tip unchanged", "base0001", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The first rev-parse is Setup's base capture, every later one is an
+			// Exec-time final-HEAD capture; script them distinctly.
+			var revParses atomic.Int32
+			fc := &fakeCommander{
+				errFn: failOnVerb("info"),
+				stdoutFn: func(c exec.Cmd) string {
+					if verbOf(c) != "rev-parse" {
+						return ""
+					}
+					if revParses.Add(1) == 1 {
+						return "base0001\n"
+					}
+					return tc.execHead + "\n"
+				},
+			}
+			r := New(testConfig(t), fc)
+
+			res, err := r.Run(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.BaseCommit != "base0001" {
+				t.Errorf("BaseCommit = %q, want base0001 (Setup's capture must survive Exec)", res.BaseCommit)
+			}
+			if res.Commit != tc.execHead {
+				t.Errorf("Commit = %q, want %q", res.Commit, tc.execHead)
+			}
+			if got := res.Changed(); got != tc.wantChanged {
+				t.Errorf("Changed() = %v, want %v", got, tc.wantChanged)
+			}
+		})
+	}
+}
+
 // findCallN returns the nth (0-based) recorded Cmd whose verb matches, or fails.
 func (f *fakeCommander) findCallN(t *testing.T, verb string, n int) exec.Cmd {
 	t.Helper()
@@ -653,10 +821,11 @@ func TestRun_PerRunSequence(t *testing.T) {
 	}
 
 	// The verified recipe order: ensure (info+launch) -> worktree add ->
-	// stop -> remount workspace -> remount gitcommon -> remount worktrees ->
-	// remount sessions -> start -> exec. The sessions remount is present because
-	// OpenCode is a session-capable agent.
-	wantSeq := []string{"info", "launch", "worktree", "stop", "remount", "remount", "remount", "remount", "start", "exec", "rev-parse"}
+	// rev-parse (the base-tip capture, against the fresh worktree) -> stop ->
+	// remount workspace -> remount gitcommon -> remount worktrees -> remount
+	// sessions -> start -> exec -> rev-parse (the final-HEAD capture). The
+	// sessions remount is present because OpenCode is a session-capable agent.
+	wantSeq := []string{"info", "launch", "worktree", "rev-parse", "stop", "remount", "remount", "remount", "remount", "start", "exec", "rev-parse"}
 	if got := fc.verbs(); !slices.Equal(got, wantSeq) {
 		t.Fatalf("sequence =\n  %v\nwant\n  %v", got, wantSeq)
 	}

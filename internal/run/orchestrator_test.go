@@ -3,8 +3,10 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/josecabralf/taboo/internal/exec"
@@ -83,6 +85,50 @@ func TestOrchestrator_LoopsToMaxIterations(t *testing.T) {
 	// that re-runs the full per-run setup every iteration.
 	if got := fc.countVerb("worktree"); got != 1 {
 		t.Errorf("worktree add count = %d, want 1 (Setup runs once, then Exec loops)", got)
+	}
+}
+
+// TestOrchestrator_BaseCommitSurvivesIterations pins that Setup's base capture
+// rides the embedded RunResult across the whole loop: while Commit advances
+// with every iteration's final-HEAD capture, the final result still pairs the
+// last Commit with the ORIGINAL base, so Changed() compares the run's end
+// against where the branch started, not against the previous iteration.
+func TestOrchestrator_BaseCommitSurvivesIterations(t *testing.T) {
+	// The first rev-parse is Setup's base capture; each later one is an
+	// iteration's final-HEAD capture, advancing every time.
+	var revParses atomic.Int32
+	fc := &fakeCommander{
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) != "rev-parse" {
+				return ""
+			}
+			n := revParses.Add(1)
+			if n == 1 {
+				return "base0001\n"
+			}
+			return fmt.Sprintf("head%04d\n", n-1)
+		},
+	}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:    RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations: 3,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3", res.Iterations)
+	}
+	if res.BaseCommit != "base0001" {
+		t.Errorf("BaseCommit = %q, want base0001 (the original base must survive every iteration)", res.BaseCommit)
+	}
+	if res.Commit != "head0003" {
+		t.Errorf("Commit = %q, want head0003 (the last iteration's HEAD)", res.Commit)
+	}
+	if !res.Changed() {
+		t.Error("Changed() = false, want true (final HEAD differs from the original base)")
 	}
 }
 

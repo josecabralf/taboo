@@ -149,24 +149,38 @@ any setup runs.
 
 ```go
 type RunResult struct {
-    Branch string
-    Commit string // HEAD of the branch after the agent ran
-    Output string // captured agent exec stdout (stderr is not retained)
-    Err    error  // populated by Pool per run; nil from the single-run path
+    Branch     string
+    Commit     string // HEAD of the branch after the agent ran
+    BaseCommit string // HEAD of the fresh worktree at Setup time — the tip the branch started from
+    Output     string // captured agent exec stdout (stderr is not retained)
+    Err        error  // populated by Pool per run; nil from the single-run path
 }
 ```
 
 `RunResult` reports the outcome of a run. `Err` is populated by `Pool` when
 fanning out so one failed run does not abort the batch. The run's worktree is
 not exposed as a path; read files from it with `res.Artifact(relpath)`.
+`BaseCommit` is captured by `Setup` against the fresh worktree — the base
+ref's tip when `RunRequest.BaseRef` is set, the host repo's `HEAD` otherwise —
+and is captured before the `OnWorkshopReady` hooks run, so a setup hook that
+commits counts as a change the run produced. It survives every `Exec` and
+orchestrator iteration untouched, so the final result always pairs the last
+`Commit` with the original base.
 
 ```go
+func (r RunResult) Changed() bool
 func (r RunResult) Artifact(relpath string) (string, error)
 func (r RunResult) Dispose() error
 
 func NewResultWithWorktree(worktree string) RunResult
 func NewResultWithWorktreeCmd(worktree string, cmd Commander) RunResult
 ```
+
+`Changed` reports whether the run produced at least one new commit: the final
+`Commit` differs from the `BaseCommit` the worktree started at. It is pure (no
+I/O, no worktree handle needed) and meaningful only after a successful `Exec` —
+before `Exec`, `Commit` is empty and `Changed` returns false. Use it to guard a
+push or PR stage against shipping an empty branch.
 
 `Artifact` reads the file at `relpath` within the run's worktree and returns its
 contents. `relpath` must stay inside the worktree: an absolute path or a `..`

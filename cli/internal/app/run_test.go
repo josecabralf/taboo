@@ -86,6 +86,29 @@ func argAfter(c taboo.Cmd, verb string) string {
 	return c.Args[i+1]
 }
 
+// newChangedRunFake builds a fake commander for a run whose agent landed a
+// commit: the FIRST `git rev-parse HEAD` (Setup's base-tip capture) answers a
+// distinct base sha, and every later one (the post-exec final-HEAD capture)
+// answers the usual deadbeefcafe, so the run's final Commit differs from its
+// BaseCommit. Everything else behaves like newRunFake. (newRunFake itself
+// answers every rev-parse identically, so its runs read as no-commit runs.)
+func newChangedRunFake() *fakeCommander {
+	revParses := 0
+	return &fakeCommander{
+		errFn: runFakeErr,
+		stdoutFn: func(c taboo.Cmd) string {
+			if c.Name == "git" && elemsContain(c.Args, "rev-parse", "HEAD") {
+				revParses++
+				if revParses == 1 {
+					return "basecafe0001\n"
+				}
+				return "deadbeefcafe\n"
+			}
+			return runFakeStdout(c)
+		},
+	}
+}
+
 // newStatefulRunFake builds a fake commander that models workshop persistence
 // across runs so reuse is observable. Its errFn records the workshop name that
 // follows a "launch" verb into a set, and answers an "info" probe by reporting
@@ -1121,6 +1144,131 @@ func TestRun_JSONResult(t *testing.T) {
 	if res.StopReason != "max-iterations" {
 		t.Errorf("stopReason = %q, want %q", res.StopReason, "max-iterations")
 	}
+}
+
+// TestRun_JSONBaseCommitAndChanged asserts --json additionally emits the
+// baseCommit/changed pair — a landed change reports the Setup-time base and
+// changed:true — while the five pre-existing keys stay exactly as #134 froze
+// them (additive keys only), and the no-commit stderr note never appears on
+// the JSON path (its consumers read `changed` instead).
+func TestRun_JSONBaseCommitAndChanged(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newChangedRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--json", "--branch", "agent/custom")
+	if err != nil {
+		t.Fatalf("run --json error = %v, want nil", err)
+	}
+	var res jsonRunResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	if res.BaseCommit != "basecafe0001" {
+		t.Errorf("baseCommit = %q, want %q", res.BaseCommit, "basecafe0001")
+	}
+	if !res.Changed {
+		t.Error("changed = false, want true (final commit differs from base)")
+	}
+	if res.Commit != "deadbeefcafe" {
+		t.Errorf("commit = %q, want %q (frozen key untouched)", res.Commit, "deadbeefcafe")
+	}
+
+	// The document carries exactly the five frozen keys plus the two additive
+	// ones — no accidental key rename, drop, or extra.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	wantKeys := []string{"baseCommit", "branch", "changed", "commit", "iterations", "output", "stopReason"}
+	gotKeys := make([]string, 0, len(m))
+	for k := range m {
+		gotKeys = append(gotKeys, k)
+	}
+	slices.Sort(gotKeys)
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("--json keys = %v, want %v", gotKeys, wantKeys)
+	}
+
+	if strings.Contains(stderr, "no new commits") || strings.Contains(stdout, "no new commits") {
+		t.Errorf("the no-commit note must not appear for a landed change:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+// TestRun_JSONNoCommitRun asserts a run whose agent landed nothing reports
+// changed:false with baseCommit == commit under --json, and that the JSON path
+// prints no stderr note (scripted consumers read the `changed` field).
+func TestRun_JSONNoCommitRun(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake() // every rev-parse answers deadbeefcafe: tip unchanged
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--json", "--branch", "agent/custom")
+	if err != nil {
+		t.Fatalf("run --json error = %v, want nil", err)
+	}
+	var res jsonRunResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	if res.Changed {
+		t.Error("changed = true, want false (tip unchanged)")
+	}
+	if res.BaseCommit != res.Commit || res.BaseCommit == "" {
+		t.Errorf("baseCommit = %q / commit = %q, want them equal and non-empty", res.BaseCommit, res.Commit)
+	}
+	if strings.Contains(stderr, "no new commits") {
+		t.Errorf("--json must print no stderr note:\n%s", stderr)
+	}
+}
+
+// TestRun_PlainNoCommitNote asserts the plain form surfaces a no-commit run as
+// an advisory note on STDERR exactly once, while stdout stays the byte-identical
+// two-line branch/commit machine contract — and that a run that landed a change
+// prints no note at all.
+func TestRun_PlainNoCommitNote(t *testing.T) {
+	const note = "note: the agent produced no new commits — branch tip unchanged\n"
+
+	t.Run("no-commit run prints the note on stderr", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		fake := newRunFake() // every rev-parse answers deadbeefcafe: tip unchanged
+		env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, stderr, err := runCmd(t, env, "fix", "--branch", "agent/custom")
+		if err != nil {
+			t.Fatalf("run error = %v, want nil", err)
+		}
+		if got := strings.Count(stderr, note); got != 1 {
+			t.Errorf("stderr carries the note %d times, want exactly 1:\n%s", got, stderr)
+		}
+		// The machine contract on stdout is byte-identical either way.
+		want := "branch: agent/custom\ncommit: deadbeefcafe\n"
+		if stdout != want {
+			t.Errorf("stdout = %q, want exactly %q (the note must never reach stdout)", stdout, want)
+		}
+	})
+
+	t.Run("landed change prints no note", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		fake := newChangedRunFake()
+		env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, stderr, err := runCmd(t, env, "fix", "--branch", "agent/custom")
+		if err != nil {
+			t.Fatalf("run error = %v, want nil", err)
+		}
+		if strings.Contains(stderr, "no new commits") {
+			t.Errorf("no note expected for a landed change:\n%s", stderr)
+		}
+		want := "branch: agent/custom\ncommit: deadbeefcafe\n"
+		if stdout != want {
+			t.Errorf("stdout = %q, want exactly %q", stdout, want)
+		}
+	})
 }
 
 // TestRun_ExecFailureSurfaced asserts a failure inside the run (the agent exec

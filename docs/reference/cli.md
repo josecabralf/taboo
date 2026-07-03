@@ -169,7 +169,17 @@ commit: 1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
 
 `commit` is the full 40-character branch HEAD (`res.Commit`), printed verbatim.
 The plain form omits the captured agent output (it already streamed to stderr).
-With `--json`, stdout carries an indented JSON object (`jsonRunResult`):
+When the run produced no new commits (`res.Changed()` is false — the branch tip
+never moved off the base it started from), the plain form additionally prints
+an advisory note to **stderr**:
+
+```
+note: the agent produced no new commits — branch tip unchanged
+```
+
+Like every advisory, the note never touches stdout: the two `branch:`/`commit:`
+lines stay byte-identical whether or not anything landed. With `--json`, stdout
+carries an indented JSON object (`jsonRunResult`):
 
 ```json
 {
@@ -177,12 +187,22 @@ With `--json`, stdout carries an indented JSON object (`jsonRunResult`):
   "commit": "1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9",
   "output": "captured agent stdout",
   "iterations": 1,
-  "stopReason": "max-iterations"
+  "stopReason": "max-iterations",
+  "baseCommit": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+  "changed": true
 }
 ```
 
 The `stopReason` field is the `StopReason` flattened to a string
-(`max-iterations` or `signal`). A `--dry-run` plan prints to stdout under
+(`max-iterations` or `signal`). `baseCommit` is the tip the run's branch
+started from (`res.BaseCommit`, captured at setup time) and `changed` is
+`res.Changed()` — true iff the run produced at least one new commit. Both are
+additive: the five keys that predate them (`branch`, `commit`, `output`,
+`iterations`, `stopReason`) are frozen and stay byte-identical, so existing
+consumers keep parsing unchanged. The `--json` path prints no no-commit note —
+scripted consumers read `changed` instead.
+
+A `--dry-run` plan prints to stdout under
 `taboo run (dry run) — resolved plan:` with one aligned label per line
 (`printPlan`). With `--dry-run --json`, stdout instead carries the resolved
 plan as an indented JSON object (`jsonPlan`, built by the pure `planToJSON`):

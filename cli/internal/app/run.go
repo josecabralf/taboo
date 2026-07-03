@@ -474,13 +474,17 @@ func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) err
 
 // jsonRunResult is the --json machine result shape. It is a deliberately flat
 // projection of OrchestratedResult: the fields a caller scripts against, with the
-// StopReason flattened to a string.
+// StopReason flattened to a string. The first five keys are frozen (#134) and
+// stay byte-identical; baseCommit and changed are additive (#141), appended
+// after them so existing consumers keep parsing unchanged.
 type jsonRunResult struct {
 	Branch     string `json:"branch"`
 	Commit     string `json:"commit"`
 	Output     string `json:"output"`
 	Iterations int    `json:"iterations"`
 	StopReason string `json:"stopReason"`
+	BaseCommit string `json:"baseCommit"`
+	Changed    bool   `json:"changed"`
 }
 
 // writeRunResult writes the run's machine result to stdout in the requested
@@ -490,6 +494,12 @@ type jsonRunResult struct {
 // back onto stdout would defeat the clean-stdout contract (a caller parsing
 // stdout must not have to skip past arbitrary agent chatter). The JSON form keeps
 // `output` so a structured consumer can still read it.
+//
+// A run that produced no new commits (the branch tip never moved off its base)
+// gets an advisory note on the plain path — on stderr, following the
+// warnPromptVars pattern, so the two-line branch/commit machine contract on
+// stdout stays byte-identical. The JSON path prints no note: its consumers
+// read the `changed` field instead.
 func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 	if asJSON {
 		enc := json.NewEncoder(env.Stdout)
@@ -500,10 +510,15 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 			Output:     res.Output,
 			Iterations: res.Iterations,
 			StopReason: string(res.StopReason),
+			BaseCommit: res.BaseCommit,
+			Changed:    res.Changed(),
 		})
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "branch: %s\n", res.Branch)
 	_, _ = fmt.Fprintf(env.Stdout, "commit: %s\n", res.Commit)
+	if !res.Changed() {
+		_, _ = fmt.Fprintln(env.Stderr, "note: the agent produced no new commits — branch tip unchanged")
+	}
 	return nil
 }
 
