@@ -1124,9 +1124,10 @@ func TestRun_JSONResult(t *testing.T) {
 }
 
 // TestRun_ExecFailureSurfaced asserts a failure inside the run (the agent exec
-// erroring) propagates out of executeRun and is reported on stderr, rather than
-// being swallowed into a clean exit. Preflight and launch still succeed so the
-// flow reaches the exec; only the exec call fails.
+// erroring) propagates out of executeRun and is reported on stderr exactly once
+// through executeRoot — the central print seam — rather than being swallowed
+// into a clean exit (or doubled by a local wrapper). Preflight and launch still
+// succeed so the flow reaches the exec; only the exec call fails.
 func TestRun_ExecFailureSurfaced(t *testing.T) {
 	root := t.TempDir()
 	writeTabooProject(t, root, runProjectBody)
@@ -1141,15 +1142,15 @@ func TestRun_ExecFailureSurfaced(t *testing.T) {
 	}
 	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
 
-	_, stderr, err := runCmd(t, env, "fix")
-	if err == nil {
-		t.Fatal("run error = nil, want the exec failure to propagate")
+	code, stdout, stderr := execRoot(t, env, "run", "fix")
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (the exec failure must propagate)", code)
 	}
-	if !strings.Contains(err.Error(), "agent exec blew up") {
-		t.Errorf("error = %q, want it to carry the underlying exec failure", err.Error())
+	if got := strings.Count(stderr, "agent exec blew up"); got != 1 {
+		t.Errorf("stderr carries the exec failure %d times, want exactly 1:\n%s", got, stderr)
 	}
-	if !strings.Contains(stderr, "agent exec blew up") {
-		t.Errorf("stderr missing the underlying exec failure:\n%s", stderr)
+	if stdout != "" {
+		t.Errorf("stdout must stay empty on an error path, got: %q", stdout)
 	}
 }
 

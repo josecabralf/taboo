@@ -19,8 +19,9 @@ import (
 )
 
 // errValidateFailed is the sentinel validate returns when any check is an error.
-// The report is fully printed before it is returned; main maps it to a non-zero
-// exit. Mirrors doctor's errChecksFailed.
+// The report is fully printed before it is returned; executeRoot maps it to a
+// non-zero exit and prints it once to stderr as the report's one trailing
+// "Error:" line. Mirrors doctor's errChecksFailed.
 var errValidateFailed = errors.New("validate: one or more checks failed")
 
 // newValidateCmd builds the `validate` subcommand: it discovers the project's

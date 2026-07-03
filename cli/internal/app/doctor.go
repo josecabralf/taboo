@@ -10,8 +10,9 @@ import (
 )
 
 // errChecksFailed is the sentinel doctor returns when any check is an error. The
-// report is fully printed before it is returned; main maps it to a non-zero
-// exit. SilenceErrors/SilenceUsage on the root keep cobra from echoing it.
+// report is fully printed before it is returned; executeRoot maps it to a
+// non-zero exit and prints it once to stderr as the report's one trailing
+// "Error:" line (the report itself stays on stdout, untouched).
 var errChecksFailed = errors.New("doctor: one or more checks failed")
 
 // statFileExists is the real existence probe used to discover taboo.yaml.

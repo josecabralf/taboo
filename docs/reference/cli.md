@@ -9,11 +9,17 @@ environments", `cli/internal/app/main.go`). It registers six subcommands:
 no `--version`/`-v` flag; the only version taboo surfaces is the workshop floor
 (`0.9.1`), reported by `doctor`.
 
-Every command exits `0` on success and `1` on failure. The process exits
-non-zero whenever a command returns an error; `Execute` in
-`cli/internal/app/main.go` maps any returned error to `os.Exit(1)`. The root
-sets `SilenceErrors` and `SilenceUsage`, so cobra does not print usage on
-failure.
+Every command exits `0` on success and `1` on failure. `Execute` in
+`cli/internal/app/main.go` is a thin `os.Exit(executeRoot(env))`; `executeRoot`
+runs the root command and, when it returns an error, prints that error exactly
+once to stderr as `Error: <message>` before mapping it to exit `1`. Every
+failed command surfaces this way: command refusals, the report commands'
+sentinel verdicts (`doctor`/`validate`/`run` preflight print their report
+first, then gain exactly one trailing `Error:` line), and cobra's own
+flag-parse and unknown-command errors (`Error: unknown flag: --bogus`). The
+root sets `SilenceErrors` and `SilenceUsage`, so usage is still never dumped
+on failure. Errors go to stderr only — stdout receives nothing on an error
+path, so `--json` consumers always parse a clean stdout document.
 
 !!! info "Where these facts come from"
     Every command, flag, and message below is read from the source named in
@@ -68,10 +74,9 @@ with no `--source-definition` selected is rejected non-interactively:
 `multiple workshop definitions (...): pass --source-definition to pick one`.
 
 Output routing: progress, the scaffold confirmation, and next steps go to
-stdout (`printNextSteps`); errors go to stderr prefixed with `Error:`. A
-`--dry-run` invocation prints `taboo init (dry run) — would write:` followed by
-the absolute path of each planned file (`printDryRun`). There is no `--json`
-flag.
+stdout (`printNextSteps`). A `--dry-run` invocation prints `taboo init (dry
+run) — would write:` followed by the absolute path of each planned file
+(`printDryRun`). There is no `--json` flag.
 
 Exit behaviour: non-zero on a missing required flag, an unknown agent or
 template, a refused overwrite, or a write failure.

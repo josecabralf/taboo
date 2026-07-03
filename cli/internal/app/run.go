@@ -20,9 +20,10 @@ import (
 
 // errRunFailed is the sentinel run returns when its preflight finds an error
 // (workshop unreachable, or the config fails validate). The preflight report is
-// printed to stderr first; main maps the sentinel to a non-zero exit. It mirrors
-// doctor's errChecksFailed but is run-specific so a caller can distinguish a
-// preflight refusal from a failure inside the run itself.
+// printed to stderr first; executeRoot maps the sentinel to a non-zero exit and
+// adds its one trailing "Error:" line to stderr. It mirrors doctor's
+// errChecksFailed but is run-specific so a caller can distinguish a preflight
+// refusal from a failure inside the run itself.
 var errRunFailed = errors.New("run: preflight failed")
 
 // runOptions are the parsed flags for the run subcommand: the highest-precedence
@@ -440,7 +441,8 @@ func resolvePromptFilePath(path, base string) string {
 // skip prompt-file existence, which cfg.Plan already proved for the one file
 // this run consumes. The report goes to stderr (not stdout) so a refusal does not
 // pollute the machine result stream a successful run writes there. It returns
-// errRunFailed so main exits non-zero without echoing cobra noise.
+// errRunFailed so the process exits non-zero; executeRoot prints the sentinel as
+// the report's one trailing "Error:" line.
 func runPreflight(ctx context.Context, env Env) error {
 	checks := []check{checkWorkshop(ctx, env)}
 	checks = append(checks, runConfigChecks(ctx, env, statFileExists)...)
@@ -455,8 +457,8 @@ func runPreflight(ctx context.Context, env Env) error {
 // agent output (the Plan already routes both streams to env.Stderr via the
 // overrides) keeps the machine result clean on env.Stdout; a brief start line goes
 // to stderr too so an interactive caller sees the run begin. On success the
-// machine result is written to stdout; a failure inside the run is printed to
-// stderr and returned (exit 1), mirroring init.
+// machine result is written to stdout; a failure inside the run is returned and
+// printed once by executeRoot (exit 1).
 func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) error {
 	target := fmt.Sprintf("workflow %q", plan.Workflow)
 	if plan.Workflow == "" {
@@ -465,7 +467,6 @@ func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) err
 	_, _ = fmt.Fprintf(env.Stderr, "Running %s on branch %q (agent %s)…\n", target, plan.Request.Branch, plan.Config.Agent.Name())
 	res, err := plan.Run(ctx, env.Cmd)
 	if err != nil {
-		_, _ = fmt.Fprintln(env.Stderr, "Error:", err)
 		return err
 	}
 	return writeRunResult(env, asJSON, res)
