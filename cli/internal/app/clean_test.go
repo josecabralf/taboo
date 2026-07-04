@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -392,17 +391,6 @@ func TestClean_DryRunEmitsNothing(t *testing.T) {
 	}
 }
 
-// decodeJSONCleanPlan parses stdout as the clean --dry-run --json document,
-// failing the test on invalid JSON.
-func decodeJSONCleanPlan(t *testing.T, stdout string) jsonCleanPlan {
-	t.Helper()
-	var doc jsonCleanPlan
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
-	}
-	return doc
-}
-
 // assertCleanJSONPure asserts the purity contract every clean --json case
 // shares: nothing on stderr, and zero mutating Commander verbs (no worktree
 // remove, workshop remove, or branch -D).
@@ -438,7 +426,7 @@ func TestClean_DryRunJSON(t *testing.T) {
 		t.Fatalf("clean --dry-run --json error = %v, want nil", err)
 	}
 
-	doc := decodeJSONCleanPlan(t, stdout)
+	doc := decodeJSON[jsonCleanPlan](t, stdout)
 	if doc.Repo != testRepoPath {
 		t.Errorf("repo = %q, want %q", doc.Repo, testRepoPath)
 	}
@@ -517,7 +505,7 @@ func TestClean_DryRunJSONForceMovesUnmerged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clean --force --dry-run --json error = %v, want nil", err)
 	}
-	doc := decodeJSONCleanPlan(t, stdout)
+	doc := decodeJSON[jsonCleanPlan](t, stdout)
 	want := []string{"taboo/fix-123", "taboo/refactor-456"}
 	if len(doc.Branches) != 2 || doc.Branches[0] != want[0] || doc.Branches[1] != want[1] {
 		t.Errorf("branches = %v, want %v", doc.Branches, want)

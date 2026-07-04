@@ -740,19 +740,10 @@ func TestRun_BaseCommitFlowsThroughExec(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// The first rev-parse is Setup's base capture, every later one is an
-			// Exec-time final-HEAD capture; script them distinctly.
-			var revParses atomic.Int32
+			// Exec-time final-HEAD capture; shaSequence scripts them distinctly.
 			fc := &fakeCommander{
-				errFn: failOnVerb("info"),
-				stdoutFn: func(c exec.Cmd) string {
-					if verbOf(c) != "rev-parse" {
-						return ""
-					}
-					if revParses.Add(1) == 1 {
-						return "base0001\n"
-					}
-					return tc.execHead + "\n"
-				},
+				errFn:    failOnVerb("info"),
+				stdoutFn: shaSequence("base0001", tc.execHead),
 			}
 			r := New(testConfig(t), fc)
 

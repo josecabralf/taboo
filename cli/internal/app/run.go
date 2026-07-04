@@ -140,9 +140,7 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 
 	if opts.dryRun {
 		if opts.asJSON {
-			enc := json.NewEncoder(env.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(planToJSON(plan, vars))
+			return writeIndentedJSON(env.Stdout, planToJSON(plan, vars))
 		}
 		printPlan(env, plan, vars)
 		return nil
@@ -508,9 +506,7 @@ type jsonRunResult struct {
 // read the `changed` field instead.
 func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 	if asJSON {
-		enc := json.NewEncoder(env.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(jsonRunResult{
+		return writeIndentedJSON(env.Stdout, jsonRunResult{
 			Branch:     res.Branch,
 			Commit:     res.Commit,
 			Output:     res.Output,
@@ -577,14 +573,6 @@ func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
 		supplied = append(supplied, key)
 	}
 	slices.Sort(supplied)
-	unused := unusedVarKeys(plan.Placeholders, vars)
-	if unused == nil {
-		unused = []string{}
-	}
-	placeholders := plan.Placeholders
-	if placeholders == nil {
-		placeholders = []string{}
-	}
 	return jsonPlan{
 		Workflow:         plan.Workflow,
 		Adhoc:            plan.Workflow == "",
@@ -599,10 +587,10 @@ func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
 		CompletionSignal: plan.Request.CompletionSignal,
 		StopOnNoChange:   plan.Request.StopOnNoChange,
 		Prompt:           promptSummary(plan.Request.Prompt),
-		Placeholders:     placeholders,
+		Placeholders:     emptyIfNil(plan.Placeholders),
 		Vars: jsonPlanVars{
 			Supplied: supplied,
-			Unused:   unused,
+			Unused:   emptyIfNil(unusedVarKeys(plan.Placeholders, vars)),
 			Unfilled: len(vars) == 0 && len(plan.Placeholders) > 0,
 		},
 	}

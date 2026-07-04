@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,12 +24,25 @@ func TestMain(m *testing.M) {
 	dir, cleanup := setupTestRepo()
 	testRepoPath = dir
 	runProjectBody = buildRunProjectBody(dir)
+	parameterizedProjectBody = buildParameterizedProjectBody(dir)
 	cleanProjectBody = buildCleanProjectBody(dir)
 	listProjectBody = buildListProjectBody(dir)
 	emptyListingBody = buildEmptyListingBody(dir)
 	code := m.Run()
 	cleanup()
 	os.Exit(code)
+}
+
+// decodeJSON parses stdout as one --json machine document of type T, failing
+// the test on invalid JSON. Every command's --json tests share it so the
+// decode-or-Fatalf scaffolding has one home.
+func decodeJSON[T any](t *testing.T, stdout string) T {
+	t.Helper()
+	var doc T
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
+	}
+	return doc
 }
 
 // execRoot drives executeRoot — the seam the taboo binary maps every command

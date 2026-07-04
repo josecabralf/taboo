@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -148,9 +147,7 @@ func resolveCleanScope(env Env, opts *cleanOptions) (cfg *taboo.ProjectConfig, p
 // --json, the human preview otherwise. The plan itself is identical either way.
 func emitCleanPlan(env Env, plan cleanPlan, asJSON bool) error {
 	if asJSON {
-		enc := json.NewEncoder(env.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(cleanPlanToJSON(plan))
+		return writeIndentedJSON(env.Stdout, cleanPlanToJSON(plan))
 	}
 	printCleanPlan(env.Stdout, plan)
 	return nil
@@ -284,28 +281,15 @@ type jsonCleanPlan struct {
 // discoverSDKLinks); normalization to empty slices lives here, not in
 // discovery, so each key marshals as [].
 func cleanPlanToJSON(plan cleanPlan) jsonCleanPlan {
-	worktrees := plan.worktrees
-	if worktrees == nil {
-		worktrees = []jsonWorktree{}
-	}
 	return jsonCleanPlan{
 		Repo:             plan.repo,
 		ProjectDir:       plan.projectDir,
-		Worktrees:        worktrees,
+		Worktrees:        emptyIfNil(plan.worktrees),
 		Workshops:        emptyIfNil(plan.workshops),
 		SDKLinks:         emptyIfNil(plan.sdkLinks),
 		Branches:         emptyIfNil(plan.branches),
 		UnmergedBranches: emptyIfNil(plan.unmerged),
 	}
-}
-
-// emptyIfNil normalizes a nil string slice to an empty one so it marshals as
-// the conventional machine shape [] rather than null.
-func emptyIfNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
 }
 
 // printCleanPlan writes the --dry-run teardown preview: one section per artifact

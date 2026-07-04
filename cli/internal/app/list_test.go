@@ -544,10 +544,7 @@ func TestList_EmptyListingJSON(t *testing.T) {
 		t.Fatalf("list --json error = %v, want nil", err)
 	}
 
-	var doc jsonListResult
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
-	}
+	doc := decodeJSON[jsonListResult](t, stdout)
 	if doc.Workshops == nil || doc.Worktrees == nil || doc.Branches == nil || doc.Workflows == nil {
 		t.Errorf("empty sections decoded to nil, want empty slices: %+v", doc)
 	}
@@ -759,10 +756,7 @@ func TestList_WorkflowsJSON(t *testing.T) {
 		t.Fatalf("list --json error = %v, want nil", err)
 	}
 
-	var doc jsonListResult
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
-	}
+	doc := decodeJSON[jsonListResult](t, stdout)
 
 	if len(doc.Workflows) != 3 {
 		t.Fatalf("workflows = %+v, want three entries", doc.Workflows)

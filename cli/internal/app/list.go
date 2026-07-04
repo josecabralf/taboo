@@ -3,11 +3,9 @@ package app
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -114,9 +112,7 @@ func runList(ctx context.Context, env Env, asJSON bool, statFile func(string) bo
 	if asJSON {
 		// The gather helpers return empty (never nil) slices, so each section
 		// marshals as the conventional machine shape [] rather than null.
-		enc := json.NewEncoder(env.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		return writeIndentedJSON(env.Stdout, result)
 	}
 	renderListResult(env, result)
 	return nil
@@ -178,13 +174,8 @@ func workflowLines(wfs []jsonWorkflow) []string {
 // unreadable prompt-file degrades to PromptAvailable=false rather than failing
 // the listing — existence policing stays validate's job.
 func gatherWorkflows(cfg *taboo.ProjectConfig, base string, statFile func(string) bool) []jsonWorkflow {
-	names := make([]string, 0, len(cfg.Workflows))
-	for name := range cfg.Workflows {
-		names = append(names, name)
-	}
-	slices.Sort(names)
 	out := []jsonWorkflow{}
-	for _, name := range names {
+	for _, name := range sortedWorkflowNames(*cfg) {
 		wf := cfg.Workflows[name]
 		entry := jsonWorkflow{
 			Name:         name,
@@ -196,9 +187,7 @@ func gatherWorkflows(cfg *taboo.ProjectConfig, base string, statFile func(string
 		if text, found := effectivePrompt(*cfg, wf, base, statFile); found {
 			entry.Prompt = promptSummary(text)
 			entry.PromptAvailable = true
-			if placeholders := taboo.Placeholders(text); placeholders != nil {
-				entry.Placeholders = placeholders
-			}
+			entry.Placeholders = emptyIfNil(taboo.Placeholders(text))
 		}
 		out = append(out, entry)
 	}

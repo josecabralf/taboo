@@ -42,7 +42,25 @@ func writeJSON(w io.Writer, checks []check) error {
 	for i, c := range checks {
 		rep.Checks[i] = jsonCheck{Name: c.Name, Status: c.Status.token(), Message: c.Message}
 	}
+	return writeIndentedJSON(w, rep)
+}
+
+// writeIndentedJSON encodes v to w as the CLI's standard machine document:
+// 2-space-indented JSON followed by Encode's trailing newline. Every --json
+// emitter in the package routes through it so the encoding convention has
+// exactly one home.
+func writeIndentedJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(rep)
+	return enc.Encode(v)
+}
+
+// emptyIfNil normalizes a nil slice to an empty one so it marshals as the
+// conventional machine shape [] rather than null — the invariant every --json
+// document in the package shares.
+func emptyIfNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
