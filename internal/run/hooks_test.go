@@ -313,6 +313,39 @@ func TestRun_OnWorkshopReadyHookFailureAbortsBeforeAgent(t *testing.T) {
 	}
 }
 
+// TestSetup_CapturesBaseBeforeOnWorkshopReadyHooks pins the documented
+// capture-before-hooks promise (runner.go's Setup, library-api.md) directly:
+// the base rev-parse runs before any OnWorkshopReady hook execs, so a setup
+// hook that commits counts as a change the run produced, not as part of the
+// base the caller's repo contributed.
+func TestSetup_CapturesBaseBeforeOnWorkshopReadyHooks(t *testing.T) {
+	fc := &fakeCommander{}
+	cfg := testConfig(t)
+	r := New(cfg, fc)
+
+	_, err := r.Setup(context.Background(), RunRequest{
+		Branch: "agent/x",
+		Prompt: "do the task",
+		Hooks: Hooks{
+			OnWorkshopReady: []Hook{
+				{Command: []string{"go", "mod", "download"}, InWorkshop: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	revIdx := indexOfVerb(fc, "rev-parse")
+	hookIdx := indexOfExecContaining(fc, "download")
+	if revIdx < 0 || hookIdx < 0 {
+		t.Fatalf("missing call: rev-parse=%d hook=%d; verbs=%v", revIdx, hookIdx, fc.verbs())
+	}
+	if revIdx > hookIdx {
+		t.Errorf("want rev-parse(%d) before hook exec(%d); verbs=%v", revIdx, hookIdx, fc.verbs())
+	}
+}
+
 func TestRun_OnWorkshopReadyHookRunsAfterStartBeforeExec(t *testing.T) {
 	fc := &fakeCommander{errFn: failOnVerb("info")} // workshop absent -> launches
 	cfg := testConfig(t)

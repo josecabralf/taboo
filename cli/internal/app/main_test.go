@@ -118,8 +118,8 @@ func TestExecuteRoot_ParseErrorsPrintNoUsage(t *testing.T) {
 			if stderr != tt.want {
 				t.Errorf("stderr = %q, want exactly %q (one line, no usage dump)", stderr, tt.want)
 			}
-			if strings.Contains(stdout, "Usage:") {
-				t.Errorf("stdout must not carry a usage dump, got: %q", stdout)
+			if stdout != "" {
+				t.Errorf("stdout must stay empty on a parse error (no usage dump, no leakage), got: %q", stdout)
 			}
 		})
 	}

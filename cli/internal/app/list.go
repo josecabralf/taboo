@@ -168,7 +168,8 @@ func workflowLines(wfs []jsonWorkflow) []string {
 
 // gatherWorkflows computes the workflows section from the loaded config alone —
 // no host probes. One entry per configured workflow, sorted by name, carrying
-// the default marker (name equals cfg.DefaultWorkflow), the effective agent and
+// the default marker (name equals a non-empty cfg.DefaultWorkflow; unset marks
+// nothing, not even an empty-string-named workflow), the effective agent and
 // model (workflow value falling back to the top level, exactly the
 // referencedAgents/referencedModels precedence), and the effective prompt's
 // one-line summary plus {{VAR}} placeholders. The prompt resolves through
@@ -187,7 +188,7 @@ func gatherWorkflows(cfg *taboo.ProjectConfig, base string, statFile func(string
 		wf := cfg.Workflows[name]
 		entry := jsonWorkflow{
 			Name:         name,
-			Default:      name == cfg.DefaultWorkflow,
+			Default:      cfg.DefaultWorkflow != "" && name == cfg.DefaultWorkflow,
 			Agent:        string(cmp.Or(wf.Agent, cfg.Agent)),
 			Model:        cmp.Or(wf.Model, cfg.Model),
 			Placeholders: []string{},

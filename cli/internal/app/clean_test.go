@@ -403,6 +403,21 @@ func decodeJSONCleanPlan(t *testing.T, stdout string) jsonCleanPlan {
 	return doc
 }
 
+// assertCleanJSONPure asserts the purity contract every clean --json case
+// shares: nothing on stderr, and zero mutating Commander verbs (no worktree
+// remove, workshop remove, or branch -D).
+func assertCleanJSONPure(t *testing.T, fake *fakeCommander, stderr string) {
+	t.Helper()
+	if stderr != "" {
+		t.Errorf("--dry-run --json must write nothing to stderr, got:\n%s", stderr)
+	}
+	for _, verb := range [][]string{{"worktree", "remove"}, {"workshop", "remove"}, {"branch", "-D"}} {
+		if findInvocation(fake, verb...) != nil {
+			t.Errorf("--dry-run --json must mutate nothing, found %v; calls: %v", verb, invocations(fake))
+		}
+	}
+}
+
 // TestClean_DryRunJSON is the tracer bullet for the --dry-run --json machine
 // plan: a full-scope dry run (--all --prune-branches) emits one JSON object to
 // stdout carrying every teardown section — worktrees in the jsonWorktree shape,
@@ -450,14 +465,7 @@ func TestClean_DryRunJSON(t *testing.T) {
 		t.Errorf("unmergedBranches = %v, want [taboo/refactor-456]", doc.UnmergedBranches)
 	}
 
-	if stderr != "" {
-		t.Errorf("--dry-run --json must write nothing to stderr, got:\n%s", stderr)
-	}
-	for _, verb := range [][]string{{"worktree", "remove"}, {"workshop", "remove"}, {"branch", "-D"}} {
-		if findInvocation(fake, verb...) != nil {
-			t.Errorf("--dry-run --json must mutate nothing, found %v; calls: %v", verb, invocations(fake))
-		}
-	}
+	assertCleanJSONPure(t, fake, stderr)
 	// A dry run mutates nothing: the quarantine link is still on disk.
 	if !exists(t, link) {
 		t.Errorf("--dry-run --json must remove nothing; link %s is gone", link)
@@ -480,7 +488,7 @@ func TestClean_DryRunJSONEmptyPlan(t *testing.T) {
 	}}
 	env := configEnv(t, fake, root, nil)
 
-	stdout, _, err := cleanCmd(t, env, "--dry-run", "--json")
+	stdout, stderr, err := cleanCmd(t, env, "--dry-run", "--json")
 	if err != nil {
 		t.Fatalf("clean --dry-run --json error = %v, want nil", err)
 	}
@@ -492,6 +500,7 @@ func TestClean_DryRunJSONEmptyPlan(t *testing.T) {
 	if strings.Contains(stdout, "null") {
 		t.Errorf("an empty plan must contain no null:\n%s", stdout)
 	}
+	assertCleanJSONPure(t, fake, stderr)
 }
 
 // TestClean_DryRunJSONForceMovesUnmerged asserts --force shifts the whole
@@ -504,7 +513,7 @@ func TestClean_DryRunJSONForceMovesUnmerged(t *testing.T) {
 	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
 	env := configEnv(t, fake, root, nil)
 
-	stdout, _, err := cleanCmd(t, env, "--prune-branches", "--force", "--dry-run", "--json")
+	stdout, stderr, err := cleanCmd(t, env, "--prune-branches", "--force", "--dry-run", "--json")
 	if err != nil {
 		t.Fatalf("clean --force --dry-run --json error = %v, want nil", err)
 	}
@@ -516,6 +525,7 @@ func TestClean_DryRunJSONForceMovesUnmerged(t *testing.T) {
 	if len(doc.UnmergedBranches) != 0 {
 		t.Errorf("unmergedBranches = %v, want [] under --force", doc.UnmergedBranches)
 	}
+	assertCleanJSONPure(t, fake, stderr)
 }
 
 // TestClean_DryRunHumanPlanUnchanged pins the human preview byte-for-byte: a

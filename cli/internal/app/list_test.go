@@ -736,7 +736,8 @@ func TestList_WorkflowDefaultsPromptFallback(t *testing.T) {
 
 // TestList_WorkflowsJSON locks the machine view of the workflows section: with
 // --json the document gains a "workflows" array — sorted by name, each entry
-// carrying the name, the default flag, the effective agent/model, the prompt
+// carrying the name, the default flag, the effective agent/model (each field
+// falling back to the top level independently, never block-wise), the prompt
 // summary with its availability flag, and the placeholder names (empty-slice,
 // never null) — while the pre-existing workshops/worktrees/branches sections
 // keep the exact shape TestList_JSON locks.
@@ -746,6 +747,7 @@ func TestList_WorkflowsJSON(t *testing.T) {
 	body := listProjectBody +
 		"workflows:\n" +
 		"  refactor:\n    agent: claude-code\n    model: claude-sonnet-4-5\n    prompt: refactor {{TARGET}}\n" +
+		"  polish:\n    model: claude-haiku\n    prompt: polish it\n" +
 		"  fix:\n    prompt-file: prompts/ghost.md\n" +
 		"default-workflow: refactor\n"
 	writeTabooProject(t, root, body)
@@ -762,15 +764,16 @@ func TestList_WorkflowsJSON(t *testing.T) {
 		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
 	}
 
-	if len(doc.Workflows) != 2 {
-		t.Fatalf("workflows = %+v, want two entries", doc.Workflows)
+	if len(doc.Workflows) != 3 {
+		t.Fatalf("workflows = %+v, want three entries", doc.Workflows)
 	}
-	fix, refactor := doc.Workflows[0], doc.Workflows[1]
-	if fix.Name != "fix" || refactor.Name != "refactor" {
+	fix, polish, refactor := doc.Workflows[0], doc.Workflows[1], doc.Workflows[2]
+	if fix.Name != "fix" || polish.Name != "polish" || refactor.Name != "refactor" {
 		t.Fatalf("workflows not sorted by name: %+v", doc.Workflows)
 	}
-	if fix.Default || !refactor.Default {
-		t.Errorf("default flags = fix:%v refactor:%v, want the marker on refactor only", fix.Default, refactor.Default)
+	if fix.Default || polish.Default || !refactor.Default {
+		t.Errorf("default flags = fix:%v polish:%v refactor:%v, want the marker on refactor only",
+			fix.Default, polish.Default, refactor.Default)
 	}
 	// fix falls back to the top level; its prompt-file is absent so the prompt
 	// is unavailable and the placeholders are the empty (never nil) slice.
@@ -782,6 +785,12 @@ func TestList_WorkflowsJSON(t *testing.T) {
 	}
 	if fix.Placeholders == nil || len(fix.Placeholders) != 0 {
 		t.Errorf("fix placeholders = %#v, want the empty slice", fix.Placeholders)
+	}
+	// polish sets only model: each field resolves independently, so the agent
+	// falls back to the top level while the model stays its own — a block-wise
+	// fallback (agent and model taken together) would leave the agent empty.
+	if polish.Agent != "opencode" || polish.Model != "claude-haiku" {
+		t.Errorf("polish effective agent/model = %q/%q, want per-field opencode/claude-haiku", polish.Agent, polish.Model)
 	}
 	// refactor carries its own agent/model, an available inline prompt, and its
 	// placeholder.
@@ -875,6 +884,29 @@ func TestGatherWorkflows_InjectedStatFile(t *testing.T) {
 	empty := gatherWorkflows(&taboo.ProjectConfig{}, t.TempDir(), denyAll)
 	if empty == nil || len(empty) != 0 {
 		t.Errorf("gatherWorkflows with no workflows = %#v, want the empty (non-nil) slice", empty)
+	}
+}
+
+// TestGatherWorkflows_UnsetDefaultMarksNothing locks the guard on the default
+// marker: with default-workflow unset, no workflow is flagged as the default —
+// not even one with the pathological empty-string name, which would otherwise
+// match the unset ("") value and advertise a default a bare `taboo run` would
+// refuse to select.
+func TestGatherWorkflows_UnsetDefaultMarksNothing(t *testing.T) {
+	t.Parallel()
+	cfg := &taboo.ProjectConfig{
+		Agent: "opencode",
+		Model: "anthropic/claude",
+		Workflows: map[string]taboo.Workflow{
+			"": {Prompt: "hi"},
+		},
+	}
+	got := gatherWorkflows(cfg, t.TempDir(), func(string) bool { return false })
+	if len(got) != 1 {
+		t.Fatalf("gatherWorkflows = %+v, want one entry", got)
+	}
+	if got[0].Default {
+		t.Errorf("empty-string-named workflow marked (default) with default-workflow unset: %+v", got[0])
 	}
 }
 

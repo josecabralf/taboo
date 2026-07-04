@@ -265,9 +265,12 @@ func TestPlan_CompletionSignalPrecedence(t *testing.T) {
 			want:           "DEFAULTS_DONE",
 		},
 		{
-			name:     "adhoc run resolves defaults directly",
-			workflow: "",
-			want:     "DEFAULTS_DONE",
+			// The unselected workflow carries a sentinel signal: if Plan consulted
+			// it on an adhoc run, this case would fail rather than pass vacuously.
+			name:           "adhoc run resolves defaults directly",
+			workflowSignal: "NOT-SELECTED",
+			workflow:       "",
+			want:           "DEFAULTS_DONE",
 		},
 	}
 	for _, tt := range tests {

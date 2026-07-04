@@ -650,6 +650,33 @@ func TestRun_DryRunJSON(t *testing.T) {
 	if len(invocations(fake)) != 0 {
 		t.Errorf("--dry-run --json must not touch the commander; calls: %v", invocations(fake))
 	}
+
+	// Every documented key is present as a literal. decodeJSONPlan shares the
+	// producer's struct tags, so a tag rename would pass it silently; the
+	// document is additive (no key freeze, see docs/reference/cli.md), so this
+	// pins presence rather than the exact set.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
+	}
+	for _, key := range []string{
+		"workflow", "adhoc", "branch", "agent", "model", "workshop", "repo",
+		"sourceDefinition", "timeout", "maxIterations", "completionSignal",
+		"stopOnNoChange", "prompt", "placeholders", "vars",
+	} {
+		if _, present := m[key]; !present {
+			t.Errorf("plan JSON missing documented key %q:\n%s", key, stdout)
+		}
+	}
+	vars, ok := m["vars"].(map[string]any)
+	if !ok {
+		t.Fatalf("plan JSON vars is not an object:\n%s", stdout)
+	}
+	for _, key := range []string{"supplied", "unused", "unfilled"} {
+		if _, present := vars[key]; !present {
+			t.Errorf("plan vars object missing documented key %q:\n%s", key, stdout)
+		}
+	}
 }
 
 // TestRun_DryRunJSONAdhoc asserts an ad-hoc --prompt dry run carries

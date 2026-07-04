@@ -1158,6 +1158,14 @@ func TestDefaultWorkflowCheck(t *testing.T) {
 			status:  statusError,
 			message: `default-workflow "gone" is not defined (configured workflows: fix, triage)`,
 		},
+		{
+			// An exotic name escapes exactly as selectRun's %q renders it.
+			name:    "undefined exotic name escapes like selectRun",
+			cfg:     taboo.ProjectConfig{DefaultWorkflow: `go"ne`, Workflows: workflows},
+			want:    1,
+			status:  statusError,
+			message: `default-workflow "go\"ne" is not defined (configured workflows: fix, triage)`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

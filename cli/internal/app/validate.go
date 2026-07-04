@@ -486,10 +486,11 @@ func defaultWorkflowCheck(cfg taboo.ProjectConfig) []check {
 		return nil
 	}
 	if _, defined := cfg.Workflows[cfg.DefaultWorkflow]; !defined {
-		return []check{fail("default-workflow", "default-workflow \""+cfg.DefaultWorkflow+
-			"\" is not defined (configured workflows: "+availableWorkflows(&cfg)+")")}
+		// strconv.Quote matches selectRun's %q byte-for-byte, exotic names included.
+		return []check{fail("default-workflow", "default-workflow "+strconv.Quote(cfg.DefaultWorkflow)+
+			" is not defined (configured workflows: "+availableWorkflows(&cfg)+")")}
 	}
-	return []check{ok("default-workflow", "resolves to workflow \""+cfg.DefaultWorkflow+"\"")}
+	return []check{ok("default-workflow", "resolves to workflow "+strconv.Quote(cfg.DefaultWorkflow))}
 }
 
 // effectivePrompt resolves a workflow's prompt text from the config layers
