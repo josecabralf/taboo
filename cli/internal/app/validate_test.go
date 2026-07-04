@@ -484,6 +484,25 @@ func TestValidate_VarsChecks(t *testing.T) {
 		}
 	})
 
+	t.Run("defaults prompt-file backs a bare workflow", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  prompt-file: shared.md\n"+
+			"workflows:\n  fix: {}\n")
+		writePromptFile(t, root, "shared.md", "do {{TASK}} now\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/fix")
+		if c == nil {
+			t.Fatalf("no vars/fix check for a defaults prompt-file-backed workflow\nchecks: %+v", checks)
+		}
+		if !strings.Contains(c.Message, "TASK") {
+			t.Errorf("vars/fix message = %q, want it to name TASK", c.Message)
+		}
+	})
+
 	t.Run("placeholder-free workflow emits nothing", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
@@ -898,7 +917,7 @@ func TestValidate_DefaultWorkflowCheck(t *testing.T) {
 // whose effective completion signal (workflow over defaults, plan.go's
 // precedence minus the CLI override layer) is never mentioned in its effective
 // prompt gets an advisory warn — the agent is never told to print the sentinel,
-// so the loop will always exhaust max-iterations — while a prompt that contains
+// so the signal-based early stop can never fire — while a prompt that contains
 // the signal as a plain substring (the same strings.Contains semantics the
 // orchestrator applies to stdout) is silent. Inheritance is honored both ways,
 // and an unresolvable prompt emits no signal check (promptFileChecks already

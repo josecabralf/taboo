@@ -79,6 +79,7 @@ type PlanOverrides struct {
     Timeout            time.Duration
     MaxIterations      int
     CompletionSignal   string
+    StopOnNoChange     bool
     Branch             string
     BaseRef            string
     From               string
@@ -90,7 +91,10 @@ type PlanOverrides struct {
 `PlanOverrides` is the per-call override layer applied on top of the config when
 resolving a `Plan`. A field's zero value means "unset": fall through to the
 workflow, then the top-level `defaults` layer. Numeric knobs gate on `>0`; strings
-gate on non-empty.
+gate on non-empty. `StopOnNoChange` is the one exception: it is enable-only and
+resolves by OR across this field and the workflow/`defaults` layers, so a
+`false` here cannot disable a config-level enable (see [the resolution rules in
+the `taboo.yaml` reference](taboo-yaml.md#precedence-chain)).
 
 `BaseRef` is threaded straight onto `RunRequest.BaseRef` — a per-call concern
 with no config or workflow layer (see [RunRequest](#runrequest)). `From` selects

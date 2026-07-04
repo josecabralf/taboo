@@ -3,11 +3,13 @@
 The `taboo` binary wraps the common library paths. The thin `cli/main.go`
 entrypoint delegates to the application package `cli/internal/app`. The root
 command is `taboo` ("taboo orchestrates agent runs inside workshop
-environments", `cli/internal/app/main.go`). It registers six subcommands:
-`doctor`, `init`, `validate`, `run`, `list`, `clean`
-(`cli/internal/app/main.go`, `newRootCmd`). There is no `version` subcommand and
-no `--version`/`-v` flag; the only version taboo surfaces is the workshop floor
-(`0.9.1`), reported by `doctor`.
+environments", `cli/internal/app/main.go`). It registers seven subcommands:
+`doctor`, `init`, `validate`, `run`, `list`, `clean`, `version`
+(`cli/internal/app/main.go`, `newRootCmd`). There is no `--version`/`-v` flag;
+`taboo version` prints the CLI's build version from the binary's embedded
+module info (`cli/internal/app/version.go`, `newVersionCmd`) — a `go install`
+binary reports its module version, a plain local build reports `(devel)`. The
+workshop floor version (`0.9.1`) is reported separately, by `doctor`.
 
 Every command exits `0` on success and `1` on failure. `Execute` in
 `cli/internal/app/main.go` is a thin `os.Exit(executeRoot(env))`; `executeRoot`
@@ -18,8 +20,9 @@ sentinel verdicts (`doctor`/`validate`/`run` preflight print their report
 first, then gain exactly one trailing `Error:` line), and cobra's own
 flag-parse and unknown-command errors (`Error: unknown flag: --bogus`). The
 root sets `SilenceErrors` and `SilenceUsage`, so usage is still never dumped
-on failure. Errors go to stderr only — stdout receives nothing on an error
-path, so `--json` consumers always parse a clean stdout document.
+on failure. Errors go to stderr only — the `Error:` line never touches stdout,
+and beyond the report commands' own documents stdout receives nothing on an
+error path, so `--json` consumers always parse a clean stdout document.
 
 !!! info "Where these facts come from"
     Every command, flag, and message below is read from the source named in
@@ -302,7 +305,7 @@ Checks (`validateChecks` -> `configCorrectnessChecks`):
 - `signal/<workflow>`: a `warn` when the workflow's effective
   `completion-signal` (workflow over `defaults`) never appears in its
   effective prompt as a plain substring — the agent is never told to print the
-  sentinel, so the loop will always exhaust `max-iterations`; set it
+  sentinel, so the signal-based early stop can never fire; set it
   intentionally to silence this. A workflow whose effective prompt is
   unresolvable is skipped (`prompt-file/` already fails it) (`loopChecks`).
 - `loop/<workflow>`: a `warn` when the effective `max-iterations` (workflow
@@ -498,7 +501,9 @@ The `--dry-run --json` shape (`jsonCleanPlan`):
 ```
 
 `worktrees` entries reuse the `{"branch","path"}` shape of `list --json`'s
-worktrees section. `workshops` and `sdkLinks` are populated only under
+worktrees section, but the section is scope-gated like the others: it is
+populated unless `--workshops` narrows the scope to workshops only, in which
+case it marshals as `[]`. `workshops` and `sdkLinks` are populated only under
 `--workshops`/`--all`, and `branches`/`unmergedBranches` only under
 `--prune-branches` — `branches` is what a real clean would delete (merged
 branches, or all of them under `--force`) and `unmergedBranches` is what it

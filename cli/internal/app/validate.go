@@ -417,8 +417,8 @@ func varsChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string
 //     defaults.CompletionSignal), plan.go's precedence minus the CLI override
 //     layer — is non-empty but is not a strings.Contains hit in the effective
 //     prompt, the same substring semantics the orchestrator applies to stdout.
-//     The agent is never told to print the sentinel, so the loop will always
-//     exhaust max-iterations. Advisory only, mirroring modelChecks: a prompt
+//     The agent is never told to print the sentinel, so the signal-based
+//     early stop can never fire. Advisory only, mirroring modelChecks: a prompt
 //     can instruct the sentinel indirectly (an included file, agent memory).
 //     A workflow whose effective prompt is unresolvable is skipped —
 //     promptFileChecks already hard-fails a missing prompt-file; don't
@@ -455,7 +455,8 @@ func loopChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string
 				checks = append(checks, warn("loop/"+name,
 					"max-iterations is "+strconv.Itoa(maxIter)+" but no completion-signal is set "+
 						"(workflow or defaults): the loop has no early stop, so every run pays the "+
-						"full "+strconv.Itoa(maxIter)+" iterations"))
+						"full "+strconv.Itoa(maxIter)+" iterations; set a completion-signal or "+
+						"enable stop-on-no-change"))
 			}
 			continue
 		}
@@ -466,7 +467,7 @@ func loopChecks(cfg taboo.ProjectConfig, configPath string, statFile func(string
 		if !strings.Contains(prompt, signal) {
 			checks = append(checks, warn("signal/"+name,
 				"completion-signal \""+signal+"\" never appears in the effective prompt: the agent "+
-					"is never told to print it, so the loop will always exhaust max-iterations; "+
+					"is never told to print it, so the signal-based early stop can never fire; "+
 					"set it intentionally to silence this"))
 		}
 	}

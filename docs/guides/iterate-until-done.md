@@ -30,7 +30,8 @@ The loop stops on the first of three conditions:
 | The loop has run `MaxIterations` times | `StopMaxIterations` | `"max-iterations"` |
 
 `MaxIterations` below 1 means a single run. An empty completion signal disables
-the early stop, so the loop always runs the full `MaxIterations`. The signal is
+the signal-based early stop (the loop then runs the full `MaxIterations`
+unless the opt-in no-change stop fires). The signal is
 matched as a plain substring of stdout (`strings.Contains`), not a whole line or
 an exact match, so choose a distinctive token: an agent that prints `not DONE
 yet` would stop a loop watching for `DONE`.
@@ -78,7 +79,7 @@ Here `iterate` sets no signal of its own, so it falls through to the
 token its prompt asks the agent to print, and keep `defaults` as the shared
 fallback. `taboo validate` warns when a workflow's effective prompt never
 mentions its effective signal — an agent that is never told to print the
-sentinel never prints it, and the loop always exhausts `max-iterations`.
+sentinel never prints it, so the signal-based early stop can never fire.
 
 !!! note "Per-workflow `completion-signal` overrides `defaults`"
     The signal resolves like the other loop knobs — CLI flag (`--signal`) →
@@ -155,8 +156,9 @@ fmt.Printf("stopped after %d iteration(s): %s\n", res.Iterations, res.StopReason
 ## Read the result
 
 Both `RunWorkflow` and `Plan.Run` return an `OrchestratedResult`. It embeds
-`RunResult` (the final iteration's `Branch`, `Commit`, `Output`)
-and adds three fields:
+`RunResult` (the final iteration's `Branch`, `Commit`, `Output`, plus
+`BaseCommit` — the tip the branch started from at setup time, which survives
+every iteration untouched) and adds three fields:
 
 - `Iterations` is how many times the agent ran.
 - `StopReason` is `StopSignal`, `StopNoChange`, or `StopMaxIterations`. It is
@@ -169,7 +171,9 @@ and adds three fields:
 
 The final `Commit` is the branch HEAD after the last iteration. Because every
 iteration commits in place, the commit reflects all passes, not just the last
-one.
+one. `res.Changed()` compares that final `Commit` against the original
+`BaseCommit`, so it reports whether the whole loop landed at least one new
+commit — use it to guard a push or PR stage against shipping an empty branch.
 
 ## Decode a typed result after the loop
 

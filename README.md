@@ -170,7 +170,7 @@ documented in [docs/reference/taboo-yaml.md](docs/reference/taboo-yaml.md).
 | `taboo run [workflow]` | Run a workflow or ad-hoc `--prompt` on a fresh branch. STDOUT is the machine result; STDERR streams agent output and diagnostics. |
 | `taboo validate` | Check `taboo.yaml` for config errors. |
 | `taboo doctor` | Check host readiness (`workshop`, `lxd`, `git`, and config-aware checks). |
-| `taboo list` | Read-only inventory of workshops, worktrees, and branches. |
+| `taboo list` | Read-only inventory of workshops, worktrees, branches, and configured workflows. |
 | `taboo clean` | Remove worktrees, and optionally workshops and branches. |
 
 Every command exits `0` on success and `1` on any failure; there are no per-error exit codes.

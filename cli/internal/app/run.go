@@ -659,10 +659,11 @@ func warnPromptVars(env Env, plan *taboo.Plan, vars map[string]string) {
 // varsSummary renders the dry-run plan's vars: value from the prompt's
 // placeholder set and the caller-supplied variables. Plan already fails fast
 // when supplied vars leave a placeholder unfilled, so a rendered plan has
-// exactly three states: no placeholders at all; placeholders present and vars
-// supplied (all filled, by construction), with any supplied-but-unused keys
-// named; placeholders present and no vars supplied, which pass through to the
-// agent literally (the documented no-vars rule).
+// three base states: no placeholders at all; placeholders present and vars
+// supplied (all filled, by construction); placeholders present and no vars
+// supplied, which pass through to the agent literally (the documented no-vars
+// rule). In the first two, any supplied-but-unused keys are appended — a
+// placeholder-free prompt with vars supplied renders "(none) — unused: <keys>".
 func varsSummary(placeholders []string, vars map[string]string) string {
 	unused := unusedVarKeys(placeholders, vars)
 	unusedSuffix := ""

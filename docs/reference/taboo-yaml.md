@@ -104,7 +104,9 @@ nil (`resolveProfiles`). Like the top level, `Profile` is not serialized
 
 `default-workflow` (string) names the workflow `taboo run` selects when given no
 positional workflow and no prompt flag (`cli/internal/app/run.go`, `selectRun`).
-When it names a workflow that is not defined, `run` errors. When it is empty and
+When it names a workflow that is not defined, `run` errors — and `taboo
+validate` reports the same mismatch as a hard failure (its `default-workflow`
+check) before any run. When it is empty and
 no workflow is named, a bare `run` errors listing the available workflows.
 
 ## Precedence chain
