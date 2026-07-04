@@ -38,10 +38,12 @@ yet` would stop a loop watching for `DONE`.
 
 The no-change stop is opt-in (`stop-on-no-change` in `taboo.yaml`, or
 `StopOnNoChange` on the request): when enabled, an iteration that ends with the
-branch tip unmoved is a fixed point — the next pass would re-run an identical
-prompt against identical state — so the loop stops there instead of paying the
-remaining iterations. The signal check outranks it: an iteration that both
-prints the sentinel and lands no commit reports `StopSignal`, and a stall on
+branch tip unmoved stops the loop instead of paying the remaining iterations.
+This is a commit-based heuristic: it compares branch tips, so uncommitted or
+untracked worktree changes do not count as progress — an iteration that edits
+files but never commits still reads as no change and stops the loop, so do not
+assume it can see uncommitted work. The signal check outranks it: an iteration
+that both prints the sentinel and lands no commit reports `StopSignal`, and a stall on
 the final allowed iteration reports `StopNoChange`, not `StopMaxIterations`.
 It is off by default because a loop whose work product is output rather than
 commits would otherwise stop after one iteration.

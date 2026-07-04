@@ -258,9 +258,9 @@ const StopNoChange      StopReason = "no-change"
 `StopMaxIterations` means the loop exhausted `MaxIterations` without seeing the
 completion signal. `StopSignal` means the agent emitted the completion signal and
 the loop stopped early. `StopNoChange` means `StopOnNoChange` was enabled and an
-iteration ended with the branch tip unmoved — a fixed point: every iteration
-re-runs the same request in the same worktree, so the next `Exec` would replay
-an identical prompt against identical state. The check runs after every `Exec`
+iteration ended with the branch tip unmoved. This is a commit-based heuristic:
+it compares branch tips, so uncommitted or untracked worktree changes do not
+count as progress. The check runs after every `Exec`
 including the last (a final-iteration stall reports `StopNoChange`, not
 `StopMaxIterations`, mirroring the signal check's placement), and the signal
 outranks it: an iteration that both prints the sentinel and lands no commit

@@ -16,9 +16,11 @@ var placeholderRe = regexp.MustCompile(`\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 // placeholder ({{ VAR }}, {{1ST}}, {{a-b}}) is ignored, exactly as Substitute
 // ignores it. An empty or placeholder-free template yields an empty result.
 func Placeholders(tmpl string) []string {
+	seen := make(map[string]struct{})
 	var names []string
 	for _, m := range placeholderRe.FindAllStringSubmatch(tmpl, -1) {
-		if !slices.Contains(names, m[1]) {
+		if _, ok := seen[m[1]]; !ok {
+			seen[m[1]] = struct{}{}
 			names = append(names, m[1])
 		}
 	}

@@ -28,8 +28,9 @@ const (
 	// stopped early.
 	StopSignal StopReason = "signal"
 	// StopNoChange means stop-on-no-change was enabled and an iteration ended
-	// with the branch tip unmoved — the next Exec would re-run an identical
-	// prompt against identical state, so the loop stopped at the fixed point.
+	// with the branch tip unmoved. This is a commit-based heuristic: it compares
+	// branch tips, so uncommitted or untracked worktree changes do not count as
+	// progress.
 	StopNoChange StopReason = "no-change"
 )
 
