@@ -112,10 +112,12 @@ func fakePoolWithErrs(calls *[]poolCall, errs map[int]error) poolRunner {
 
 // fakePoolWithOutcomes is the general canned pool: results[i].Err is errs[i]
 // (nil where unset), and every result carries Commit/BaseCommit the way
-// production populates them after a successful Exec — distinct shas (the run
-// committed), or an equal pair where unchanged[i] is set (the run committed
-// nothing, so Changed() reports false). When worktrees is non-nil, results[i]
-// is backed by worktrees[i] through rec so a test can record each Dispose.
+// production populates them. A successful run gets distinct shas (the run
+// committed); a run where unchanged[i] is set gets an equal pair (the run
+// committed nothing, so Changed() reports false); a failed run keeps Commit
+// empty — a failed Exec never records the branch tip — so Changed() reports
+// false there too. When worktrees is non-nil, results[i] is backed by
+// worktrees[i] through rec so a test can record each Dispose.
 func fakePoolWithOutcomes(calls *[]poolCall, errs map[int]error, unchanged map[int]bool, worktrees []string, rec *recordingDisposer) poolRunner {
 	return func(_ context.Context, cfg taboo.Config, limit int, _ taboo.Commander, reqs []taboo.RunRequest) ([]taboo.RunResult, error) {
 		*calls = append(*calls, poolCall{cfg: cfg, limit: limit, reqs: reqs})
@@ -127,7 +129,10 @@ func fakePoolWithOutcomes(calls *[]poolCall, errs map[int]error, unchanged map[i
 			}
 			res.Branch = r.Branch
 			res.Err = errs[i]
-			res.Commit, res.BaseCommit = "bbbb111", "aaaa000"
+			res.BaseCommit = "aaaa000"
+			if res.Err == nil && !unchanged[i] {
+				res.Commit = "bbbb111"
+			}
 			if unchanged[i] {
 				res.Commit = res.BaseCommit
 			}
@@ -359,7 +364,10 @@ func TestLoopBlocksUnchangedRunWithNoChangeComment(t *testing.T) {
 		t.Errorf("comment %q should give the retry hint (re-add %q)", noChange, readyLabel)
 	}
 
-	// The failed issue still gets the failure treatment.
+	// The failed issue still gets the failure treatment. Like every production
+	// failure it is ALSO unchanged (a failed Exec leaves Commit empty), so this
+	// pins that settleResult's Err branch takes precedence over !Changed(): the
+	// comment carries the run error, never the no-change text.
 	assertContains(t, gh.added, "2:"+blockedLabel, "failed issue should stay blocked")
 	var failComment string
 	for _, c := range gh.comments {
@@ -372,6 +380,9 @@ func TestLoopBlocksUnchangedRunWithNoChangeComment(t *testing.T) {
 	}
 	if !strings.Contains(failComment, "boom") {
 		t.Errorf("comment %q should carry the run error", failComment)
+	}
+	if strings.Contains(failComment, "no commits") {
+		t.Errorf("comment %q is the no-change text; a failed run's Err must take precedence over !Changed()", failComment)
 	}
 
 	// The changed issue is neither blocked nor commented on.
@@ -648,5 +659,34 @@ func TestSettleResultDisposesWorktree(t *testing.T) {
 
 	if got := rec.removeCount(); got != 1 {
 		t.Errorf("worktree-remove count = %d, want 1 (settleResult must dispose the worktree)", got)
+	}
+}
+
+// TestSettleResultErrTakesPrecedenceOverUnchanged pins settleResult's case
+// order: a production failed run satisfies BOTH Err != nil AND !Changed() (a
+// failed Exec leaves Commit empty), and it must get the failure comment
+// carrying the run error, never the no-change text — reordering the switch to
+// check !Changed() first would silently drop the error diagnostic.
+func TestSettleResultErrTakesPrecedenceOverUnchanged(t *testing.T) {
+	t.Parallel()
+
+	// Empty Commit, populated BaseCommit: exactly what a failed Exec leaves
+	// behind, so Changed() reports false alongside the non-nil Err.
+	res := taboo.RunResult{Branch: "agent/x", Err: errors.New("boom")}
+	res.BaseCommit = "aaaa000"
+
+	gh := &fakeLoopGH{}
+	settleResult(context.Background(), gh, planItem{Number: 7, Branch: "agent/x"}, res)
+
+	assertContains(t, gh.added, "7:"+blockedLabel, "failed run should be blocked")
+	if len(gh.comments) != 1 {
+		t.Fatalf("comments = %v, want exactly one on the failed run", gh.comments)
+	}
+	comment := gh.comments[0]
+	if !strings.Contains(comment, "boom") {
+		t.Errorf("comment %q should carry the run error", comment)
+	}
+	if strings.Contains(comment, "no commits") {
+		t.Errorf("comment %q is the no-change text; Err must take precedence over !Changed()", comment)
 	}
 }
