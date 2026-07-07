@@ -114,6 +114,54 @@ func TestValidate_RejectsBadConfig(t *testing.T) {
 	}
 }
 
+// TestValidate_Strategy asserts validate enforces the workspace-strategy closed
+// set the same way LoadConfig does: the two named strategies validate clean, an
+// omitted strategy is silent (it defaults to worktree), and an unknown value is a
+// terminal "strategy" error with a non-zero exit — the gap that let a typo pass
+// validate and only fail later at run/doctor.
+func TestValidate_Strategy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		strategy   string // taboo.yaml strategy: line; "" omits the key entirely
+		wantStatus string // findStatus for the "strategy" check; "" means no line emitted
+		wantErr    bool
+	}{
+		{name: "branch", strategy: "branch", wantStatus: "ok"},
+		{name: "worktree", strategy: "worktree", wantStatus: "ok"},
+		{name: "omitted defaults to worktree", strategy: "", wantStatus: ""},
+		{name: "unknown value rejected", strategy: "worktre", wantStatus: "error", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			body := "" +
+				"workshop: demo\n" +
+				"base: ubuntu@24.04\n" +
+				"agent: opencode\n" +
+				"model: openrouter/qwen/qwen3-coder-plus\n" +
+				"repo: " + tabooRepoRoot(t) + "\n"
+			if tt.strategy != "" {
+				body += "strategy: " + tt.strategy + "\n"
+			}
+			body += "defaults:\n  prompt-file: prompt.md\n"
+			writeTabooProject(t, root, body)
+			writePromptFile(t, root, "prompt.md", "do the thing\n")
+			fake := &fakeCommander{stdoutFn: okHostStdout}
+			env := configEnv(t, fake, root, nil)
+
+			out, err := runValidate(t, env)
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("validate err = %v, wantErr = %v\n%s", err, tt.wantErr, out)
+			}
+			if got := findStatus(out, "strategy"); got != tt.wantStatus {
+				t.Errorf("strategy check status = %q, want %q\n%s", got, tt.wantStatus, out)
+			}
+		})
+	}
+}
+
 // TestValidate_UnknownAgent asserts an unknown referenced agent hard-fails with a
 // precise "did you mean <closest>" suggestion and a non-zero exit — whether the
 // agent is the top-level default or a workflow override.
