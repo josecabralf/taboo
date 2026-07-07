@@ -116,7 +116,10 @@ afk implement --issue <n>
    agent runs inside a taboo-provisioned workshop and **commits in place**; it
    is git-**push-denied**. The issue body reaches the prompt through taboo's
    variable substitution, never the shell, so backticks and `$()` in it are data,
-   not commands.
+   not commands. A run that ends cleanly but produces no commits
+   (`res.Changed()` false) is refused right here, before the push: the worktree
+   is freed and the command errors naming the issue and branch, so `origin`
+   never sees an empty branch.
 3. **Push** the run's branch to `origin`.
 4. **Open a draft PR** whose body is the agent's plan (read from
    `.taboo-plan.md` in the worktree), prefixed with `Closes #N`.
@@ -278,8 +281,10 @@ Each wave:
    already in flight.
 3. **Fan out** the implement workflow across the batch through `taboo.Pool`,
    bounded by `--parallelism`.
-4. **Settle** each run: success releases `agent:in-progress`; failure also adds
-   `agent:blocked` plus a diagnostic comment, taking the issue out of the ready
+4. **Settle** each run: success (a run that landed commits) releases
+   `agent:in-progress`; failure also adds `agent:blocked` plus a diagnostic
+   comment, and a run that ends with no error but no new commit is likewise
+   blocked, with a no-change comment — either way the issue leaves the ready
    pool until a human re-adds the label.
 
 If the whole wave fails (the pool itself returns an error), every issue claimed

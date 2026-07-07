@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/josecabralf/taboo/internal/exec"
@@ -83,6 +84,38 @@ func TestOrchestrator_LoopsToMaxIterations(t *testing.T) {
 	// that re-runs the full per-run setup every iteration.
 	if got := fc.countVerb("worktree"); got != 1 {
 		t.Errorf("worktree add count = %d, want 1 (Setup runs once, then Exec loops)", got)
+	}
+}
+
+// TestOrchestrator_BaseCommitSurvivesIterations pins that Setup's base capture
+// rides the embedded RunResult across the whole loop: while Commit advances
+// with every iteration's final-HEAD capture, the final result still pairs the
+// last Commit with the ORIGINAL base, so Changed() compares the run's end
+// against where the branch started, not against the previous iteration.
+func TestOrchestrator_BaseCommitSurvivesIterations(t *testing.T) {
+	// The first rev-parse is Setup's base capture; each later one is an
+	// iteration's final-HEAD capture, advancing every time.
+	fc := &fakeCommander{stdoutFn: shaSequence("base0001", "head0001", "head0002", "head0003")}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:    RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations: 3,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3", res.Iterations)
+	}
+	if res.BaseCommit != "base0001" {
+		t.Errorf("BaseCommit = %q, want base0001 (the original base must survive every iteration)", res.BaseCommit)
+	}
+	if res.Commit != "head0003" {
+		t.Errorf("Commit = %q, want head0003 (the last iteration's HEAD)", res.Commit)
+	}
+	if !res.Changed() {
+		t.Error("Changed() = false, want true (final HEAD differs from the original base)")
 	}
 }
 
@@ -305,6 +338,220 @@ func TestOrchestrator_ForkSingleIterationAndResumeLoopAllowed(t *testing.T) {
 	}
 	if got := fcResume.countVerb("exec"); got != 3 {
 		t.Errorf("resume loop exec count = %d, want 3 (one per iteration)", got)
+	}
+}
+
+// shaSequence programs a fake commander whose successive `git rev-parse HEAD`
+// calls answer the given SHAs in order (the first is Setup's base capture, each
+// later one an iteration's final-HEAD capture), repeating the last SHA once the
+// script is exhausted. Every other verb answers empty stdout.
+func shaSequence(shas ...string) func(exec.Cmd) string {
+	var revParses atomic.Int32
+	return func(c exec.Cmd) string {
+		if verbOf(c) != "rev-parse" {
+			return ""
+		}
+		n := int(revParses.Add(1))
+		if n > len(shas) {
+			n = len(shas)
+		}
+		return shas[n-1] + "\n"
+	}
+}
+
+// TestOrchestrator_StopOnNoChangeStopsAtStall pins the opt-in commit-based
+// early stop: with StopOnNoChange on, an iteration whose final-HEAD capture
+// equals the previous tip is a fixed point — the loop stops there with
+// StopNoChange instead of paying the remaining iterations.
+func TestOrchestrator_StopOnNoChangeStopsAtStall(t *testing.T) {
+	// base, iter1 moves the tip, iter2 stalls on the same SHA.
+	fc := &fakeCommander{stdoutFn: shaSequence("base0001", "head0001", "head0001")}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:     RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:  5,
+		StopOnNoChange: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopNoChange {
+		t.Errorf("StopReason = %q, want %q", res.StopReason, StopNoChange)
+	}
+	if res.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2 (stop at the stalled iteration)", res.Iterations)
+	}
+	if got := fc.countVerb("exec"); got != 2 {
+		t.Errorf("exec count = %d, want 2 (no re-run after the fixed point)", got)
+	}
+}
+
+// TestOrchestrator_StopOnNoChangeFinalIterationTieBreak pins the tie-break: a
+// stall on the LAST allowed iteration reports StopNoChange, not
+// StopMaxIterations — the check runs after every Exec including the final one,
+// and the budget running out at the same moment doesn't change that the tip
+// stopped moving.
+func TestOrchestrator_StopOnNoChangeFinalIterationTieBreak(t *testing.T) {
+	// base, iter1 moves the tip, iter2 (the last allowed) stalls on the same SHA.
+	fc := &fakeCommander{stdoutFn: shaSequence("base0001", "head0001", "head0001")}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:     RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:  2,
+		StopOnNoChange: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopNoChange {
+		t.Errorf("StopReason = %q, want %q (no-change wins the final-iteration tie)", res.StopReason, StopNoChange)
+	}
+	if res.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2", res.Iterations)
+	}
+}
+
+// TestOrchestrator_StopOnNoChangeFirstIterationNoOp pins the seed: prev starts
+// at Setup's BaseCommit, so a first Exec whose capture equals the base stops
+// the loop at iteration 1 — the agent did nothing at all.
+func TestOrchestrator_StopOnNoChangeFirstIterationNoOp(t *testing.T) {
+	// Setup's base capture and the first iteration's capture answer the same SHA.
+	fc := &fakeCommander{stdoutFn: shaSequence("base0001", "base0001")}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:     RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:  4,
+		StopOnNoChange: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopNoChange {
+		t.Errorf("StopReason = %q, want %q", res.StopReason, StopNoChange)
+	}
+	if res.Iterations != 1 {
+		t.Errorf("Iterations = %d, want 1 (first Exec already the fixed point)", res.Iterations)
+	}
+}
+
+// TestOrchestrator_StopOnNoChangeProgressRunsToCap pins the advance: while
+// every iteration moves the tip, the knob never fires and the loop exhausts
+// MaxIterations exactly as before.
+func TestOrchestrator_StopOnNoChangeProgressRunsToCap(t *testing.T) {
+	fc := &fakeCommander{stdoutFn: shaSequence("base0001", "head0001", "head0002", "head0003")}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:     RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:  3,
+		StopOnNoChange: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopMaxIterations {
+		t.Errorf("StopReason = %q, want %q (progress every iteration)", res.StopReason, StopMaxIterations)
+	}
+	if res.Iterations != 3 {
+		t.Errorf("Iterations = %d, want 3", res.Iterations)
+	}
+	if got := fc.countVerb("exec"); got != 3 {
+		t.Errorf("exec count = %d, want 3 (full budget)", got)
+	}
+}
+
+// TestOrchestrator_SignalOutranksNoChange pins the check order: an iteration
+// that both prints the sentinel and lands no commit reports StopSignal — the
+// prompt-cooperating stop keeps priority over the commit-based one.
+func TestOrchestrator_SignalOutranksNoChange(t *testing.T) {
+	fc := &fakeCommander{
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "exec" {
+				return "TASK-DONE\n"
+			}
+			if verbOf(c) == "rev-parse" {
+				return "base0001\n" // tip never moves
+			}
+			return ""
+		},
+	}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:       RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:    5,
+		CompletionSignal: "TASK-DONE",
+		StopOnNoChange:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopSignal {
+		t.Errorf("StopReason = %q, want %q (signal outranks no-change)", res.StopReason, StopSignal)
+	}
+	if res.Iterations != 1 {
+		t.Errorf("Iterations = %d, want 1", res.Iterations)
+	}
+}
+
+// TestOrchestrator_NoChangeKnobOffUnchangedBehavior pins the opt-in: with
+// StopOnNoChange false a repeating tip never stops the loop — behavior is
+// byte-identical to before the knob existed.
+func TestOrchestrator_NoChangeKnobOffUnchangedBehavior(t *testing.T) {
+	fc := &fakeCommander{stdoutFn: shaSequence("base0001", "base0001", "base0001", "base0001")}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:    RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations: 3,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopMaxIterations {
+		t.Errorf("StopReason = %q, want %q (knob off: no early stop)", res.StopReason, StopMaxIterations)
+	}
+	if got := fc.countVerb("exec"); got != 3 {
+		t.Errorf("exec count = %d, want 3 (knob off: full budget)", got)
+	}
+}
+
+// TestOrchestrator_NoChangeStopRunsExtractor pins that the StopNoChange path
+// funnels through extract like both existing stop paths: a configured
+// ResultExtractor still decodes the final iteration's output.
+func TestOrchestrator_NoChangeStopRunsExtractor(t *testing.T) {
+	shas := shaSequence("base0001", "base0001")
+	fc := &fakeCommander{
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "exec" {
+				return "<result>{\"summary\":\"stalled\",\"score\":1}</result>\n"
+			}
+			return shas(c)
+		},
+	}
+	o := NewOrchestrator(New(testConfig(t), fc))
+
+	res, err := o.Run(context.Background(), OrchestratedRequest{
+		RunRequest:      RunRequest{Branch: "agent/x", Prompt: "go"},
+		MaxIterations:   3,
+		StopOnNoChange:  true,
+		ResultExtractor: result.JSONResult[review](),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != StopNoChange {
+		t.Fatalf("StopReason = %q, want %q", res.StopReason, StopNoChange)
+	}
+	rv, ok := res.Result.(review)
+	if !ok {
+		t.Fatalf("res.Result = %T, want review (extractor must run on the no-change stop)", res.Result)
+	}
+	if rv.Summary != "stalled" || rv.Score != 1 {
+		t.Errorf("res.Result = %+v, want {stalled 1}", rv)
 	}
 }
 

@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 
@@ -35,8 +36,8 @@ type Env struct {
 
 // newRootCmd builds the taboo root command, wires the injected env into its
 // streams, and registers every subcommand. SilenceErrors/SilenceUsage keep a
-// failed check from dumping cobra usage/error noise; main maps the returned
-// error to the exit code.
+// failure from dumping cobra usage/error noise; executeRoot prints the returned
+// error once to stderr and maps it to the exit code.
 func newRootCmd(env Env) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "taboo",
@@ -58,8 +59,7 @@ func newRootCmd(env Env) *cobra.Command {
 }
 
 // Execute is the package-app entrypoint the thin cli/main.go delegates to. It
-// builds the real-process Env and runs the root command, exiting non-zero on a
-// command failure (cobra error noise is already silenced in newRootCmd).
+// builds the real-process Env and exits with executeRoot's code.
 func Execute() {
 	env := Env{
 		Cmd:       taboo.NewExecCommander(),
@@ -69,7 +69,21 @@ func Execute() {
 		LookupEnv: os.LookupEnv,
 		Getwd:     os.Getwd,
 	}
+	os.Exit(executeRoot(env))
+}
+
+// executeRoot runs the root command against env and returns the process exit
+// code, printing a returned error once to env.Stderr as "Error: <err>". This is
+// the single seam where a command failure becomes user-visible: the root sets
+// SilenceErrors/SilenceUsage (no cobra echo, no usage dump), so RunE refusals,
+// sentinel verdicts, and cobra's own flag-parse/unknown-command errors all
+// surface here — exactly one line, stderr only, so stdout stays clean for the
+// machine (--json) surfaces. It returns an int instead of calling os.Exit so
+// the printing contract is unit-testable with an in-memory Env.
+func executeRoot(env Env) int {
 	if err := newRootCmd(env).ExecuteContext(context.Background()); err != nil {
-		os.Exit(1)
+		_, _ = fmt.Fprintln(env.Stderr, "Error:", err)
+		return 1
 	}
+	return 0
 }

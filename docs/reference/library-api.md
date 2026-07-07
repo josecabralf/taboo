@@ -49,10 +49,11 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 func (p *Plan) Run(ctx context.Context, cmd Commander) (OrchestratedResult, error)
 
 type Plan struct {
-    Config   Config              // the resolved workshop runner input
-    Request  OrchestratedRequest // the resolved looped run
-    Workflow string              // originating workflow name ("" = ad-hoc)
-    Model    string              // resolved model string (informational)
+    Config       Config              // the resolved workshop runner input
+    Request      OrchestratedRequest // the resolved looped run
+    Workflow     string              // originating workflow name ("" = ad-hoc)
+    Model        string              // resolved model string (informational)
+    Placeholders []string            // sorted, deduped {{VAR}} names of the pre-substitution prompt
 }
 ```
 
@@ -61,6 +62,10 @@ resolves a `workflow` plus per-call `PlanOverrides` into a `Plan`: a pure,
 inspectable description of one run (modulo reading a prompt file). Inspect or
 adjust `Plan.Config` and `Plan.Request` before running. `(*Plan).Run` executes
 the resolved plan — the sole side effect — driving the iteration loop over `cmd`.
+`Plan.Placeholders` records which `{{VAR}}` placeholders the resolved
+pre-substitution prompt referenced (`Request.Prompt` is the post-substitution
+text, so the names are not recoverable from it); see
+[run variables](../run-vars.md#discovering-a-workflows-variables).
 
 This path exposes the resolved run for inspection or adjustment before it
 executes; `RunWorkflow` is the same pipeline collapsed into one call.
@@ -74,6 +79,7 @@ type PlanOverrides struct {
     Timeout            time.Duration
     MaxIterations      int
     CompletionSignal   string
+    StopOnNoChange     bool
     Branch             string
     BaseRef            string
     From               string
@@ -85,7 +91,10 @@ type PlanOverrides struct {
 `PlanOverrides` is the per-call override layer applied on top of the config when
 resolving a `Plan`. A field's zero value means "unset": fall through to the
 workflow, then the top-level `defaults` layer. Numeric knobs gate on `>0`; strings
-gate on non-empty.
+gate on non-empty. `StopOnNoChange` is the one exception: it is enable-only and
+resolves by OR across this field and the workflow/`defaults` layers, so a
+`false` here cannot disable a config-level enable (see [the resolution rules in
+the `taboo.yaml` reference](taboo-yaml.md#precedence-chain)).
 
 `BaseRef` is threaded straight onto `RunRequest.BaseRef` — a per-call concern
 with no config or workflow layer (see [RunRequest](#runrequest)). `From` selects
@@ -144,24 +153,38 @@ any setup runs.
 
 ```go
 type RunResult struct {
-    Branch string
-    Commit string // HEAD of the branch after the agent ran
-    Output string // captured agent exec stdout (stderr is not retained)
-    Err    error  // populated by Pool per run; nil from the single-run path
+    Branch     string
+    Commit     string // HEAD of the branch after the agent ran
+    BaseCommit string // HEAD of the fresh worktree at Setup time — the tip the branch started from
+    Output     string // captured agent exec stdout (stderr is not retained)
+    Err        error  // populated by Pool per run; nil from the single-run path
 }
 ```
 
 `RunResult` reports the outcome of a run. `Err` is populated by `Pool` when
 fanning out so one failed run does not abort the batch. The run's worktree is
 not exposed as a path; read files from it with `res.Artifact(relpath)`.
+`BaseCommit` is captured by `Setup` against the fresh worktree — the base
+ref's tip when `RunRequest.BaseRef` is set, the host repo's `HEAD` otherwise —
+and is captured before the `OnWorkshopReady` hooks run, so a setup hook that
+commits counts as a change the run produced. It survives every `Exec` and
+orchestrator iteration untouched, so the final result always pairs the last
+`Commit` with the original base.
 
 ```go
+func (r RunResult) Changed() bool
 func (r RunResult) Artifact(relpath string) (string, error)
 func (r RunResult) Dispose() error
 
 func NewResultWithWorktree(worktree string) RunResult
 func NewResultWithWorktreeCmd(worktree string, cmd Commander) RunResult
 ```
+
+`Changed` reports whether the run produced at least one new commit: the final
+`Commit` differs from the `BaseCommit` the worktree started at. It is pure (no
+I/O, no worktree handle needed) and meaningful only after a successful `Exec` —
+before `Exec`, `Commit` is empty and `Changed` returns false. Use it to guard a
+push or PR stage against shipping an empty branch.
 
 `Artifact` reads the file at `relpath` within the run's worktree and returns its
 contents. `relpath` must stay inside the worktree: an absolute path or a `..`
@@ -196,13 +219,18 @@ type OrchestratedRequest struct {
     RunRequest                       // embedded
     MaxIterations    int             // zero or negative = a single run
     CompletionSignal string          // sentinel in stdout that stops the loop early
+    StopOnNoChange   bool            // opt-in: stop when an iteration lands no new commit
     ResultExtractor  ResultExtractor // optional; parses a typed result post-loop
 }
 ```
 
 `OrchestratedRequest` describes a looped run: an embedded `RunRequest` plus the
 loop's own knobs. It is the type of `Plan.Request`. `ResultExtractor` is nil to
-skip extraction, leaving `OrchestratedResult.Result` nil.
+skip extraction, leaving `OrchestratedResult.Result` nil. `StopOnNoChange`
+stops the loop early when an iteration produces no new commit (the branch tip
+after `Exec` equals the tip before it) — see `StopNoChange` below. It is off by
+default, deliberately: a loop whose work product is output rather than commits
+would otherwise stop after one iteration.
 
 ### OrchestratedResult
 
@@ -228,12 +256,20 @@ type StopReason string
 
 const StopMaxIterations StopReason = "max-iterations"
 const StopSignal        StopReason = "signal"
+const StopNoChange      StopReason = "no-change"
 ```
 
 `StopReason` explains why an orchestrated run's iteration loop ended.
 `StopMaxIterations` means the loop exhausted `MaxIterations` without seeing the
 completion signal. `StopSignal` means the agent emitted the completion signal and
-the loop stopped early.
+the loop stopped early. `StopNoChange` means `StopOnNoChange` was enabled and an
+iteration ended with the branch tip unmoved. This is a commit-based heuristic:
+it compares branch tips, so uncommitted or untracked worktree changes do not
+count as progress. The check runs after every `Exec`
+including the last (a final-iteration stall reports `StopNoChange`, not
+`StopMaxIterations`, mirroring the signal check's placement), and the signal
+outranks it: an iteration that both prints the sentinel and lands no commit
+reports `StopSignal`.
 
 ## Building blocks
 
@@ -359,6 +395,20 @@ matching key returns an error of the form
 this only when the map is non-empty; with no vars the prompt's `{{VAR}}`
 placeholders are left untouched and produce no error.
 
+### Placeholders
+
+```go
+func Placeholders(tmpl string) []string
+```
+
+`Placeholders` returns the distinct `{{VAR}}` placeholder names `tmpl`
+references, sorted ascending. It is pure and shares `Substitute`'s grammar
+(`[A-Za-z_][A-Za-z0-9_]*`), so text that is not a placeholder — `{{ VAR }}`,
+`{{1ST}}`, `{{a-b}}` — is ignored exactly as `Substitute` ignores it. An empty
+or placeholder-free template yields an empty result. Use it to discover which
+variables a prompt template takes before filling it; see
+[run variables](../run-vars.md#discovering-a-workflows-variables).
+
 ### Hook and Hooks
 
 ```go
@@ -454,11 +504,14 @@ type RunDefaults struct {
     Timeout          Duration `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
     MaxIterations    int      `yaml:"max-iterations,omitempty"`
     CompletionSignal string   `yaml:"completion-signal,omitempty"`
+    StopOnNoChange   bool     `yaml:"stop-on-no-change,omitempty"`
 }
 ```
 
 `RunDefaults` are scalar-only run settings applied when a workflow or flag does
-not override them. `Timeout` is a `Duration` (a named `time.Duration`) written in
+not override them. `StopOnNoChange` is enable-only: the effective value is the
+OR across the override/workflow/defaults layers, so any layer can turn it on
+and none can turn it off (see [taboo-yaml.md](taboo-yaml.md)). `Timeout` is a `Duration` (a named `time.Duration`) written in
 `taboo.yaml` as a duration string such as `30m` or `1h30m`. The type lives in the
 internal config package, so callers set it through the YAML, not as a Go value.
 
@@ -466,13 +519,15 @@ internal config package, so callers set it through the YAML, not as a Go value.
 
 ```go
 type Workflow struct {
-    Prompt        string       `yaml:"prompt,omitempty"`
-    PromptFile    string       `yaml:"prompt-file,omitempty"`
-    Model         string       `yaml:"model,omitempty"`
-    Agent         AgentName    `yaml:"agent,omitempty"`
-    MaxIterations int          `yaml:"max-iterations,omitempty"`
-    Timeout       Duration     `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
-    Profile       AgentProfile `yaml:"-"`
+    Prompt           string       `yaml:"prompt,omitempty"`
+    PromptFile       string       `yaml:"prompt-file,omitempty"`
+    Model            string       `yaml:"model,omitempty"`
+    Agent            AgentName    `yaml:"agent,omitempty"`
+    MaxIterations    int          `yaml:"max-iterations,omitempty"`
+    Timeout          Duration     `yaml:"timeout,omitempty"` // YAML duration string, e.g. "30m"
+    CompletionSignal string       `yaml:"completion-signal,omitempty"`
+    StopOnNoChange   bool         `yaml:"stop-on-no-change,omitempty"`
+    Profile          AgentProfile `yaml:"-"`
 }
 ```
 

@@ -104,6 +104,54 @@ Substitution applies to the resolved prompt regardless of where it came from, so
 `{{VAR}}` placeholders in a `prompt-file`'s contents are filled the same as an
 inline `prompt`.
 
+## Discovering a workflow's variables
+
+Nothing has to be run to learn which variables a workflow's prompt takes.
+
+=== "Library"
+
+    `taboo.Placeholders` returns the distinct `{{VAR}}` names a template
+    references, sorted ascending — the same grammar `Substitute` fills, so text
+    that is not a placeholder is ignored by both:
+
+    ```go
+    names := taboo.Placeholders("Title: {{ISSUE_TITLE}}\n\n{{ISSUE_BODY}}")
+    // []string{"ISSUE_BODY", "ISSUE_TITLE"}
+    ```
+
+    A resolved `taboo.Plan` also carries the placeholder set of its
+    pre-substitution prompt in `Plan.Placeholders` (the post-substitution
+    `Request.Prompt` no longer shows them).
+
+=== "CLI"
+
+    Four surfaces report a workflow's variables:
+
+    - **`taboo list`** names each configured workflow's placeholders without
+      selecting one: every line in the workflows section ends with
+      `vars: <names>` when the effective prompt has placeholders, and each
+      `list --json` workflow entry carries a `placeholders` array.
+    - **`taboo run <workflow> --dry-run`** prints a `vars:` line in the plan.
+      It shows `(none)` for a placeholder-free prompt; the placeholder names
+      with a `(supplied)` marker when variables were passed; or the names
+      marked `(unfilled — will pass through literally; supply
+      --var/--vars-file)` when none were passed. In the first two states any
+      supplied-but-unused keys are appended (e.g. `— unused: TYPO`). With
+      `--json`, the plan document carries the same data machine-readably: a
+      `placeholders` array plus a structured `vars` object (`supplied`,
+      `unused`, `unfilled`) — see the `jsonPlan` shape in
+      [the CLI reference](reference/cli.md#run).
+    - **A real `taboo run`** warns on stderr — the run itself is unchanged —
+      when a supplied key matches no placeholder in the prompt, or when no
+      variables were supplied and the prompt carries placeholders (which then
+      reach the agent literally, per the no-vars rule below). The warning
+      appears before the interactive confirmation, so a run started with the
+      wrong keys can be aborted.
+    - **`taboo validate`** emits an OK-level `vars/<workflow>` check naming the
+      placeholders each workflow's effective prompt references (inline
+      `prompt` or the contents of an existing `prompt-file`, falling back to
+      the `defaults:` block). Placeholder-free workflows emit nothing.
+
 ## Failure modes (CLI)
 
 These checks run during plan resolution, before anything executes, so they also
@@ -155,4 +203,4 @@ from the `--var` override and the body from the file.
 - [CLI reference](reference/cli.md) — the full `run` flag set and resolution
   order.
 - [Library API reference](reference/library-api.md) — `RunWorkflow`,
-  `(*ProjectConfig).Plan`, and `Substitute`.
+  `(*ProjectConfig).Plan`, `Substitute`, and `Placeholders`.

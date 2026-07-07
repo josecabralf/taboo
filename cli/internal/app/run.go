@@ -20,9 +20,10 @@ import (
 
 // errRunFailed is the sentinel run returns when its preflight finds an error
 // (workshop unreachable, or the config fails validate). The preflight report is
-// printed to stderr first; main maps the sentinel to a non-zero exit. It mirrors
-// doctor's errChecksFailed but is run-specific so a caller can distinguish a
-// preflight refusal from a failure inside the run itself.
+// printed to stderr first; executeRoot maps the sentinel to a non-zero exit and
+// adds its one trailing "Error:" line to stderr. It mirrors doctor's
+// errChecksFailed but is run-specific so a caller can distinguish a preflight
+// refusal from a failure inside the run itself.
 var errRunFailed = errors.New("run: preflight failed")
 
 // runOptions are the parsed flags for the run subcommand: the highest-precedence
@@ -43,6 +44,10 @@ type runOptions struct {
 	iterations int
 	// signal overrides the completion signal that ends the iteration loop early.
 	signal string
+	// stopOnNoChange enables the commit-based early stop: the loop ends when an
+	// iteration produces no new commit. Enable-only (false leaves the config
+	// layers in charge; it cannot disable a config-level enable).
+	stopOnNoChange bool
 	// branch overrides the auto-generated per-run branch verbatim.
 	branch string
 	// from selects the workshop definition to derive the agent workshop from,
@@ -52,7 +57,8 @@ type runOptions struct {
 	dryRun bool
 	// yes skips the interactive pre-run confirmation (for non-interactive callers).
 	yes bool
-	// asJSON emits the machine result as a JSON object instead of the plain form.
+	// asJSON emits the machine result as a JSON object instead of the plain form:
+	// the run result, or the resolved plan under dryRun.
 	asJSON bool
 	// varsFile is a JSON file of {"VAR":"value"} pairs substituted literally into
 	// {{VAR}} placeholders in the resolved prompt (no shell expansion of the values).
@@ -95,18 +101,22 @@ func newRunCmd(env Env) *cobra.Command {
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", 0, "override the per-exec timeout, e.g. 30m")
 	cmd.Flags().IntVar(&opts.iterations, "iterations", 0, "override the max iteration cap for this run")
 	cmd.Flags().StringVar(&opts.signal, "signal", "", "string that, when it appears in agent output, stops the iteration loop early (run treated as complete)")
+	cmd.Flags().BoolVar(&opts.stopOnNoChange, "stop-on-no-change", false, "stop the iteration loop early when an iteration produces no new commit")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", "branch name for this run (default: auto-generated from the workflow name — or \"adhoc\" for a --prompt run — and a timestamp)")
 	cmd.Flags().StringVar(&opts.from, "from", "", "the workshop definition to derive the agent workshop from; overrides taboo.yaml source-definition")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "resolve and print the plan without running anything")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "skip the interactive pre-run confirmation")
-	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit the run result as JSON")
+	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "emit the run result (or, with --dry-run, the resolved plan) as JSON")
 	return cmd
 }
 
 // runRun is the run command's select-resolve-preflight-execute flow. It discovers
 // and loads the config, selects what to run (named workflow, ad-hoc, or default),
 // resolves that into a plan via the pkg/taboo config→run bridge, and then either
-// prints the plan (--dry-run) or runs a host preflight and executes it. Each
+// emits the resolved plan (--dry-run: the human form, or the jsonPlan document
+// under --json) or runs a host preflight and executes it. The dry-run branch
+// returns before warnPromptVars and the preflight, so it stays host-free and
+// warning-free on stderr — the JSON document carries the vars state itself. Each
 // stage's failure is surfaced before the next, so a misconfigured project never
 // reaches the workshop.
 func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error {
@@ -129,10 +139,14 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 	}
 
 	if opts.dryRun {
-		printPlan(env, plan)
+		if opts.asJSON {
+			return writeIndentedJSON(env.Stdout, planToJSON(plan, vars))
+		}
+		printPlan(env, plan, vars)
 		return nil
 	}
 
+	warnPromptVars(env, plan, vars)
 	if err := runPreflight(ctx, env); err != nil {
 		return err
 	}
@@ -175,7 +189,8 @@ func planOverrides(env Env, opts *runOptions) taboo.PlanOverrides {
 	return taboo.PlanOverrides{
 		Agent: taboo.AgentName(opts.agent), Model: opts.model,
 		Timeout: opts.timeout, MaxIterations: opts.iterations,
-		CompletionSignal: opts.signal, Branch: opts.branch, From: opts.from,
+		CompletionSignal: opts.signal, StopOnNoChange: opts.stopOnNoChange,
+		Branch: opts.branch, From: opts.from,
 		Prompt: opts.prompt, PromptFile: opts.promptFile,
 		Stdout: env.Stderr, Stderr: env.Stderr,
 	}
@@ -430,7 +445,8 @@ func resolvePromptFilePath(path, base string) string {
 // skip prompt-file existence, which cfg.Plan already proved for the one file
 // this run consumes. The report goes to stderr (not stdout) so a refusal does not
 // pollute the machine result stream a successful run writes there. It returns
-// errRunFailed so main exits non-zero without echoing cobra noise.
+// errRunFailed so the process exits non-zero; executeRoot prints the sentinel as
+// the report's one trailing "Error:" line.
 func runPreflight(ctx context.Context, env Env) error {
 	checks := []check{checkWorkshop(ctx, env)}
 	checks = append(checks, runConfigChecks(ctx, env, statFileExists)...)
@@ -445,8 +461,8 @@ func runPreflight(ctx context.Context, env Env) error {
 // agent output (the Plan already routes both streams to env.Stderr via the
 // overrides) keeps the machine result clean on env.Stdout; a brief start line goes
 // to stderr too so an interactive caller sees the run begin. On success the
-// machine result is written to stdout; a failure inside the run is printed to
-// stderr and returned (exit 1), mirroring init.
+// machine result is written to stdout; a failure inside the run is returned and
+// printed once by executeRoot (exit 1).
 func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) error {
 	target := fmt.Sprintf("workflow %q", plan.Workflow)
 	if plan.Workflow == "" {
@@ -455,7 +471,6 @@ func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) err
 	_, _ = fmt.Fprintf(env.Stderr, "Running %s on branch %q (agent %s)…\n", target, plan.Request.Branch, plan.Config.Agent.Name())
 	res, err := plan.Run(ctx, env.Cmd)
 	if err != nil {
-		_, _ = fmt.Fprintln(env.Stderr, "Error:", err)
 		return err
 	}
 	return writeRunResult(env, asJSON, res)
@@ -463,13 +478,17 @@ func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) err
 
 // jsonRunResult is the --json machine result shape. It is a deliberately flat
 // projection of OrchestratedResult: the fields a caller scripts against, with the
-// StopReason flattened to a string.
+// StopReason flattened to a string. The first five keys are frozen (#134) and
+// stay byte-identical; baseCommit and changed are additive (#141), appended
+// after them so existing consumers keep parsing unchanged.
 type jsonRunResult struct {
 	Branch     string `json:"branch"`
 	Commit     string `json:"commit"`
 	Output     string `json:"output"`
 	Iterations int    `json:"iterations"`
 	StopReason string `json:"stopReason"`
+	BaseCommit string `json:"baseCommit"`
+	Changed    bool   `json:"changed"`
 }
 
 // writeRunResult writes the run's machine result to stdout in the requested
@@ -479,29 +498,112 @@ type jsonRunResult struct {
 // back onto stdout would defeat the clean-stdout contract (a caller parsing
 // stdout must not have to skip past arbitrary agent chatter). The JSON form keeps
 // `output` so a structured consumer can still read it.
+//
+// A run that produced no new commits (the branch tip never moved off its base)
+// gets an advisory note on the plain path — on stderr, following the
+// warnPromptVars pattern, so the two-line branch/commit machine contract on
+// stdout stays byte-identical. The JSON path prints no note: its consumers
+// read the `changed` field instead.
 func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 	if asJSON {
-		enc := json.NewEncoder(env.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(jsonRunResult{
+		return writeIndentedJSON(env.Stdout, jsonRunResult{
 			Branch:     res.Branch,
 			Commit:     res.Commit,
 			Output:     res.Output,
 			Iterations: res.Iterations,
 			StopReason: string(res.StopReason),
+			BaseCommit: res.BaseCommit,
+			Changed:    res.Changed(),
 		})
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "branch: %s\n", res.Branch)
 	_, _ = fmt.Fprintf(env.Stdout, "commit: %s\n", res.Commit)
+	if !res.Changed() {
+		_, _ = fmt.Fprintln(env.Stderr, "note: the agent produced no new commits — branch tip unchanged")
+	}
 	return nil
+}
+
+// jsonPlanVars is the dry-run plan's vars object: a structured mirror of
+// varsSummary's three states. The supplied key is the sorted caller-supplied
+// keys ([] when none), unused the sorted supplied keys matching no {{VAR}}
+// placeholder (the keys Substitute silently ignores), and unfilled is true exactly when
+// placeholders exist and no vars were supplied — the documented case where they
+// reach the agent literally. Plan already fails fast on a partial fill, so
+// these three states are exhaustive for a rendered plan.
+type jsonPlanVars struct {
+	Supplied []string `json:"supplied"`
+	Unused   []string `json:"unused"`
+	Unfilled bool     `json:"unfilled"`
+}
+
+// jsonPlan is the --dry-run --json machine shape: printPlan's fields as one
+// flat object, so a script or agent can inspect what a real run would do
+// without parsing the aligned human plan. The prompt key carries the same one-line
+// promptSummary preview the human plan and list show, never the full resolved
+// prompt; sourceDefinition is "" when unset (the human plan omits the line, the
+// JSON key is always present); timeout is the Go duration string printPlan
+// renders; placeholders marshals as [] (never null) for a placeholder-free
+// prompt, the jsonWorkflow.Placeholders convention.
+type jsonPlan struct {
+	Workflow         string       `json:"workflow"`
+	Adhoc            bool         `json:"adhoc"`
+	Branch           string       `json:"branch"`
+	Agent            string       `json:"agent"`
+	Model            string       `json:"model"`
+	Workshop         string       `json:"workshop"`
+	Repo             string       `json:"repo"`
+	SourceDefinition string       `json:"sourceDefinition"`
+	Timeout          string       `json:"timeout"`
+	MaxIterations    int          `json:"maxIterations"`
+	CompletionSignal string       `json:"completionSignal"`
+	StopOnNoChange   bool         `json:"stopOnNoChange"`
+	Prompt           string       `json:"prompt"`
+	Placeholders     []string     `json:"placeholders"`
+	Vars             jsonPlanVars `json:"vars"`
+}
+
+// planToJSON projects a resolved plan and the caller-supplied vars into the
+// jsonPlan machine shape. It is pure (no Env, no I/O) — the dry-run branch owns
+// the encoding. The adhoc field mirrors printPlan's label switch: true exactly
+// when the human plan would print "run: ad-hoc (--prompt)" instead of a workflow name.
+func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
+	supplied := make([]string, 0, len(vars))
+	for key := range vars {
+		supplied = append(supplied, key)
+	}
+	slices.Sort(supplied)
+	return jsonPlan{
+		Workflow:         plan.Workflow,
+		Adhoc:            plan.Workflow == "",
+		Branch:           plan.Request.Branch,
+		Agent:            string(plan.Config.Agent.Name()),
+		Model:            plan.Model,
+		Workshop:         plan.Config.Workshop,
+		Repo:             plan.Config.RepoPath,
+		SourceDefinition: plan.Config.SourceDefinition,
+		Timeout:          plan.Request.Timeout.String(),
+		MaxIterations:    plan.Request.MaxIterations,
+		CompletionSignal: plan.Request.CompletionSignal,
+		StopOnNoChange:   plan.Request.StopOnNoChange,
+		Prompt:           promptSummary(plan.Request.Prompt),
+		Placeholders:     emptyIfNil(plan.Placeholders),
+		Vars: jsonPlanVars{
+			Supplied: supplied,
+			Unused:   emptyIfNil(unusedVarKeys(plan.Placeholders, vars)),
+			Unfilled: len(vars) == 0 && len(plan.Placeholders) > 0,
+		},
+	}
 }
 
 // printPlan renders the resolved plan to stdout for --dry-run: the workflow,
 // branch, agent, and the scalar run params, so a user can confirm what a real run
 // would do without any host side effects. Every label is padded to one width so
 // the values line up in a single column; the longest label
-// ("completion-signal:") sets that width.
-func printPlan(env Env, plan *taboo.Plan) {
+// ("completion-signal:") sets that width. The vars argument holds the
+// caller-supplied template variables, rendered against the plan's placeholder
+// set on the vars: line.
+func printPlan(env Env, plan *taboo.Plan, vars map[string]string) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo run (dry run) — resolved plan:")
 	planLabel, planTarget := "workflow:", plan.Workflow
 	if plan.Workflow == "" {
@@ -519,7 +621,65 @@ func printPlan(env Env, plan *taboo.Plan) {
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "timeout:", plan.Request.Timeout)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %d\n", "max-iterations:", plan.Request.MaxIterations)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "completion-signal:", plan.Request.CompletionSignal)
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %t\n", "stop-on-no-change:", plan.Request.StopOnNoChange)
 	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "prompt:", promptSummary(plan.Request.Prompt))
+	_, _ = fmt.Fprintf(env.Stdout, "  %-18s %s\n", "vars:", varsSummary(plan.Placeholders, vars))
+}
+
+// warnPromptVars surfaces the two silent vars footguns on stderr before a real
+// run: supplied keys that match no {{VAR}} placeholder (Substitute only checks
+// the reverse direction, so they vanish without a trace), and a no-vars run
+// whose prompt carries placeholders (the documented pass-through sends them to
+// the agent literally). Warnings only — the run proceeds identically, and they
+// go to stderr (never stdout, the clean-stdout contract) before the confirmRun
+// y/N prompt so an interactive user can still abort.
+func warnPromptVars(env Env, plan *taboo.Plan, vars map[string]string) {
+	if unused := unusedVarKeys(plan.Placeholders, vars); len(unused) > 0 {
+		_, _ = fmt.Fprintf(env.Stderr, "warning: supplied var(s) match no {{VAR}} placeholder in the prompt: %s\n",
+			strings.Join(unused, ", "))
+	}
+	if len(vars) == 0 && len(plan.Placeholders) > 0 {
+		_, _ = fmt.Fprintf(env.Stderr, "warning: the prompt references {{VAR}} placeholder(s) that will reach the agent literally: %s (supply --var/--vars-file)\n",
+			strings.Join(plan.Placeholders, ", "))
+	}
+}
+
+// varsSummary renders the dry-run plan's vars: value from the prompt's
+// placeholder set and the caller-supplied variables. Plan already fails fast
+// when supplied vars leave a placeholder unfilled, so a rendered plan has
+// three base states: no placeholders at all; placeholders present and vars
+// supplied (all filled, by construction); placeholders present and no vars
+// supplied, which pass through to the agent literally (the documented no-vars
+// rule). In the first two, any supplied-but-unused keys are appended — a
+// placeholder-free prompt with vars supplied renders "(none) — unused: <keys>".
+func varsSummary(placeholders []string, vars map[string]string) string {
+	unused := unusedVarKeys(placeholders, vars)
+	unusedSuffix := ""
+	if len(unused) > 0 {
+		unusedSuffix = " — unused: " + strings.Join(unused, ", ")
+	}
+	switch {
+	case len(placeholders) == 0:
+		return "(none)" + unusedSuffix
+	case len(vars) > 0:
+		return strings.Join(placeholders, ", ") + " (supplied)" + unusedSuffix
+	default:
+		return strings.Join(placeholders, ", ") + " (unfilled — will pass through literally; supply --var/--vars-file)"
+	}
+}
+
+// unusedVarKeys returns the sorted supplied variable keys that match no
+// placeholder in the prompt — the keys Substitute silently ignores (it only
+// checks the reverse direction), which would otherwise vanish without a trace.
+func unusedVarKeys(placeholders []string, vars map[string]string) []string {
+	var out []string
+	for key := range vars {
+		if !slices.Contains(placeholders, key) {
+			out = append(out, key)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // promptSummary renders a prompt on one line so a multi-line (often

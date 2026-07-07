@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -40,6 +42,21 @@ func buildRunProjectBody(repo string) string {
 		"workflows:\n" +
 		"  fix:\n" +
 		"    prompt: please fix the failing tests\n"
+}
+
+// parameterizedProjectBody is a complete, valid taboo.yaml whose one workflow's
+// prompt carries the {{ISSUE_TITLE}} and {{ISSUE_BODY}} placeholders — the
+// fixture the dry-run vars tests exercise the placeholder states against.
+// TestMain builds this from the fixture path before any test runs.
+var parameterizedProjectBody string
+
+// buildParameterizedProjectBody renders parameterizedProjectBody for a given
+// repo path, mirroring buildRunProjectBody.
+func buildParameterizedProjectBody(repo string) string {
+	return "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + repo + "\n" +
+		"workflows:\n  triage:\n    prompt: 'T: {{ISSUE_TITLE}} B: {{ISSUE_BODY}}'\n"
 }
 
 // runFakeStdout programs the fake commander so a real run can proceed: workshop
@@ -82,6 +99,29 @@ func argAfter(c taboo.Cmd, verb string) string {
 		return ""
 	}
 	return c.Args[i+1]
+}
+
+// newChangedRunFake builds a fake commander for a run whose agent landed a
+// commit: the FIRST `git rev-parse HEAD` (Setup's base-tip capture) answers a
+// distinct base sha, and every later one (the post-exec final-HEAD capture)
+// answers the usual deadbeefcafe, so the run's final Commit differs from its
+// BaseCommit. Everything else behaves like newRunFake. (newRunFake itself
+// answers every rev-parse identically, so its runs read as no-commit runs.)
+func newChangedRunFake() *fakeCommander {
+	revParses := 0
+	return &fakeCommander{
+		errFn: runFakeErr,
+		stdoutFn: func(c taboo.Cmd) string {
+			if c.Name == "git" && elemsContain(c.Args, "rev-parse", "HEAD") {
+				revParses++
+				if revParses == 1 {
+					return "basecafe0001\n"
+				}
+				return "deadbeefcafe\n"
+			}
+			return runFakeStdout(c)
+		},
+	}
 }
 
 // newStatefulRunFake builds a fake commander that models workshop persistence
@@ -477,6 +517,536 @@ func TestRun_DryRunFromOverridesSourceDefinition(t *testing.T) {
 	}
 }
 
+// TestRun_DryRunWorkflowCompletionSignal asserts a workflow-level
+// completion-signal reaches the dry-run plan through the existing printPlan
+// wiring: the plan's completion-signal: line shows the workflow's own sentinel,
+// not the defaults one it overrides. Dry-run only — no commander calls.
+func TestRun_DryRunWorkflowCompletionSignal(t *testing.T) {
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"defaults:\n" +
+		"  completion-signal: DEFAULT-DONE\n" +
+		"workflows:\n" +
+		"  review:\n" +
+		"    prompt: review the diff, print REVIEW COMPLETE when done\n" +
+		"    completion-signal: REVIEW COMPLETE\n"
+	root := t.TempDir()
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, _, err := runCmd(t, env, "review", "--dry-run")
+	if err != nil {
+		t.Fatalf("run --dry-run error = %v, want nil", err)
+	}
+	if !strings.Contains(stdout, "completion-signal: REVIEW COMPLETE") {
+		t.Errorf("plan missing the workflow-level completion-signal:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "DEFAULT-DONE") {
+		t.Errorf("plan shows the defaults signal the workflow overrides:\n%s", stdout)
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("--dry-run must not touch the commander; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_DryRunVarsLine covers the three states of the dry-run plan's vars:
+// line: a placeholder-free prompt renders "(none)"; a prompt whose placeholders
+// were all filled lists them as supplied and names any supplied-but-unused
+// keys; a no-vars run over a parameterized prompt lists the names as unfilled
+// so the user learns what to supply before a real run.
+func TestRun_DryRunVarsLine(t *testing.T) {
+	t.Run("no placeholders renders (none)", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "vars:") || !strings.Contains(stdout, "(none)") {
+			t.Errorf("plan missing 'vars: (none)' line:\n%s", stdout)
+		}
+	})
+
+	t.Run("supplied vars listed with unused keys named", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterizedProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "triage", "--dry-run",
+			"--var", "ISSUE_TITLE=t", "--var", "ISSUE_BODY=b", "--var", "TYPO=x")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "ISSUE_BODY, ISSUE_TITLE") {
+			t.Errorf("plan vars line missing the sorted placeholder names:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "supplied") {
+			t.Errorf("plan vars line missing the supplied marker:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "unused: TYPO") {
+			t.Errorf("plan vars line missing the unused key TYPO:\n%s", stdout)
+		}
+	})
+
+	t.Run("no vars over placeholders listed as unfilled", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterizedProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "triage", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "ISSUE_BODY, ISSUE_TITLE") {
+			t.Errorf("plan vars line missing the sorted placeholder names:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "unfilled") || !strings.Contains(stdout, "--var") {
+			t.Errorf("plan vars line missing the unfilled hint:\n%s", stdout)
+		}
+	})
+}
+
+// TestRun_DryRunJSON is the tracer bullet for the --dry-run --json machine
+// plan: a workflow dry run emits one JSON object to stdout carrying the
+// resolved plan fields, writes nothing to stderr, and stays completely
+// host-free (zero commander calls), exactly like the human dry run.
+func TestRun_DryRunJSON(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("run --dry-run --json error = %v, want nil", err)
+	}
+	doc := decodeJSON[jsonPlan](t, stdout)
+	if doc.Workflow != "fix" || doc.Adhoc {
+		t.Errorf("workflow = %q, adhoc = %v, want \"fix\", false", doc.Workflow, doc.Adhoc)
+	}
+	if !strings.HasPrefix(doc.Branch, "taboo/fix-") {
+		t.Errorf("branch = %q, want prefix %q", doc.Branch, "taboo/fix-")
+	}
+	if doc.Agent != "opencode" {
+		t.Errorf("agent = %q, want opencode", doc.Agent)
+	}
+	if doc.Model != "anthropic/claude" {
+		t.Errorf("model = %q, want anthropic/claude", doc.Model)
+	}
+	if doc.Workshop != "demo-opencode" {
+		t.Errorf("workshop = %q, want the derived per-agent name demo-opencode", doc.Workshop)
+	}
+	if doc.Prompt != "please fix the failing tests" {
+		t.Errorf("prompt = %q, want the workflow prompt preview", doc.Prompt)
+	}
+	if stderr != "" {
+		t.Errorf("dry-run --json must write nothing to stderr, got:\n%s", stderr)
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("--dry-run --json must not touch the commander; calls: %v", invocations(fake))
+	}
+
+	// Every documented key is present as a literal. decodeJSON shares the
+	// producer's struct tags, so a tag rename would pass it silently; the
+	// document is additive (no key freeze, see docs/reference/cli.md), so this
+	// pins presence rather than the exact set.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout)
+	}
+	for _, key := range []string{
+		"workflow", "adhoc", "branch", "agent", "model", "workshop", "repo",
+		"sourceDefinition", "timeout", "maxIterations", "completionSignal",
+		"stopOnNoChange", "prompt", "placeholders", "vars",
+	} {
+		if _, present := m[key]; !present {
+			t.Errorf("plan JSON missing documented key %q:\n%s", key, stdout)
+		}
+	}
+	vars, ok := m["vars"].(map[string]any)
+	if !ok {
+		t.Fatalf("plan JSON vars is not an object:\n%s", stdout)
+	}
+	for _, key := range []string{"supplied", "unused", "unfilled"} {
+		if _, present := vars[key]; !present {
+			t.Errorf("plan vars object missing documented key %q:\n%s", key, stdout)
+		}
+	}
+}
+
+// TestRun_DryRunJSONAdhoc asserts an ad-hoc --prompt dry run carries
+// workflow:"" and adhoc:true — the machine mirror of the human plan's
+// "run: ad-hoc (--prompt)" label — and stays host-free.
+func TestRun_DryRunJSONAdhoc(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "--prompt", "tidy the imports", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("run --prompt --dry-run --json error = %v, want nil", err)
+	}
+	doc := decodeJSON[jsonPlan](t, stdout)
+	if doc.Workflow != "" || !doc.Adhoc {
+		t.Errorf("workflow = %q, adhoc = %v, want \"\", true", doc.Workflow, doc.Adhoc)
+	}
+	if !strings.HasPrefix(doc.Branch, "taboo/adhoc-") {
+		t.Errorf("branch = %q, want prefix %q", doc.Branch, "taboo/adhoc-")
+	}
+	if doc.Prompt != "tidy the imports" {
+		t.Errorf("prompt = %q, want the --prompt preview", doc.Prompt)
+	}
+	if stderr != "" {
+		t.Errorf("dry-run --json must write nothing to stderr, got:\n%s", stderr)
+	}
+	if len(invocations(fake)) != 0 {
+		t.Errorf("--dry-run --json must not touch the commander; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_DryRunJSONVars covers the machine plan's vars object across
+// varsSummary's three exhaustive states: a placeholder-free prompt marshals
+// placeholders as [] (never null) with an all-empty vars object; a fully
+// supplied run lists the sorted supplied keys and names the unused ones; a
+// no-vars run over a parameterized prompt reports unfilled:true.
+func TestRun_DryRunJSONVars(t *testing.T) {
+	t.Run("no placeholders marshals empty vars and []", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "\"placeholders\": []") {
+			t.Errorf("placeholders must marshal as [] (never null):\n%s", stdout)
+		}
+		doc := decodeJSON[jsonPlan](t, stdout)
+		if len(doc.Vars.Supplied) != 0 || len(doc.Vars.Unused) != 0 || doc.Vars.Unfilled {
+			t.Errorf("vars = %+v, want all-empty, unfilled=false", doc.Vars)
+		}
+	})
+
+	t.Run("supplied vars sorted with unused keys named", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterizedProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "triage", "--dry-run", "--json",
+			"--var", "TYPO=x", "--var", "ISSUE_TITLE=t", "--var", "ISSUE_BODY=b")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		doc := decodeJSON[jsonPlan](t, stdout)
+		if !slices.Equal(doc.Placeholders, []string{"ISSUE_BODY", "ISSUE_TITLE"}) {
+			t.Errorf("placeholders = %v, want sorted [ISSUE_BODY ISSUE_TITLE]", doc.Placeholders)
+		}
+		if !slices.Equal(doc.Vars.Supplied, []string{"ISSUE_BODY", "ISSUE_TITLE", "TYPO"}) {
+			t.Errorf("vars.supplied = %v, want sorted [ISSUE_BODY ISSUE_TITLE TYPO]", doc.Vars.Supplied)
+		}
+		if !slices.Equal(doc.Vars.Unused, []string{"TYPO"}) {
+			t.Errorf("vars.unused = %v, want [TYPO]", doc.Vars.Unused)
+		}
+		if doc.Vars.Unfilled {
+			t.Errorf("vars.unfilled = true, want false (all placeholders filled)")
+		}
+	})
+
+	t.Run("no vars over placeholders reports unfilled", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, parameterizedProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, stderr, err := runCmd(t, env, "triage", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		doc := decodeJSON[jsonPlan](t, stdout)
+		if !doc.Vars.Unfilled {
+			t.Errorf("vars.unfilled = false, want true (placeholders with no vars)")
+		}
+		if len(doc.Vars.Supplied) != 0 || len(doc.Vars.Unused) != 0 {
+			t.Errorf("vars = %+v, want empty supplied/unused", doc.Vars)
+		}
+		if stderr != "" {
+			t.Errorf("the JSON document carries the vars state; stderr must stay warning-free, got:\n%s", stderr)
+		}
+	})
+}
+
+// TestRun_DryRunJSONSourceDefinition asserts sourceDefinition is "" when the
+// config sets none (the key is always present, unlike the human plan's omitted
+// line) and carries the --from value when set, and that timeout is the Go
+// duration string the human plan renders.
+func TestRun_DryRunJSONSourceDefinition(t *testing.T) {
+	t.Run("unset marshals as empty string", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json", "--timeout", "30m")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "\"sourceDefinition\": \"\"") {
+			t.Errorf("sourceDefinition key must be present and empty when unset:\n%s", stdout)
+		}
+		doc := decodeJSON[jsonPlan](t, stdout)
+		if doc.Timeout != "30m0s" {
+			t.Errorf("timeout = %q, want the Go duration string %q", doc.Timeout, "30m0s")
+		}
+	})
+
+	t.Run("--from value carried", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody+"source-definition: configured\n")
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json", "--from", "somedef")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		doc := decodeJSON[jsonPlan](t, stdout)
+		if doc.SourceDefinition != "somedef" {
+			t.Errorf("sourceDefinition = %q, want the --from value somedef", doc.SourceDefinition)
+		}
+	})
+}
+
+// TestPlanToJSON pins the pure projection directly over hand-built plans, like
+// TestVarsSummary/TestPromptSummary: every printPlan field lands on its
+// camelCase key, adhoc flips on an empty workflow, timeout renders as the Go
+// duration string, the prompt is the one-line preview (never the full text),
+// nil placeholders/unused normalize to empty slices, and the vars object
+// mirrors varsSummary's three states.
+func TestPlanToJSON(t *testing.T) {
+	profile, err := taboo.NewProfile(taboo.OpenCode, "anthropic/claude")
+	if err != nil {
+		t.Fatalf("NewProfile: %v", err)
+	}
+	base := taboo.Plan{
+		Config: taboo.Config{
+			Workshop: "demo-opencode", Agent: profile,
+			RepoPath: "/home/user/repo", SourceDefinition: "somedef",
+		},
+		Request: taboo.OrchestratedRequest{
+			RunRequest: taboo.RunRequest{
+				Prompt: "first line\nsecond line", Branch: "taboo/fix-1", Timeout: 30 * time.Minute,
+			},
+			MaxIterations: 3, CompletionSignal: "DONE",
+		},
+		Workflow: "fix",
+		Model:    "anthropic/claude",
+	}
+
+	t.Run("workflow plan maps every field", func(t *testing.T) {
+		plan := base
+		plan.Placeholders = []string{"A", "B"}
+		got := planToJSON(&plan, map[string]string{"A": "1", "B": "2", "Z": "9"})
+		want := jsonPlan{
+			Workflow: "fix", Adhoc: false, Branch: "taboo/fix-1",
+			Agent: "opencode", Model: "anthropic/claude", Workshop: "demo-opencode",
+			Repo: "/home/user/repo", SourceDefinition: "somedef",
+			Timeout: "30m0s", MaxIterations: 3, CompletionSignal: "DONE",
+			Prompt:       "first line (2 lines)",
+			Placeholders: []string{"A", "B"},
+			Vars:         jsonPlanVars{Supplied: []string{"A", "B", "Z"}, Unused: []string{"Z"}, Unfilled: false},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("planToJSON = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("ad-hoc plan flips adhoc and empties workflow", func(t *testing.T) {
+		plan := base
+		plan.Workflow = ""
+		got := planToJSON(&plan, nil)
+		if got.Workflow != "" || !got.Adhoc {
+			t.Errorf("workflow = %q, adhoc = %v, want \"\", true", got.Workflow, got.Adhoc)
+		}
+	})
+
+	t.Run("nil placeholders and vars normalize to empty slices", func(t *testing.T) {
+		plan := base
+		got := planToJSON(&plan, nil)
+		if got.Placeholders == nil || len(got.Placeholders) != 0 {
+			t.Errorf("placeholders = %#v, want non-nil empty slice", got.Placeholders)
+		}
+		if got.Vars.Supplied == nil || got.Vars.Unused == nil {
+			t.Errorf("vars slices = %#v, want non-nil empty slices", got.Vars)
+		}
+		if got.Vars.Unfilled {
+			t.Errorf("unfilled = true, want false for a placeholder-free prompt")
+		}
+	})
+
+	t.Run("placeholders with no vars are unfilled", func(t *testing.T) {
+		plan := base
+		plan.Placeholders = []string{"A"}
+		got := planToJSON(&plan, nil)
+		if !got.Vars.Unfilled {
+			t.Errorf("unfilled = false, want true (placeholders, no vars)")
+		}
+	})
+}
+
+// TestRun_StopOnNoChangeThreadsToPlan asserts the --stop-on-no-change flag (and
+// its config-level equivalents) reach the resolved plan, observed through both
+// dry-run surfaces: the jsonPlan's additive stopOnNoChange field and the
+// printed plan's stop-on-no-change: line. Off by default; the OR resolution
+// means any of flag/workflow/defaults turns it on.
+func TestRun_StopOnNoChangeThreadsToPlan(t *testing.T) {
+	t.Run("off by default", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if doc := decodeJSON[jsonPlan](t, stdout); doc.StopOnNoChange {
+			t.Errorf("stopOnNoChange = true, want false (knob is opt-in)")
+		}
+	})
+
+	t.Run("--stop-on-no-change flag enables", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run", "--json", "--stop-on-no-change")
+		if err != nil {
+			t.Fatalf("run --dry-run --json error = %v, want nil", err)
+		}
+		if doc := decodeJSON[jsonPlan](t, stdout); !doc.StopOnNoChange {
+			t.Errorf("stopOnNoChange = false, want true (--stop-on-no-change set)")
+		}
+	})
+
+	t.Run("workflow-level knob shows in the printed plan", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody+"    stop-on-no-change: true\n")
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "stop-on-no-change: true") {
+			t.Errorf("plan missing the effective stop-on-no-change line:\n%s", stdout)
+		}
+	})
+
+	t.Run("printed plan shows false when off", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		env := configEnv(t, newRunFake(), root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, _, err := runCmd(t, env, "fix", "--dry-run")
+		if err != nil {
+			t.Fatalf("run --dry-run error = %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "stop-on-no-change: false") {
+			t.Errorf("plan missing the stop-on-no-change line:\n%s", stdout)
+		}
+	})
+}
+
+// TestRun_JSONNoChangeStopReason asserts a run stopped by the commit-based
+// early stop emits "stopReason": "no-change" through the existing frozen key:
+// with stop-on-no-change on defaults and the standard fake (every rev-parse
+// answers the same SHA — a first-iteration no-op), the loop stops after one
+// exec instead of paying the cap, and the document's key set stays exactly
+// the #134 frozen five plus the #141 additive pair.
+func TestRun_JSONNoChangeStopReason(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\n" +
+		"base: ubuntu@24.04\n" +
+		"agent: opencode\n" +
+		"model: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"defaults:\n" +
+		"  branch-prefix: taboo/\n" +
+		"  max-iterations: 4\n" +
+		"  stop-on-no-change: true\n" +
+		"workflows:\n" +
+		"  fix:\n" +
+		"    prompt: fix it\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake() // every rev-parse answers deadbeefcafe: tip never moves
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, _, err := runCmd(t, env, "fix", "--json", "--branch", "agent/custom")
+	if err != nil {
+		t.Fatalf("run --json error = %v, want nil", err)
+	}
+	var res jsonRunResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	if res.StopReason != "no-change" {
+		t.Errorf("stopReason = %q, want %q", res.StopReason, "no-change")
+	}
+	if res.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1 (first exec is already the fixed point)", res.Iterations)
+	}
+	if got := countInvocations(fake, "exec"); got != 1 {
+		t.Errorf("exec calls = %d, want 1 (stopped at the fixed point); calls: %v", got, invocations(fake))
+	}
+
+	// The frozen keys hold: exactly the five #134 keys plus the two #141
+	// additive ones — "no-change" is a new value, not a new key.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	wantKeys := []string{"baseCommit", "branch", "changed", "commit", "iterations", "output", "stopReason"}
+	gotKeys := make([]string, 0, len(m))
+	for k := range m {
+		gotKeys = append(gotKeys, k)
+	}
+	slices.Sort(gotKeys)
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("--json keys = %v, want %v", gotKeys, wantKeys)
+	}
+}
+
+// TestVarsSummary pins the pure vars-line renderer directly: the three states
+// the dry-run plan can show, plus unused supplied keys named in sorted order.
+func TestVarsSummary(t *testing.T) {
+	cases := []struct {
+		name         string
+		placeholders []string
+		vars         map[string]string
+		want         string
+	}{
+		{"no placeholders, no vars", nil, nil, "(none)"},
+		{"no placeholders, unused vars named", nil, map[string]string{"TYPO": "x"},
+			"(none) — unused: TYPO"},
+		{"supplied", []string{"A", "B"}, map[string]string{"A": "1", "B": "2"},
+			"A, B (supplied)"},
+		{"supplied with unused keys sorted", []string{"A"}, map[string]string{"A": "1", "Z": "9", "M": "5"},
+			"A (supplied) — unused: M, Z"},
+		{"unfilled", []string{"A", "B"}, nil,
+			"A, B (unfilled — will pass through literally; supply --var/--vars-file)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := varsSummary(tc.placeholders, tc.vars); got != tc.want {
+				t.Errorf("varsSummary(%v, %v) = %q, want %q", tc.placeholders, tc.vars, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestPromptSummary covers the one-line preview promptSummary renders for the
 // dry-run plan: a short single-line prompt is shown verbatim, a multi-line or
 // over-long prompt is collapsed to its (truncated) first line plus a correctly
@@ -720,10 +1290,136 @@ func TestRun_JSONResult(t *testing.T) {
 	}
 }
 
+// TestRun_JSONBaseCommitAndChanged asserts --json additionally emits the
+// baseCommit/changed pair — a landed change reports the Setup-time base and
+// changed:true — while the five pre-existing keys stay exactly as #134 froze
+// them (additive keys only), and the no-commit stderr note never appears on
+// the JSON path (its consumers read `changed` instead).
+func TestRun_JSONBaseCommitAndChanged(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newChangedRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--json", "--branch", "agent/custom")
+	if err != nil {
+		t.Fatalf("run --json error = %v, want nil", err)
+	}
+	var res jsonRunResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	if res.BaseCommit != "basecafe0001" {
+		t.Errorf("baseCommit = %q, want %q", res.BaseCommit, "basecafe0001")
+	}
+	if !res.Changed {
+		t.Error("changed = false, want true (final commit differs from base)")
+	}
+	if res.Commit != "deadbeefcafe" {
+		t.Errorf("commit = %q, want %q (frozen key untouched)", res.Commit, "deadbeefcafe")
+	}
+
+	// The document carries exactly the five frozen keys plus the two additive
+	// ones — no accidental key rename, drop, or extra.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	wantKeys := []string{"baseCommit", "branch", "changed", "commit", "iterations", "output", "stopReason"}
+	gotKeys := make([]string, 0, len(m))
+	for k := range m {
+		gotKeys = append(gotKeys, k)
+	}
+	slices.Sort(gotKeys)
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("--json keys = %v, want %v", gotKeys, wantKeys)
+	}
+
+	if strings.Contains(stderr, "no new commits") || strings.Contains(stdout, "no new commits") {
+		t.Errorf("the no-commit note must not appear for a landed change:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+// TestRun_JSONNoCommitRun asserts a run whose agent landed nothing reports
+// changed:false with baseCommit == commit under --json, and that the JSON path
+// prints no stderr note (scripted consumers read the `changed` field).
+func TestRun_JSONNoCommitRun(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, runProjectBody)
+	fake := newRunFake() // every rev-parse answers deadbeefcafe: tip unchanged
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--json", "--branch", "agent/custom")
+	if err != nil {
+		t.Fatalf("run --json error = %v, want nil", err)
+	}
+	var res jsonRunResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\nraw:\n%s", err, stdout)
+	}
+	if res.Changed {
+		t.Error("changed = true, want false (tip unchanged)")
+	}
+	if res.BaseCommit != res.Commit || res.BaseCommit == "" {
+		t.Errorf("baseCommit = %q / commit = %q, want them equal and non-empty", res.BaseCommit, res.Commit)
+	}
+	if strings.Contains(stderr, "no new commits") {
+		t.Errorf("--json must print no stderr note:\n%s", stderr)
+	}
+}
+
+// TestRun_PlainNoCommitNote asserts the plain form surfaces a no-commit run as
+// an advisory note on STDERR exactly once, while stdout stays the byte-identical
+// two-line branch/commit machine contract — and that a run that landed a change
+// prints no note at all.
+func TestRun_PlainNoCommitNote(t *testing.T) {
+	const note = "note: the agent produced no new commits — branch tip unchanged\n"
+
+	t.Run("no-commit run prints the note on stderr", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		fake := newRunFake() // every rev-parse answers deadbeefcafe: tip unchanged
+		env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, stderr, err := runCmd(t, env, "fix", "--branch", "agent/custom")
+		if err != nil {
+			t.Fatalf("run error = %v, want nil", err)
+		}
+		if got := strings.Count(stderr, note); got != 1 {
+			t.Errorf("stderr carries the note %d times, want exactly 1:\n%s", got, stderr)
+		}
+		// The machine contract on stdout is byte-identical either way.
+		want := "branch: agent/custom\ncommit: deadbeefcafe\n"
+		if stdout != want {
+			t.Errorf("stdout = %q, want exactly %q (the note must never reach stdout)", stdout, want)
+		}
+	})
+
+	t.Run("landed change prints no note", func(t *testing.T) {
+		root := t.TempDir()
+		writeTabooProject(t, root, runProjectBody)
+		fake := newChangedRunFake()
+		env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+		stdout, stderr, err := runCmd(t, env, "fix", "--branch", "agent/custom")
+		if err != nil {
+			t.Fatalf("run error = %v, want nil", err)
+		}
+		if strings.Contains(stderr, "no new commits") {
+			t.Errorf("no note expected for a landed change:\n%s", stderr)
+		}
+		want := "branch: agent/custom\ncommit: deadbeefcafe\n"
+		if stdout != want {
+			t.Errorf("stdout = %q, want exactly %q", stdout, want)
+		}
+	})
+}
+
 // TestRun_ExecFailureSurfaced asserts a failure inside the run (the agent exec
-// erroring) propagates out of executeRun and is reported on stderr, rather than
-// being swallowed into a clean exit. Preflight and launch still succeed so the
-// flow reaches the exec; only the exec call fails.
+// erroring) propagates out of executeRun and is reported on stderr exactly once
+// through executeRoot — the central print seam — rather than being swallowed
+// into a clean exit (or doubled by a local wrapper). Preflight and launch still
+// succeed so the flow reaches the exec; only the exec call fails.
 func TestRun_ExecFailureSurfaced(t *testing.T) {
 	root := t.TempDir()
 	writeTabooProject(t, root, runProjectBody)
@@ -738,15 +1434,15 @@ func TestRun_ExecFailureSurfaced(t *testing.T) {
 	}
 	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
 
-	_, stderr, err := runCmd(t, env, "fix")
-	if err == nil {
-		t.Fatal("run error = nil, want the exec failure to propagate")
+	code, stdout, stderr := execRoot(t, env, "run", "fix")
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (the exec failure must propagate)", code)
 	}
-	if !strings.Contains(err.Error(), "agent exec blew up") {
-		t.Errorf("error = %q, want it to carry the underlying exec failure", err.Error())
+	if got := strings.Count(stderr, "agent exec blew up"); got != 1 {
+		t.Errorf("stderr carries the exec failure %d times, want exactly 1:\n%s", got, stderr)
 	}
-	if !strings.Contains(stderr, "agent exec blew up") {
-		t.Errorf("stderr missing the underlying exec failure:\n%s", stderr)
+	if stdout != "" {
+		t.Errorf("stdout must stay empty on an error path, got: %q", stdout)
 	}
 }
 
@@ -1024,6 +1720,80 @@ func TestRun_VarsErrors(t *testing.T) {
 				t.Errorf("a vars error must not execute; calls: %v", invocations(fake))
 			}
 		})
+	}
+}
+
+// TestRun_WarnsUnusedVarKeys asserts a real run warns on stderr when supplied
+// keys match no {{VAR}} placeholder (today they vanish silently), naming the
+// unused keys, while the run proceeds unchanged and stdout stays clean.
+func TestRun_WarnsUnusedVarKeys(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"workflows:\n  fix:\n    prompt: 'Title: {{ISSUE_TITLE}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "fix", "--var", "ISSUE_TITLE=t", "--var", "TYPO=x")
+	if err != nil {
+		t.Fatalf("run error = %v, want nil (warnings must not fail the run)", err)
+	}
+	if !strings.Contains(stderr, "TYPO") {
+		t.Errorf("stderr does not name the unused key TYPO:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "TYPO") {
+		t.Errorf("warning leaked onto stdout (clean-stdout contract):\n%s", stdout)
+	}
+	if findInvocation(fake, "exec", "Title: t") == nil {
+		t.Errorf("the run did not proceed with the substituted prompt; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_WarnsUnfilledPlaceholders asserts a no-vars run over a parameterized
+// prompt warns on stderr, naming the placeholders that will reach the agent
+// literally, while the documented pass-through behavior stays: the run proceeds
+// and the raw {{VAR}} text is what the agent receives.
+func TestRun_WarnsUnfilledPlaceholders(t *testing.T) {
+	root := t.TempDir()
+	writeTabooProject(t, root, parameterizedProjectBody)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	stdout, stderr, err := runCmd(t, env, "triage")
+	if err != nil {
+		t.Fatalf("run error = %v, want nil (pass-through is documented behavior)", err)
+	}
+	if !strings.Contains(stderr, "ISSUE_BODY") || !strings.Contains(stderr, "ISSUE_TITLE") {
+		t.Errorf("stderr does not name the unfilled placeholders:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "ISSUE_TITLE") {
+		t.Errorf("warning leaked onto stdout (clean-stdout contract):\n%s", stdout)
+	}
+	if findInvocation(fake, "exec", "T: {{ISSUE_TITLE}} B: {{ISSUE_BODY}}") == nil {
+		t.Errorf("the literal pass-through prompt did not reach the agent; calls: %v", invocations(fake))
+	}
+}
+
+// TestRun_NoVarsWarningWhenAllFilled asserts the quiet path: a run whose
+// supplied vars exactly cover the prompt's placeholders emits no vars warning.
+func TestRun_NoVarsWarningWhenAllFilled(t *testing.T) {
+	root := t.TempDir()
+	body := "" +
+		"workshop: demo\nbase: ubuntu@24.04\nagent: opencode\nmodel: anthropic/claude\n" +
+		"repo: " + testRepoPath + "\n" +
+		"workflows:\n  fix:\n    prompt: 'Title: {{ISSUE_TITLE}}'\n"
+	writeTabooProject(t, root, body)
+	fake := newRunFake()
+	env := configEnv(t, fake, root, map[string]string{"OPENROUTER_API_KEY": "sk-x"})
+
+	_, stderr, err := runCmd(t, env, "fix", "--var", "ISSUE_TITLE=t")
+	if err != nil {
+		t.Fatalf("run error = %v, want nil", err)
+	}
+	if strings.Contains(stderr, "warning") {
+		t.Errorf("a fully-filled run must emit no vars warning:\n%s", stderr)
 	}
 }
 
@@ -1440,7 +2210,8 @@ func TestRun_DefaultWorkflowUndefined(t *testing.T) {
 func TestRun_FlagSet(t *testing.T) {
 	want := []string{
 		"prompt", "prompt-file", "vars-file", "var", "branch", "model", "agent",
-		"timeout", "iterations", "signal", "dry-run", "yes", "json", "from",
+		"timeout", "iterations", "signal", "stop-on-no-change", "dry-run", "yes",
+		"json", "from",
 	}
 	var got []string
 	newRunCmd(Env{}).Flags().VisitAll(func(f *pflag.Flag) {

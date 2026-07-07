@@ -79,6 +79,7 @@ func TestConsumerCrossModuleBoundary(t *testing.T) {
 		}{
 			{"signal", taboo.StopSignal, "signal"},
 			{"max iterations", taboo.StopMaxIterations, "max"},
+			{"no change", taboo.StopNoChange, "no-change"},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -90,6 +91,8 @@ func TestConsumerCrossModuleBoundary(t *testing.T) {
 					got = "signal"
 				case taboo.StopMaxIterations:
 					got = "max"
+				case taboo.StopNoChange:
+					got = "no-change"
 				default:
 					got = "default"
 				}

@@ -60,6 +60,11 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 	if err != nil {
 		return nil, err
 	}
+	// Record the template's placeholder set before substitution: the post-
+	// substitution prompt no longer carries the {{VAR}} names, and callers (the
+	// CLI's dry-run vars line and run warnings) need them to detect unused
+	// supplied keys and unfilled placeholders.
+	placeholders := prompt.Placeholders(promptText)
 	if len(vars) > 0 {
 		promptText, err = prompt.Substitute(promptText, vars)
 		if err != nil {
@@ -75,12 +80,16 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 
 	sourceDefinition := cmp.Or(ov.From, c.SourceDefinition)
 
-	// Precedence is override → workflow → defaults, first non-zero wins. defaults
-	// is non-nil here (defaulted just above), so cmp.Or covers every layer; there
-	// is no workflow-level completion signal, so that one is override → defaults.
+	// Precedence for the scalar loop knobs is override → workflow → defaults,
+	// first non-zero wins. defaults is non-nil here (defaulted just above), so
+	// cmp.Or covers every layer.
 	timeout := cmp.Or(ov.Timeout, time.Duration(wf.Timeout), time.Duration(defaults.Timeout))
 	maxIter := cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)
-	signal := cmp.Or(ov.CompletionSignal, defaults.CompletionSignal)
+	signal := cmp.Or(ov.CompletionSignal, wf.CompletionSignal, defaults.CompletionSignal)
+	// stop-on-no-change does NOT follow that chain: it is a boolean OR across
+	// the layers — opt-in only, no tri-state. Any layer can enable it, no layer
+	// can disable a lower layer's enable.
+	stopOnNoChange := ov.StopOnNoChange || wf.StopOnNoChange || defaults.StopOnNoChange
 
 	branch := resolveBranch(ov, defaults, workflow)
 
@@ -101,9 +110,11 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 			RunRequest:       run.RunRequest{Branch: branch, BaseRef: ov.BaseRef, Prompt: promptText, Timeout: timeout, Stdout: stdout, Stderr: stderr},
 			MaxIterations:    maxIter,
 			CompletionSignal: signal,
+			StopOnNoChange:   stopOnNoChange,
 		},
-		Workflow: workflow,
-		Model:    model,
+		Workflow:     workflow,
+		Model:        model,
+		Placeholders: placeholders,
 	}, nil
 }
 

@@ -1,7 +1,8 @@
 # Iterate until the agent signals done
 
-Re-run an agent in one worktree until it emits a completion signal or a maximum
-iteration count is reached, then read why the loop stopped.
+Re-run an agent in one worktree until it emits a completion signal, stalls with
+no new commit (opt-in), or a maximum iteration count is reached, then read why
+the loop stopped.
 
 Use a looped run when a single agent pass is not enough: a fix that needs a
 second look at the test output, a refactor that converges over a few passes.
@@ -20,24 +21,41 @@ the worktree once, then re-runs the agent into that same worktree. Every
 iteration shares one worktree and the agent commits in place, so each pass
 continues from the previous pass's commit.
 
-The loop stops on the first of two conditions:
+The loop stops on the first of three conditions:
 
 | Condition | `StopReason` | String value |
 | --- | --- | --- |
 | The agent's stdout contains the completion signal | `StopSignal` | `"signal"` |
+| `stop-on-no-change` is on and an iteration lands no new commit | `StopNoChange` | `"no-change"` |
 | The loop has run `MaxIterations` times | `StopMaxIterations` | `"max-iterations"` |
 
 `MaxIterations` below 1 means a single run. An empty completion signal disables
-the early stop, so the loop always runs the full `MaxIterations`. The signal is
+the signal-based early stop (the loop then runs the full `MaxIterations`
+unless the opt-in no-change stop fires). The signal is
 matched as a plain substring of stdout (`strings.Contains`), not a whole line or
 an exact match, so choose a distinctive token: an agent that prints `not DONE
 yet` would stop a loop watching for `DONE`.
 
+The no-change stop is opt-in (`stop-on-no-change` in `taboo.yaml`, or
+`StopOnNoChange` on the request): when enabled, an iteration that ends with the
+branch tip unmoved stops the loop instead of paying the remaining iterations.
+This is a commit-based heuristic: it compares branch tips, so uncommitted or
+untracked worktree changes do not count as progress — an iteration that edits
+files but never commits still reads as no change and stops the loop, so do not
+assume it can see uncommitted work. The signal check outranks it: an iteration
+that both prints the sentinel and lands no commit reports `StopSignal`, and a stall on
+the final allowed iteration reports `StopNoChange`, not `StopMaxIterations`.
+It is off by default because a loop whose work product is output rather than
+commits would otherwise stop after one iteration.
+
 ## Configure the loop in taboo.yaml
 
 The loop knobs live in your `taboo.yaml`, so the one-call bridge picks them up
-without extra Go code. `max-iterations` can sit on a workflow or in `defaults`;
-`completion-signal` is a `defaults`-only key:
+without extra Go code. All four — `max-iterations`, `timeout`,
+`completion-signal`, and `stop-on-no-change` — can sit on a workflow or in
+`defaults`; a workflow value overrides the `defaults` one (except
+`stop-on-no-change`, which is enable-only and resolves by OR across the
+layers):
 
 ```yaml title="taboo.yaml"
 workshop: demo
@@ -51,12 +69,25 @@ workflows:
   iterate:
     prompt: "Fix the failing tests. Print DONE when all tests pass."
     max-iterations: 5
+  review:
+    prompt: "Review the diff. Print REVIEW COMPLETE when satisfied."
+    max-iterations: 3
+    completion-signal: REVIEW COMPLETE
 ```
 
-!!! warning "`completion-signal` is `defaults`-only"
-    `taboo.yaml` is parsed with unknown keys rejected. A workflow has no
-    `completion-signal` field, so putting it under `workflows.iterate` makes
-    `LoadConfig` fail with `ErrConfigParse`. Set it under `defaults`.
+Here `iterate` sets no signal of its own, so it falls through to the
+`defaults` sentinel `DONE`, while `review` watches for its own
+`REVIEW COMPLETE`. Sentinels are per-task semantics: give each workflow the
+token its prompt asks the agent to print, and keep `defaults` as the shared
+fallback. `taboo validate` warns when a workflow's effective prompt never
+mentions its effective signal — an agent that is never told to print the
+sentinel never prints it, so the signal-based early stop can never fire.
+
+!!! note "Per-workflow `completion-signal` overrides `defaults`"
+    The signal resolves like the other loop knobs — CLI flag (`--signal`) →
+    workflow → `defaults`, first non-empty wins. A workflow with no
+    `completion-signal` inherits the `defaults` one; `--signal` beats both for
+    a single invocation.
 
 `RunWorkflow` locates this config above the start directory, resolves the
 `iterate` workflow into a plan, and runs the loop over a `Commander`:
@@ -127,11 +158,13 @@ fmt.Printf("stopped after %d iteration(s): %s\n", res.Iterations, res.StopReason
 ## Read the result
 
 Both `RunWorkflow` and `Plan.Run` return an `OrchestratedResult`. It embeds
-`RunResult` (the final iteration's `Branch`, `Commit`, `Output`)
-and adds three fields:
+`RunResult` (the final iteration's `Branch`, `Commit`, `Output`, plus
+`BaseCommit` — the tip the branch started from at setup time, which survives
+every iteration untouched) and adds three fields:
 
 - `Iterations` is how many times the agent ran.
-- `StopReason` is `StopSignal` or `StopMaxIterations`. It is only meaningful when
+- `StopReason` is `StopSignal`, `StopNoChange`, or `StopMaxIterations`. It is
+  only meaningful when
   the call returns a nil error. On a setup or exec failure, the call returns the
   partial result with the error and leaves `StopReason` at its zero value (the
   empty string `""`), so check `err` before reading `StopReason`.
@@ -140,7 +173,9 @@ and adds three fields:
 
 The final `Commit` is the branch HEAD after the last iteration. Because every
 iteration commits in place, the commit reflects all passes, not just the last
-one.
+one. `res.Changed()` compares that final `Commit` against the original
+`BaseCommit`, so it reports whether the whole loop landed at least one new
+commit — use it to guard a push or PR stage against shipping an empty branch.
 
 ## Decode a typed result after the loop
 

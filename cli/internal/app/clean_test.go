@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -387,6 +388,248 @@ func TestClean_DryRunEmitsNothing(t *testing.T) {
 	managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
 	if !strings.Contains(stdout, managed) {
 		t.Errorf("dry-run plan missing the worktree path:\n%s", stdout)
+	}
+}
+
+// assertCleanJSONPure asserts the purity contract every clean --json case
+// shares: nothing on stderr, and zero mutating Commander verbs (no worktree
+// remove, workshop remove, or branch -D).
+func assertCleanJSONPure(t *testing.T, fake *fakeCommander, stderr string) {
+	t.Helper()
+	if stderr != "" {
+		t.Errorf("--dry-run --json must write nothing to stderr, got:\n%s", stderr)
+	}
+	for _, verb := range [][]string{{"worktree", "remove"}, {"workshop", "remove"}, {"branch", "-D"}} {
+		if findInvocation(fake, verb...) != nil {
+			t.Errorf("--dry-run --json must mutate nothing, found %v; calls: %v", verb, invocations(fake))
+		}
+	}
+}
+
+// TestClean_DryRunJSON is the tracer bullet for the --dry-run --json machine
+// plan: a full-scope dry run (--all --prune-branches) emits one JSON object to
+// stdout carrying every teardown section — worktrees in the jsonWorktree shape,
+// workshops, sdkLinks, and the merged/unmerged branch partition — plus the repo
+// and projectDir, exits 0, writes nothing to stderr, and records only the
+// read-only probes (no worktree remove/workshop remove/branch -D).
+func TestClean_DryRunJSON(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTabooProject(t, root, cleanProjectBody)
+	projectDir := filepath.Join(root, ".taboo")
+	link, _, _, _ := seedSDKQuarantine(t, projectDir)
+
+	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+	stdout, stderr, err := cleanCmd(t, env, "--all", "--prune-branches", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("clean --dry-run --json error = %v, want nil", err)
+	}
+
+	doc := decodeJSON[jsonCleanPlan](t, stdout)
+	if doc.Repo != testRepoPath {
+		t.Errorf("repo = %q, want %q", doc.Repo, testRepoPath)
+	}
+	if doc.ProjectDir != projectDir {
+		t.Errorf("projectDir = %q, want %q", doc.ProjectDir, projectDir)
+	}
+	managed := filepath.Join(projectDir, "worktrees", "taboo-fix-123")
+	wantWt := jsonWorktree{Branch: "taboo/fix-123", Path: managed}
+	if len(doc.Worktrees) != 1 || doc.Worktrees[0] != wantWt {
+		t.Errorf("worktrees = %+v, want [%+v]", doc.Worktrees, wantWt)
+	}
+	if len(doc.Workshops) != 1 || doc.Workshops[0] != "demo-opencode" {
+		t.Errorf("workshops = %v, want [demo-opencode]", doc.Workshops)
+	}
+	if len(doc.SDKLinks) != 1 || doc.SDKLinks[0] != link {
+		t.Errorf("sdkLinks = %v, want [%s]", doc.SDKLinks, link)
+	}
+	// cleanFakeStdout marks taboo/fix-123 merged and taboo/refactor-456 not:
+	// the machine plan carries the same partition the human plan shows.
+	if len(doc.Branches) != 1 || doc.Branches[0] != "taboo/fix-123" {
+		t.Errorf("branches = %v, want [taboo/fix-123]", doc.Branches)
+	}
+	if len(doc.UnmergedBranches) != 1 || doc.UnmergedBranches[0] != "taboo/refactor-456" {
+		t.Errorf("unmergedBranches = %v, want [taboo/refactor-456]", doc.UnmergedBranches)
+	}
+
+	assertCleanJSONPure(t, fake, stderr)
+	// A dry run mutates nothing: the quarantine link is still on disk.
+	if !exists(t, link) {
+		t.Errorf("--dry-run --json must remove nothing; link %s is gone", link)
+	}
+}
+
+// TestClean_DryRunJSONEmptyPlan asserts an empty default-scope plan (no managed
+// worktrees, and workshops/sdkLinks/branches out of scope entirely, which
+// buildCleanPlan leaves nil) marshals every slice key as [] — never null —
+// including unmergedBranches, which the human plan would omit.
+func TestClean_DryRunJSONEmptyPlan(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTabooProject(t, root, cleanProjectBody)
+	fake := &fakeCommander{stdoutFn: func(c taboo.Cmd) string {
+		if c.Name == "git" && elemsContain(c.Args, "worktree", "list", "--porcelain") {
+			return ""
+		}
+		return cleanFakeStdout(root)(c)
+	}}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, stderr, err := cleanCmd(t, env, "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("clean --dry-run --json error = %v, want nil", err)
+	}
+	for _, key := range []string{"worktrees", "workshops", "sdkLinks", "branches", "unmergedBranches"} {
+		if !strings.Contains(stdout, "\""+key+"\": []") {
+			t.Errorf("%s must marshal as [] (never null):\n%s", key, stdout)
+		}
+	}
+	if strings.Contains(stdout, "null") {
+		t.Errorf("an empty plan must contain no null:\n%s", stdout)
+	}
+	assertCleanJSONPure(t, fake, stderr)
+}
+
+// TestClean_DryRunJSONForceMovesUnmerged asserts --force shifts the whole
+// partition: every prefix branch (merged or not) lands in branches and
+// unmergedBranches marshals empty, mirroring what a forced real clean deletes.
+func TestClean_DryRunJSONForceMovesUnmerged(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTabooProject(t, root, cleanProjectBody)
+	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, stderr, err := cleanCmd(t, env, "--prune-branches", "--force", "--dry-run", "--json")
+	if err != nil {
+		t.Fatalf("clean --force --dry-run --json error = %v, want nil", err)
+	}
+	doc := decodeJSON[jsonCleanPlan](t, stdout)
+	want := []string{"taboo/fix-123", "taboo/refactor-456"}
+	if len(doc.Branches) != 2 || doc.Branches[0] != want[0] || doc.Branches[1] != want[1] {
+		t.Errorf("branches = %v, want %v", doc.Branches, want)
+	}
+	if len(doc.UnmergedBranches) != 0 {
+		t.Errorf("unmergedBranches = %v, want [] under --force", doc.UnmergedBranches)
+	}
+	assertCleanJSONPure(t, fake, stderr)
+}
+
+// TestClean_DryRunHumanPlanUnchanged pins the human preview byte-for-byte: a
+// --dry-run without --json renders exactly the pre---json plan, so adding the
+// machine view changed nothing for human callers.
+func TestClean_DryRunHumanPlanUnchanged(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTabooProject(t, root, cleanProjectBody)
+	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	stdout, _, err := cleanCmd(t, env, "--all", "--prune-branches", "--dry-run")
+	if err != nil {
+		t.Fatalf("clean --dry-run error = %v, want nil", err)
+	}
+	managed := filepath.Join(root, ".taboo", "worktrees", "taboo-fix-123")
+	want := "taboo clean (dry run) — would:\n" +
+		"remove worktrees:\n" +
+		"  taboo/fix-123  " + managed + "\n" +
+		"tear down workshops:\n" +
+		"  demo-opencode\n" +
+		"remove SDK links:\n" +
+		"  (none)\n" +
+		"delete branches:\n" +
+		"  taboo/fix-123\n" +
+		"skip unmerged branches (pass --force):\n" +
+		"  taboo/refactor-456\n"
+	if stdout != want {
+		t.Errorf("human dry-run plan drifted:\ngot:\n%s\nwant:\n%s", stdout, want)
+	}
+}
+
+// TestCleanPlanToJSON pins the pure projection directly over hand-built
+// cleanPlan values, like TestPlanToJSON: every plan field lands on its
+// camelCase key, and nil sections — which buildCleanPlan's helpers legitimately
+// produce — normalize to non-nil empty slices so they marshal as [].
+func TestCleanPlanToJSON(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		plan cleanPlan
+		want jsonCleanPlan
+	}{
+		{
+			name: "populated plan maps every section",
+			plan: cleanPlan{
+				worktrees:  []jsonWorktree{{Branch: "taboo/fix-1", Path: "/p/.taboo/worktrees/taboo-fix-1"}},
+				workshops:  []string{"demo-opencode"},
+				sdkLinks:   []string{"/p/.taboo/.workshop/mylib"},
+				branches:   []string{"taboo/fix-1"},
+				unmerged:   []string{"taboo/wip-2"},
+				repo:       "/home/user/repo",
+				projectDir: "/p/.taboo",
+			},
+			want: jsonCleanPlan{
+				Repo:             "/home/user/repo",
+				ProjectDir:       "/p/.taboo",
+				Worktrees:        []jsonWorktree{{Branch: "taboo/fix-1", Path: "/p/.taboo/worktrees/taboo-fix-1"}},
+				Workshops:        []string{"demo-opencode"},
+				SDKLinks:         []string{"/p/.taboo/.workshop/mylib"},
+				Branches:         []string{"taboo/fix-1"},
+				UnmergedBranches: []string{"taboo/wip-2"},
+			},
+		},
+		{
+			name: "nil sections normalize to empty slices",
+			plan: cleanPlan{repo: "/home/user/repo", projectDir: "/p/.taboo"},
+			want: jsonCleanPlan{
+				Repo:             "/home/user/repo",
+				ProjectDir:       "/p/.taboo",
+				Worktrees:        []jsonWorktree{},
+				Workshops:        []string{},
+				SDKLinks:         []string{},
+				Branches:         []string{},
+				UnmergedBranches: []string{},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := cleanPlanToJSON(tc.plan)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("cleanPlanToJSON = %+v, want %+v", got, tc.want)
+			}
+			// Non-nil matters beyond DeepEqual readability: nil is what would
+			// marshal as null.
+			if got.Worktrees == nil || got.Workshops == nil || got.SDKLinks == nil ||
+				got.Branches == nil || got.UnmergedBranches == nil {
+				t.Errorf("cleanPlanToJSON returned a nil slice: %+v", got)
+			}
+		})
+	}
+}
+
+// TestClean_JSONRequiresDryRun locks the up-front refusal: --json without
+// --dry-run errors with the documented message before any config load or host
+// probe — the Commander records nothing at all — instead of silently ignoring
+// the flag on the mutating path.
+func TestClean_JSONRequiresDryRun(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTabooProject(t, root, cleanProjectBody)
+	fake := &fakeCommander{stdoutFn: cleanFakeStdout(root)}
+	env := configEnv(t, fake, root, nil)
+
+	_, _, err := cleanCmd(t, env, "--json")
+	if err == nil {
+		t.Fatal("--json without --dry-run must error")
+	}
+	if !strings.Contains(err.Error(), "--json requires --dry-run") {
+		t.Errorf("error = %q, want it to say %q", err, "--json requires --dry-run")
+	}
+	if n := len(invocations(fake)); n != 0 {
+		t.Errorf("the refusal must precede every probe; commander recorded %d calls: %v", n, invocations(fake))
 	}
 }
 

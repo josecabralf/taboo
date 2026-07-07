@@ -73,9 +73,10 @@ type runResultHandle struct {
 
 // RunResult reports the outcome of a run.
 type RunResult struct {
-	Branch string
-	Commit string // HEAD of the branch after the agent ran
-	Output string // captured agent exec stdout (stderr is not retained)
+	Branch     string
+	Commit     string // HEAD of the branch after the agent ran
+	BaseCommit string // HEAD of the fresh worktree at Setup time — the tip the branch started from
+	Output     string // captured agent exec stdout (stderr is not retained)
 	// Err is this run's failure, populated by Pool when fanning out so that one
 	// failed run does not abort the whole batch (see Pool.Run). The single-run
 	// primitives (Runner.Run/Setup/Exec) return their error separately and leave
@@ -102,6 +103,14 @@ func NewResultWithWorktree(worktree string) RunResult {
 // instead of running it.
 func NewResultWithWorktreeCmd(worktree string, cmd exec.Commander) RunResult {
 	return RunResult{handle: &runResultHandle{worktreePath: worktree, cmd: cmd}}
+}
+
+// Changed reports whether the run produced at least one new commit: the final
+// Commit differs from the BaseCommit the worktree started at. It is meaningful
+// only after a successful Exec — before Exec, Commit is empty and Changed
+// returns false.
+func (r RunResult) Changed() bool {
+	return r.Commit != "" && r.Commit != r.BaseCommit
 }
 
 // Artifact reads the file at relpath within the run's worktree and returns its
@@ -353,6 +362,18 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	if err := r.ensureWorkshop(ctx, fingerprint); err != nil {
 		return res, fmt.Errorf("ensure workshop: %w", err)
 	}
+
+	// Record the tip the run's branch started from, strategy-agnostically: it
+	// reads the freshly prepared workspace's HEAD — BaseRef's tip when set, else
+	// the checkout's own HEAD — so one capture covers both the worktree and branch
+	// strategies. Deliberately before the OnWorkshopReady hooks: a setup hook that
+	// commits counts as a change the run produced, not as part of the base the
+	// caller's repo contributed.
+	base, err := r.gitCapture(ctx, []string{"-C", workspace, "rev-parse", "HEAD"})
+	if err != nil {
+		return res, fmt.Errorf("rev-parse base HEAD: %w", err)
+	}
+	res.BaseCommit = base
 
 	// Swap the prepared workspace into the ready workshop, layering the strategy's
 	// extra git mounts (none for the branch strategy; gitcommon + worktrees for the

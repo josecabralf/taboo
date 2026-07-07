@@ -92,11 +92,20 @@ func (f *fakeGH) AddLabel(_ context.Context, prRef, label string) error {
 
 // fakeRunner records that the taboo run was invoked and returns a canned
 // OrchestratedResult (or an error). The worktree arg, when set, becomes the
-// result's worktree path so the test can stage a plan file there.
+// result's worktree path so the test can stage a plan file there. The result
+// carries Commit/BaseCommit the way production populates them: on success,
+// distinct shas — the way an Exec that committed leaves them, so Changed()
+// reports true; on a failure, Commit stays empty — a failed Exec never records
+// the branch tip — so Changed() reports false.
 func fakeRunner(calls *[]string, worktree string, err error) workflowRunner {
 	return func(_ context.Context, _, _ string, _ map[string]string, _ taboo.PlanOverrides, _ taboo.Commander) (taboo.OrchestratedResult, error) {
 		*calls = append(*calls, "runTabo")
-		return taboo.OrchestratedResult{RunResult: taboo.NewResultWithWorktree(worktree)}, err
+		res := taboo.NewResultWithWorktree(worktree)
+		res.BaseCommit = "aaaa000"
+		if err == nil {
+			res.Commit = "bbbb111"
+		}
+		return taboo.OrchestratedResult{RunResult: res}, err
 	}
 }
 
@@ -223,6 +232,88 @@ func TestImplementCreatePRErrorWrapsAndSkipsLabel(t *testing.T) {
 	}
 }
 
+// TestImplementRunErrorWrapsBeforeNoCommitGuard pins that the runWorkflow
+// error check sits before the no-commit guard: a production failed run is ALSO
+// unchanged (a failed Exec leaves Commit empty, so Changed() is false), and
+// the operator must see the wrapped run error — not the misleading no-commits
+// refusal that moving the guard above the error check would produce.
+func TestImplementRunErrorWrapsBeforeNoCommitGuard(t *testing.T) {
+	t.Parallel()
+
+	gh := &fakeGH{issue: ghio.Issue{Number: 1, Title: "T", Body: "b"}}
+	var runCalls []string
+	run := fakeRunner(&runCalls, t.TempDir(), errors.New("boom"))
+
+	err := implement(context.Background(), t.TempDir(), 1, gh, run)
+	if err == nil {
+		t.Fatal("implement returned nil, want a run error")
+	}
+	if !strings.HasPrefix(err.Error(), "run implement agent: ") {
+		t.Errorf("error = %q, want it to start with %q", err.Error(), "run implement agent: ")
+	}
+	if strings.Contains(err.Error(), "no commits") {
+		t.Errorf("error = %q is the no-commits refusal; the run error must take precedence", err.Error())
+	}
+	// None of the publish steps may fire after a run failure.
+	for _, c := range gh.calls {
+		if c == "PushBranch" || c == "CreateDraftPR" || c == "AddLabel" {
+			t.Errorf("call %q reached after run failure; calls = %v", c, gh.calls)
+		}
+	}
+}
+
+// TestImplementUnchangedRunRefusesBeforePush pins the no-commit guard: a run
+// that finished without error but produced no commits (Commit == BaseCommit)
+// must never reach PushBranch/CreateDraftPR/AddLabel — origin never sees an
+// empty branch — while the run's worktree is still disposed exactly once and
+// the returned error names the issue and branch.
+func TestImplementUnchangedRunRefusesBeforePush(t *testing.T) {
+	t.Parallel()
+
+	worktree := t.TempDir()
+	gh := &fakeGH{
+		issue: ghio.Issue{Number: 42, Title: "Add the Foo!", Body: "b"},
+		prURL: "https://github.com/o/r/pull/99",
+	}
+	rec := &recordingDisposer{}
+	run := func(_ context.Context, _, _ string, _ map[string]string, _ taboo.PlanOverrides, _ taboo.Commander) (taboo.OrchestratedResult, error) {
+		res := taboo.NewResultWithWorktreeCmd(worktree, rec)
+		// A no-commit run: the branch tip after the run equals the tip it started
+		// from, exactly what production records when the agent committed nothing.
+		res.Commit = "aaaa000"
+		res.BaseCommit = "aaaa000"
+		return taboo.OrchestratedResult{RunResult: res}, nil
+	}
+
+	err := implement(context.Background(), t.TempDir(), 42, gh, run)
+	if err == nil {
+		t.Fatal("implement returned nil, want a no-commits refusal error")
+	}
+
+	branch := slugBranch(42, "Add the Foo!")
+	if !strings.Contains(err.Error(), "#42") {
+		t.Errorf("error = %q, want it to name issue #42", err.Error())
+	}
+	if !strings.Contains(err.Error(), branch) {
+		t.Errorf("error = %q, want it to name the branch %q", err.Error(), branch)
+	}
+	if !strings.Contains(err.Error(), "no commits") {
+		t.Errorf("error = %q, want it to say the run produced no commits", err.Error())
+	}
+
+	// The guard sits before the push: none of the publish steps may fire.
+	for _, c := range gh.calls {
+		if c == "PushBranch" || c == "CreateDraftPR" || c == "AddLabel" {
+			t.Errorf("call %q reached on an unchanged run; calls = %v", c, gh.calls)
+		}
+	}
+
+	// The run's worktree is still freed, exactly once.
+	if got := rec.removeCount(); got != 1 {
+		t.Errorf("worktree-remove count = %d, want 1 (unchanged run must dispose the worktree)", got)
+	}
+}
+
 // Ensure *ghio.Client still satisfies ghClient and taboo.RunWorkflow satisfies
 // workflowRunner, so the production wiring in runImplement stays type-correct.
 var (
@@ -249,7 +340,9 @@ func TestImplementDisposesWorktreeAfterPlanRead(t *testing.T) {
 	}
 	rec := &recordingDisposer{}
 	run := func(_ context.Context, _, _ string, _ map[string]string, _ taboo.PlanOverrides, _ taboo.Commander) (taboo.OrchestratedResult, error) {
-		return taboo.OrchestratedResult{RunResult: taboo.NewResultWithWorktreeCmd(worktree, rec)}, nil
+		res := taboo.NewResultWithWorktreeCmd(worktree, rec)
+		res.Commit, res.BaseCommit = "bbbb111", "aaaa000"
+		return taboo.OrchestratedResult{RunResult: res}, nil
 	}
 
 	if err := implement(context.Background(), t.TempDir(), 42, gh, run); err != nil {

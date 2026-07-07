@@ -46,6 +46,9 @@ afk loop [--max-iterations N] [--parallelism N] [--dry-run]
 1. **Fetch** the issue title/body via `gh` (`internal/ghio`).
 2. **Run** the `implement` workflow on `taboo`: the agent runs inside a
    taboo-provisioned workshop and **commits in place** — it is git-**push-denied**.
+   A run that produced no commits is refused right here, before the push: no
+   branch reaches origin, no PR is opened, and `afk` exits non-zero naming the
+   issue and branch.
 3. **Push** the run's branch to origin.
 4. **Open a draft PR** whose body is the agent's plan (read from `.taboo-plan.md`
    in the worktree), prefixed with `Closes #N`.
@@ -117,9 +120,10 @@ drains the whole `ready-for-agent` backlog wave by wave:
    in flight.
 3. **Fan out** the `implement` workflow across the batch through `taboo.Pool`,
    bounded by `--parallelism` (default 3) concurrent runs per wave.
-4. **Settle** each run: a success releases `agent:in-progress`; a failure also
-   adds `agent:blocked` plus a diagnostic comment, taking the issue out of the
-   ready pool until a human re-adds the label.
+4. **Settle** each run: a success releases `agent:in-progress`; a failure adds
+   `agent:blocked` plus a diagnostic comment; a no-commit run also adds
+   `agent:blocked` plus a no-change comment. All take the issue out of the ready
+   pool until a human re-adds the label.
 
 It repeats up to `--max-iterations` (default 10) waves — a safety bound against a
 queue that never empties. `--dry-run` plans and prints the first batch without

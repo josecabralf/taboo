@@ -3,17 +3,26 @@
 The `taboo` binary wraps the common library paths. The thin `cli/main.go`
 entrypoint delegates to the application package `cli/internal/app`. The root
 command is `taboo` ("taboo orchestrates agent runs inside workshop
-environments", `cli/internal/app/main.go`). It registers six subcommands:
-`doctor`, `init`, `validate`, `run`, `list`, `clean`
-(`cli/internal/app/main.go`, `newRootCmd`). There is no `version` subcommand and
-no `--version`/`-v` flag; the only version taboo surfaces is the workshop floor
-(`0.9.1`), reported by `doctor`.
+environments", `cli/internal/app/main.go`). It registers seven subcommands:
+`doctor`, `init`, `validate`, `run`, `list`, `clean`, `version`
+(`cli/internal/app/main.go`, `newRootCmd`). There is no `--version`/`-v` flag;
+`taboo version` prints the CLI's build version from the binary's embedded
+module info (`cli/internal/app/version.go`, `newVersionCmd`) — a `go install`
+binary reports its module version, a plain local build reports `(devel)`. The
+workshop floor version (`0.9.1`) is reported separately, by `doctor`.
 
-Every command exits `0` on success and `1` on failure. The process exits
-non-zero whenever a command returns an error; `Execute` in
-`cli/internal/app/main.go` maps any returned error to `os.Exit(1)`. The root
-sets `SilenceErrors` and `SilenceUsage`, so cobra does not print usage on
-failure.
+Every command exits `0` on success and `1` on failure. `Execute` in
+`cli/internal/app/main.go` is a thin `os.Exit(executeRoot(env))`; `executeRoot`
+runs the root command and, when it returns an error, prints that error exactly
+once to stderr as `Error: <message>` before mapping it to exit `1`. Every
+failed command surfaces this way: command refusals, the report commands'
+sentinel verdicts (`doctor`/`validate`/`run` preflight print their report
+first, then gain exactly one trailing `Error:` line), and cobra's own
+flag-parse and unknown-command errors (`Error: unknown flag: --bogus`). The
+root sets `SilenceErrors` and `SilenceUsage`, so usage is still never dumped
+on failure. Errors go to stderr only — the `Error:` line never touches stdout,
+and beyond the report commands' own documents stdout receives nothing on an
+error path, so `--json` consumers always parse a clean stdout document.
 
 !!! info "Where these facts come from"
     Every command, flag, and message below is read from the source named in
@@ -68,10 +77,9 @@ with no `--source-definition` selected is rejected non-interactively:
 `multiple workshop definitions (...): pass --source-definition to pick one`.
 
 Output routing: progress, the scaffold confirmation, and next steps go to
-stdout (`printNextSteps`); errors go to stderr prefixed with `Error:`. A
-`--dry-run` invocation prints `taboo init (dry run) — would write:` followed by
-the absolute path of each planned file (`printDryRun`). There is no `--json`
-flag.
+stdout (`printNextSteps`). A `--dry-run` invocation prints `taboo init (dry
+run) — would write:` followed by the absolute path of each planned file
+(`printDryRun`). There is no `--json` flag.
 
 Exit behaviour: non-zero on a missing required flag, an unknown agent or
 template, a refused overwrite, or a write failure.
@@ -112,11 +120,12 @@ config. With neither a positional workflow, a prompt flag, nor a
 | `--timeout` | `0` | Override the per-exec timeout, e.g. `30m` (Go duration). Zero leaves it unset. |
 | `--iterations` | `0` | Override the max iteration cap. Zero or less leaves it unset. |
 | `--signal` | `""` | String that, when it appears in agent output, stops the iteration loop early. |
+| `--stop-on-no-change` | `false` | Stop the iteration loop early when an iteration produces no new commit (the branch tip stops moving). Enable-only: it cannot disable a config-level enable. |
 | `--branch` | auto-generated | Branch name for this run. The default is composed of the prefix, the workflow (or `adhoc`), and a timestamp. |
 | `--from` | `""` | The workshop definition to derive the agent workshop from; overrides `taboo.yaml`'s source-definition for this run. |
 | `--dry-run` | `false` | Resolve and print the plan without running anything. |
 | `--yes` | `false` | Skip the interactive pre-run confirmation. |
-| `--json` | `false` | Emit the run result as JSON. |
+| `--json` | `false` | Emit the run result — or, with `--dry-run`, the resolved plan — as JSON. |
 
 Parameter precedence is per field, not one blanket rule (`cli/internal/app/run.go`
 packs the flags into `taboo.PlanOverrides`; the library resolves each field
@@ -124,8 +133,10 @@ independently):
 
 - `agent` and `model`: flag > workflow block > top-level config.
 - `--timeout` and `--iterations`: flag > workflow block > the `defaults:` block.
-- `--signal` (completion signal): flag > the `defaults:` block only. There is no
-  workflow-level completion signal.
+- `--signal` (completion signal): flag > workflow block > the `defaults:` block.
+- `--stop-on-no-change`: the OR of the flag, the workflow block, and the
+  `defaults:` block — not a precedence chain. Any layer can enable, none can
+  disable (see [taboo-yaml.md](taboo-yaml.md)).
 - `--from` (source-definition): flag > top-level `source-definition`.
 
 Template variables are layered last: `--var KEY=VALUE` flags override matching
@@ -147,8 +158,10 @@ the run is refused with `errRunFailed`. At a TTY without `--yes`, `run` then
 prints a one-line summary to stderr and reads a `y/N` answer from stdin; a blank
 line, EOF, or anything but `y`/`yes` declines and prints `Aborted.`
 (`confirmRun`, `promptYesNo`). A non-interactive caller or `--yes` proceeds
-without prompting. A `--dry-run` invocation prints the resolved plan and never
-reaches the preflight.
+without prompting. A `--dry-run` invocation emits the resolved plan — the human
+form, or a JSON document with `--json` — and never reaches the preflight (or
+the vars warnings: the JSON document carries the vars state itself, so dry-run
+writes nothing to stderr).
 
 Output routing: live agent output (both the agent's stdout and stderr) and all
 progress stream to stderr, so the machine result on stdout stays clean
@@ -163,7 +176,17 @@ commit: 1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
 
 `commit` is the full 40-character branch HEAD (`res.Commit`), printed verbatim.
 The plain form omits the captured agent output (it already streamed to stderr).
-With `--json`, stdout carries an indented JSON object (`jsonRunResult`):
+When the run produced no new commits (`res.Changed()` is false — the branch tip
+never moved off the base it started from), the plain form additionally prints
+an advisory note to **stderr**:
+
+```
+note: the agent produced no new commits — branch tip unchanged
+```
+
+Like every advisory, the note never touches stdout: the two `branch:`/`commit:`
+lines stay byte-identical whether or not anything landed. With `--json`, stdout
+carries an indented JSON object (`jsonRunResult`):
 
 ```json
 {
@@ -171,14 +194,66 @@ With `--json`, stdout carries an indented JSON object (`jsonRunResult`):
   "commit": "1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9",
   "output": "captured agent stdout",
   "iterations": 1,
-  "stopReason": "max-iterations"
+  "stopReason": "max-iterations",
+  "baseCommit": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+  "changed": true
 }
 ```
 
 The `stopReason` field is the `StopReason` flattened to a string
-(`max-iterations` or `signal`). A `--dry-run` plan prints to stdout under
+(`max-iterations`, `signal`, or `no-change` — the last only when the effective
+`stop-on-no-change` is on and an iteration moved no commit; it is a new value
+in the frozen key, not a new key). `baseCommit` is the tip the run's branch
+started from (`res.BaseCommit`, captured at setup time) and `changed` is
+`res.Changed()` — true iff the run produced at least one new commit. Both are
+additive: the five keys that predate them (`branch`, `commit`, `output`,
+`iterations`, `stopReason`) are frozen and stay byte-identical, so existing
+consumers keep parsing unchanged. The `--json` path prints no no-commit note —
+scripted consumers read `changed` instead.
+
+A `--dry-run` plan prints to stdout under
 `taboo run (dry run) — resolved plan:` with one aligned label per line
-(`printPlan`).
+(`printPlan`). With `--dry-run --json`, stdout instead carries the resolved
+plan as an indented JSON object (`jsonPlan`, built by the pure `planToJSON`):
+
+```json
+{
+  "workflow": "fix",
+  "adhoc": false,
+  "branch": "taboo/fix-20260617-101500-000000001",
+  "agent": "opencode",
+  "model": "anthropic/claude-sonnet-4-5",
+  "workshop": "demo-opencode",
+  "repo": "/home/user/project",
+  "sourceDefinition": "",
+  "timeout": "30m0s",
+  "maxIterations": 3,
+  "completionSignal": "DONE",
+  "stopOnNoChange": false,
+  "prompt": "please fix the failing tests",
+  "placeholders": [],
+  "vars": {
+    "supplied": [],
+    "unused": [],
+    "unfilled": false
+  }
+}
+```
+
+`workflow` is `""` and `adhoc` is `true` for an ad-hoc `--prompt` run.
+`sourceDefinition` is `""` when unset (the human plan omits the line; the JSON
+key is always present). `timeout` is the Go duration string the human plan
+renders. `stopOnNoChange` is the effective (OR-resolved) commit-based
+early-stop knob, mirroring the human plan's `stop-on-no-change:` line; it is
+additive on the dry-run document, which carries no key freeze. `prompt` is the same one-line preview (`promptSummary`) the human plan
+and `list` show — the full resolved prompt is deliberately not embedded.
+`placeholders` is the prompt's sorted `{{VAR}}` names, marshalled as `[]`
+(never `null`) when there are none. `vars` mirrors the human plan's `vars:`
+line as structured data: `supplied` is the sorted caller-supplied keys,
+`unused` the sorted supplied keys matching no placeholder (which substitution
+silently ignores), and `unfilled` is `true` exactly when the prompt has
+placeholders but no vars were supplied (they reach the agent literally). The
+run-result `jsonRunResult` shape above is unchanged.
 
 Exit behaviour: non-zero on a config/selection error, a preflight failure
 (`errRunFailed`), or a failure inside the run. A declined confirmation returns
@@ -217,6 +292,30 @@ Checks (`validateChecks` -> `configCorrectnessChecks`):
   is a `warn`, not an error (`modelChecks`, `MatchModelFormat`).
 - `prompt-file/<path>`: every referenced prompt file exists, resolved relative
   to the config file's directory (`promptFileChecks`).
+- `vars/<workflow>`: an `ok`-level per-workflow check listing the `{{VAR}}`
+  placeholders the workflow's effective prompt references (`prompt references:
+  <names>`) — a discoverability surface ("what vars does this workflow
+  take?"), never a failure. Silent for a placeholder-free workflow, and
+  skipped when the effective prompt is unresolvable (`prompt-file/` already
+  fails it) (`varsChecks`).
+- `default-workflow`: a set `default-workflow` must name a configured workflow
+  — a hard failure with the same wording `taboo run` uses at run time; `ok`
+  when it resolves, and no check at all when unset (unset is legal)
+  (`defaultWorkflowCheck`).
+- `signal/<workflow>`: a `warn` when the workflow's effective
+  `completion-signal` (workflow over `defaults`) never appears in its
+  effective prompt as a plain substring — the agent is never told to print the
+  sentinel, so the signal-based early stop can never fire; set it
+  intentionally to silence this. A workflow whose effective prompt is
+  unresolvable is skipped (`prompt-file/` already fails it) (`loopChecks`).
+- `loop/<workflow>`: a `warn` when the effective `max-iterations` (workflow
+  over `defaults`) is greater than 1 with no effective `completion-signal`
+  anywhere — the loop has no early stop, so every run pays the full N
+  iterations. Silent at `max-iterations <= 1`, when a signal exists, or when
+  the effective `stop-on-no-change` (workflow OR `defaults`) is enabled — the
+  knob is itself an early stop, so the warning's premise no longer holds. It
+  does not silence `signal/`: stop-on-no-change cannot fix a mistyped
+  sentinel (`loopChecks`).
 - `repo`/`repo-path`/`repo-git`: the repo must be set, on persistent storage
   (not under `/tmp` or `/run`), and a git work tree (`repoValidateChecks`).
 - `source-definition`/`derive`: a `<repo>/workshop.yaml` source must exist, and
@@ -285,7 +384,7 @@ Warnings (a missing Go toolchain, missing credentials) do not fail the command.
 
 ## list
 
-List the project's workshops, worktrees, and branches
+List the project's workshops, worktrees, branches, and workflows
 (`cli/internal/app/list.go`, `newListCmd`). Read-only: it loads the config,
 probes the host through the command seam, and mutates nothing.
 
@@ -310,12 +409,26 @@ Sections (`runList`):
 - branches: the branches under the configured `branch-prefix`, from
   `git for-each-ref refs/heads/` (`gatherBranches`). An empty prefix returns
   every branch.
+- workflows: one entry per configured workflow, sorted by name, computed from
+  the loaded config alone — no host probes (`gatherWorkflows`). Each line shows
+  the name (with a `(default)` marker when it equals `default-workflow`), the
+  effective agent and model (the workflow's own value falling back to the top
+  level), a one-line preview of the effective prompt (workflow inline →
+  workflow `prompt-file` → defaults inline → defaults `prompt-file`, via
+  `effectivePrompt` + `promptSummary`), and the `{{VAR}}` placeholder names it
+  references. An absent or unreadable prompt-file degrades to
+  `prompt: (unavailable)` rather than failing the listing — existence policing
+  stays `validate`'s job.
 
 Output routing: the listing goes to stdout. The human form prints a header and
-the three sections, each falling back to `(none)` when empty
+the four sections, each falling back to `(none)` when empty
 (`renderListResult`). With `--json`, stdout carries
 `{"workshops": [{"name","status"}], "worktrees": [{"branch","path"}],
-"branches": []}` (`jsonListResult`); empty sections marshal as `[]`.
+"branches": [], "workflows": [{"name","default","agent","model","prompt",
+"promptAvailable","placeholders"}]}` (`jsonListResult`); empty sections marshal
+as `[]`. `prompt` is the one-line summary (empty when `promptAvailable` is
+`false`) and `placeholders` is the sorted `{{VAR}}` name list, `[]` when there
+are none.
 
 Exit behaviour: non-zero on a config-load error or a fatal git probe error. A
 workshop-info probe error is not fatal (it reports `not provisioned`).
@@ -340,6 +453,7 @@ Positional arguments: none (`cobra.NoArgs`).
 | `--force` | `false` | Delete branches even when not merged. |
 | `--dry-run` | `false` | Print the plan without removing anything. |
 | `--yes` | `false` | Skip the interactive confirmation. |
+| `--json` | `false` | Emit the dry-run teardown plan as JSON (requires `--dry-run`). |
 
 Scope (`buildCleanPlan`): worktrees are removed with `git worktree remove`;
 `--workshops` switches to tearing down the derived workshops (`workshop remove`)
@@ -360,7 +474,42 @@ a `y/N` answer before any destructive action; declining prints `Aborted.`
 Output routing: `--dry-run` and the `Nothing to clean.` message go to stdout;
 per-artifact progress (`removed worktree ...`, `tore down workshop ...`,
 `removed SDK link ...`, `deleted branch ...`) and warnings go to stderr
-(`executeClean`). There is no `--json` flag.
+(`executeClean`). With `--dry-run --json`, stdout carries the resolved teardown
+plan as one indented JSON object instead of the human preview
+(`cleanPlanToJSON`); `--dry-run` without `--json` is unchanged. `--json`
+without `--dry-run` is refused up front (`--json requires --dry-run`), before
+any config load or host probe — the mutating path streams per-artifact
+progress and has no single result document to emit.
+
+The `--dry-run --json` shape (`jsonCleanPlan`):
+
+```json
+{
+  "repo": "/home/user/repo",
+  "projectDir": "/home/user/repo/.taboo",
+  "worktrees": [
+    {
+      "branch": "taboo/fix-123",
+      "path": "/home/user/repo/.taboo/worktrees/taboo-fix-123"
+    }
+  ],
+  "workshops": ["demo-opencode"],
+  "sdkLinks": ["/home/user/repo/.taboo/.workshop/mylib"],
+  "branches": ["taboo/fix-123"],
+  "unmergedBranches": ["taboo/refactor-456"]
+}
+```
+
+`worktrees` entries reuse the `{"branch","path"}` shape of `list --json`'s
+worktrees section, but the section is scope-gated like the others: it is
+populated unless `--workshops` narrows the scope to workshops only, in which
+case it marshals as `[]`. `workshops` and `sdkLinks` are populated only under
+`--workshops`/`--all`, and `branches`/`unmergedBranches` only under
+`--prune-branches` — `branches` is what a real clean would delete (merged
+branches, or all of them under `--force`) and `unmergedBranches` is what it
+would refuse without `--force`. Every key is always present; empty sections
+marshal as `[]` (never `null`), including `unmergedBranches`, which the human
+plan omits when empty.
 
 Exit behaviour: teardown is best-effort. A failure on one artifact warns and
 continues; every failure is joined into the returned error so the command still

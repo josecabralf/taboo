@@ -56,14 +56,7 @@ func newInitCmd(env Env) *cobra.Command {
 			"repo, or pass the equivalent flags to scaffold non-interactively.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			// The root sets SilenceErrors, and main exits without printing, so
-			// (like doctor) init surfaces its own failures to stderr; the returned
-			// error only drives the non-zero exit.
-			if err := runInitCmd(env, &opts); err != nil {
-				_, _ = fmt.Fprintln(env.Stderr, "Error:", err)
-				return err
-			}
-			return nil
+			return runInitCmd(env, &opts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.agent, "agent", "", "agent to scaffold for (e.g. opencode, claude-code, copilot)")
