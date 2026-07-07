@@ -610,12 +610,22 @@ func TestSetup_NoBaseRefSkipsFetchAndStartPoint(t *testing.T) {
 // than a linked worktree. It creates req.Branch with `git switch -c`, binds ONLY
 // the checkout into the workshop (a single workspace mount plus sessions for a
 // session-capable agent), and skips the git-common / worktrees mounts the
-// worktree path needs. Dispose is a no-op — the workspace IS the checkout, so
-// there is nothing to `git worktree remove`.
+// worktree path needs. It also captures HEAD (symbolic-ref) before the switch so
+// Dispose can restore it.
 func TestSetup_BranchStrategy(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Strategy = workshop.StrategyBranch
-	fc := &fakeCommander{errFn: failOnVerb("info")} // absent -> launch
+	fc := &fakeCommander{
+		errFn: failOnVerb("info"), // absent -> launch
+		// HEAD is on "main" before the run; symbolic-ref reports it (so Setup
+		// records "main" as the ref Dispose restores).
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "symbolic-ref" {
+				return "main\n"
+			}
+			return ""
+		},
+	}
 	r := New(cfg, fc)
 
 	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
@@ -623,12 +633,12 @@ func TestSetup_BranchStrategy(t *testing.T) {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	// In-place recipe: status (clean-tree guard) -> switch -c -> ensure
-	// (info+launch) -> stop -> remount workspace -> remount sessions -> start. The
-	// host-side git prep now runs BEFORE the workshop launch (a precondition
-	// failure aborts cheaply). No worktree add, no gitcommon or worktrees remount.
-	// (opencode is session-capable, hence the sessions remount.)
-	wantSeq := []string{"status", "switch", "info", "launch", "stop", "remount", "remount", "start"}
+	// In-place recipe: status (clean-tree guard) -> symbolic-ref (capture HEAD) ->
+	// switch -c -> ensure (info+launch) -> stop -> remount workspace -> remount
+	// sessions -> start. The host-side git prep now runs BEFORE the workshop launch
+	// (a precondition failure aborts cheaply). No worktree add, no gitcommon or
+	// worktrees remount. (opencode is session-capable, hence the sessions remount.)
+	wantSeq := []string{"status", "symbolic-ref", "switch", "info", "launch", "stop", "remount", "remount", "start"}
 	if got := fc.verbs(); !slices.Equal(got, wantSeq) {
 		t.Fatalf("sequence =\n  %v\nwant\n  %v", got, wantSeq)
 	}
@@ -651,15 +661,80 @@ func TestSetup_BranchStrategy(t *testing.T) {
 	}
 }
 
-// TestSetup_BranchStrategy_DisposeIsNoOp is the branch counterpart to
-// TestSetup_WorktreeStrategy_DisposeRemovesWorktree: the in-place path's Dispose
-// must NOT issue a `git worktree remove` (which would be destructive against the
-// main checkout), because the workspace IS the checkout (worktreePath ==
-// repoPath), so there is nothing to remove.
-func TestSetup_BranchStrategy_DisposeIsNoOp(t *testing.T) {
+// TestSetup_BranchStrategy_DisposeRestoresHead is the branch counterpart to
+// TestSetup_WorktreeStrategy_DisposeRemovesWorktree: where the worktree path's
+// Dispose runs `git worktree remove`, the in-place path's Dispose is the inverse
+// of Setup — it switches the checkout back to the ref HEAD was on before
+// `git switch -c` (here "main"). It must NEVER issue a `git worktree remove`,
+// which would be destructive against the main checkout.
+func TestSetup_BranchStrategy_DisposeRestoresHead(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Strategy = workshop.StrategyBranch
-	fc := &fakeCommander{errFn: failOnVerb("info")} // absent -> launch
+	fc := &fakeCommander{
+		errFn: failOnVerb("info"), // absent -> launch
+		stdoutFn: func(c exec.Cmd) string {
+			if verbOf(c) == "symbolic-ref" {
+				return "main\n" // HEAD is on "main" before the run
+			}
+			return "" // status: a clean tree, so restore proceeds
+		},
+	}
+	r := New(cfg, fc)
+
+	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if res.handle.originHead != "main" || res.handle.originDetached {
+		t.Fatalf("captured origin HEAD = %q (detached=%v), want \"main\" (attached)", res.handle.originHead, res.handle.originDetached)
+	}
+
+	before := len(fc.snapshot())
+	if err := res.Dispose(); err != nil {
+		t.Fatalf("Dispose: %v", err)
+	}
+
+	var restore exec.Cmd
+	for _, c := range fc.snapshot()[before:] {
+		if c.Name == "git" && slices.Contains(c.Args, "worktree") && slices.Contains(c.Args, "remove") {
+			t.Errorf("branch strategy Dispose issued a worktree remove: %v", c.Args)
+		}
+		if c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "switch" && c.Args[3] == "main" {
+			restore = c
+		}
+	}
+	// The restore is `git switch main` (no -c): the inverse of Setup's
+	// `git switch -c agent/x`, leaving the checkout on its pre-run branch.
+	wantRestore := []string{"-C", cfg.RepoPath, "switch", "main"}
+	if !slices.Equal(restore.Args, wantRestore) {
+		t.Errorf("restore switch args =\n  %v\nwant\n  %v", restore.Args, wantRestore)
+	}
+}
+
+// TestSetup_BranchStrategy_DisposeRefusesDirtyCheckout pins the exit guard: if the
+// agent leaves uncommitted TRACKED changes, Dispose refuses to switch HEAD back
+// rather than let `git switch` carry that work onto the base ref — the inverse of
+// the dirty-tree refusal Setup applies on entry, and the analogue of the non-force
+// `git worktree remove` refusing a dirty worktree.
+func TestSetup_BranchStrategy_DisposeRefusesDirtyCheckout(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Strategy = workshop.StrategyBranch
+	clean := true // status is clean during Setup; the agent dirties it before Dispose
+	fc := &fakeCommander{
+		errFn: failOnVerb("info"),
+		stdoutFn: func(c exec.Cmd) string {
+			switch verbOf(c) {
+			case "symbolic-ref":
+				return "main\n"
+			case "status":
+				if clean {
+					return ""
+				}
+				return " M pkg/file.go\n" // an uncommitted tracked change
+			}
+			return ""
+		},
+	}
 	r := New(cfg, fc)
 
 	res, err := r.Setup(context.Background(), RunRequest{Branch: "agent/x", Prompt: "go"})
@@ -667,12 +742,15 @@ func TestSetup_BranchStrategy_DisposeIsNoOp(t *testing.T) {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	if err := res.Dispose(); err != nil {
-		t.Fatalf("Dispose: %v", err)
+	clean = false // the run left the checkout dirty (same goroutine, no race)
+	before := len(fc.snapshot())
+	if err := res.Dispose(); err == nil {
+		t.Fatal("Dispose must refuse a dirty checkout, got nil error")
 	}
-	for _, c := range fc.snapshot() {
-		if c.Name == "git" && slices.Contains(c.Args, "worktree") && slices.Contains(c.Args, "remove") {
-			t.Errorf("branch strategy Dispose issued a worktree remove: %v", c.Args)
+	// Refusal means HEAD is NOT switched back: no restore `git switch` was issued.
+	for _, c := range fc.snapshot()[before:] {
+		if c.Name == "git" && slices.Contains(c.Args, "switch") {
+			t.Errorf("Dispose switched HEAD despite a dirty checkout: %v", c.Args)
 		}
 	}
 }

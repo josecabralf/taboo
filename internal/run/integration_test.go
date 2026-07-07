@@ -345,7 +345,7 @@ git commit -qm "agent: add PRUNE.md after worktree prune"`
 // worktree and applies the three-mount rule (the machinery that fails in CI on
 // LXD/GH Actions, run 28110176802), the branch strategy works IN PLACE on the
 // checkout: `git switch -c`, a single workspace mount, no git-common/worktrees
-// remount, and a no-op Dispose.
+// remount, and a Dispose that restores HEAD instead of removing a worktree.
 //
 // It drives the full launch -> switch -c -> stop/remount workspace/start -> exec
 // -> commit path with the deterministic shell "agent" (no LLM, no credential),
@@ -353,7 +353,8 @@ git commit -qm "agent: add PRUNE.md after worktree prune"`
 // fake-commander unit tests can only assert as argv: (1) the workspace IS the
 // checkout, not a linked worktree; (2) the agent's commit lands on the new
 // branch in the checkout, host-visible; (3) no linked worktree was created; and
-// (4) Dispose leaves the checkout intact.
+// (4) Dispose restores HEAD to the pre-run branch while the run branch keeps the
+// commit.
 func TestIntegration_BranchStrategyCommitsInPlace(t *testing.T) {
 	repo := initSeedRepo(t)
 	proj := nonTmpDir(t)
@@ -371,6 +372,14 @@ func TestIntegration_BranchStrategyCommitsInPlace(t *testing.T) {
 		_ = osexec.Command("git", "-C", repo, "worktree", "prune").Run()
 	})
 	r := New(cfg, exec.NewExecCommander())
+
+	// The branch Setup found HEAD on, captured before the run so we can assert
+	// Dispose restores it (git's default branch name is host-config dependent).
+	origBranch, err := osexec.Command("git", "-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("read seed HEAD branch: %v", err)
+	}
+	wantOrigBranch := strings.TrimSpace(string(origBranch))
 
 	const script = `set -eux
 git config user.email agent@example.com
@@ -432,18 +441,40 @@ git commit -qm "agent: add BRANCH.md"`
 		t.Errorf("branch strategy created extra worktrees; want only the checkout:\n%s", wtList)
 	}
 
-	// (4) Dispose is a no-op: the checkout (its .git and the agent's commit)
-	// survives intact — no `git worktree remove` against the main checkout.
+	// (4) Dispose is the inverse of Setup: it restores HEAD to the pre-run branch
+	// (the `git switch -c` is undone), but never removes a worktree against the main
+	// checkout and never destroys the run's artifact. After Dispose: the checkout is
+	// back on origBranch; the agent's commit still lives on the run branch (the
+	// artifact persists, like a worktree's branch survives `git worktree remove`);
+	// and because origBranch never had BRANCH.md, it is gone from the working tree.
 	if err := res.Dispose(); err != nil {
 		t.Fatalf("Dispose: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
 		t.Fatalf("Dispose damaged the checkout's .git: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(repo, "BRANCH.md")); err != nil {
-		t.Fatalf("Dispose removed the agent's committed file: %v", err)
+	postBranch, err := osexec.Command("git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD after Dispose: %v\n%s", err, postBranch)
 	}
-	t.Logf("branch strategy OK: workshop=%s commit=%s checkout=%s", ws, res.Commit, repo)
+	if got := strings.TrimSpace(string(postBranch)); got != wantOrigBranch {
+		t.Errorf("Dispose left checkout on %q, want the pre-run branch %q", got, wantOrigBranch)
+	}
+	// The artifact survives: the agent's commit is still reachable from the run
+	// branch even though HEAD moved off it.
+	runLog, err := osexec.Command("git", "-C", repo, "log", "--oneline", "agent/branch-strategy").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log run branch after Dispose: %v\n%s", err, runLog)
+	}
+	if !strings.Contains(string(runLog), "add BRANCH.md") {
+		t.Errorf("Dispose lost the run branch's commit; log:\n%s", runLog)
+	}
+	// HEAD is back on a branch that never had BRANCH.md, so the working tree no
+	// longer carries it (it lives on the run branch's commit, not here).
+	if _, err := os.Stat(filepath.Join(repo, "BRANCH.md")); !os.IsNotExist(err) {
+		t.Errorf("BRANCH.md should be gone from the restored checkout, stat err = %v", err)
+	}
+	t.Logf("branch strategy OK: workshop=%s commit=%s checkout=%s restored=%s", ws, res.Commit, repo, wantOrigBranch)
 }
 
 // runLiveAgentCommitTest is the shared body of the three live-agent integration

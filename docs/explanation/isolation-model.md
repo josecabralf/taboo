@@ -195,7 +195,7 @@ on workshop 0.9.1 and LXD 6.8, and that the out-of-repo layout remains a sound
 fallback. The only host-side cost the nested layout inherits is the
 repo-not-under-`/tmp` constraint, which already existed for the git-common mount.
 
-## The branch strategy: one run per disposable checkout
+## The branch strategy: one run at a time per checkout
 
 Everything above describes the **worktree strategy**: a fresh linked worktree per
 run, the two mounts that make a linked worktree resolve, and the per-slot
@@ -217,28 +217,36 @@ is unnecessary. The CI dogfooding loop uses this seam (`.taboo/taboo.yaml` sets
 `strategy: branch`), because that machinery is what failed under LXD on GitHub
 Actions.
 
-The cost of deleting the machinery is a contract: **one run per checkout, and
-the checkout is disposable.** A single checkout has one working tree and one
-`HEAD`, so the branch strategy cannot back the concurrent `Pool` (`slotConfig` in
-`internal/run/pool.go` forces `worktree` on every slot for this reason) and is
-not safe to run twice against the same checkout. Three consequences follow, and
-all three are intended:
+The cost of deleting the machinery is a contract: **one run at a time per
+checkout.** A single checkout has one working tree and one `HEAD`, so the branch
+strategy cannot back the concurrent `Pool` (`slotConfig` in
+`internal/run/pool.go` forces `worktree` on every slot for this reason) — that
+limit is inherent and cannot be designed away. Sequential reuse, however, is
+safe, because `Dispose` is the inverse of `Setup`:
 
-- After a run, `HEAD` is left on the run's branch. `git switch -c` moved it there
-  and nothing moves it back, because that branch is the artifact the run exists
-  to produce. `RunResult.Dispose` is a no-op for this strategy (there is no
-  linked worktree to remove), so it does not restore `HEAD` either.
-- A second run with no `BaseRef` branches off the first run's tip, the current
-  `HEAD`, and inherits its commits. The `BaseRef` arm avoids this by branching
-  from the fetched ref; the default path is `HEAD`-relative.
+- `RunResult.Dispose` restores `HEAD` to the ref it was on before `git switch -c`
+  (a branch name, or the exact commit when it started detached). The run's branch
+  persists as the artifact — exactly as `git worktree remove` leaves a worktree's
+  branch behind — but the checkout returns to its base. Restoration happens at
+  `Dispose`, not at the end of the run: until then `HEAD` stays on the run branch
+  so `res.Artifact(relpath)` reads the run's output from the working tree. If the
+  run left uncommitted *tracked* changes, `Dispose` refuses rather than carry them
+  onto the base ref — the same non-force stance as `git worktree remove` on a
+  dirty worktree (commit or discard, then dispose).
+- A second run with no `BaseRef` therefore branches off the restored base, not the
+  first run's tip — provided you called `Dispose` between them. Skip `Dispose` and
+  `HEAD` is still on the first run's branch, so the second run chains off it; the
+  `BaseRef` arm sidesteps the question by branching from the fetched ref.
 - A second run whose branch name already exists fails at `git switch -c`, which
-  aborts rather than reusing or overwriting the branch.
+  aborts rather than reusing or overwriting the branch. The worktree strategy's
+  `git worktree add -b` fails the same way, so this is shared behaviour, not a
+  branch-strategy quirk: every run needs a distinct branch name.
 
-None of these can happen when each run gets a fresh checkout that is discarded
-afterward, which is what CI provides. They are reachable only by pointing the
-branch strategy at a reused or local checkout, which the contract forbids. For
-any checkout you keep, use the worktree strategy, the default: every run gets its
-own branch and worktree, and the checkout's `HEAD` is never touched.
+The one thing sequential reuse still cannot buy is concurrency — overlapping runs
+need the separate working trees only the worktree strategy provides. For any
+checkout where you want parallelism, use the worktree strategy, the default:
+every run gets its own branch and worktree, and the checkout's `HEAD` is never
+touched at all.
 
 The disposable-checkout contract also covers what the agent can *read*: a linked
 worktree contains only tracked files, but the branch strategy binds the whole

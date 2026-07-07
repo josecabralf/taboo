@@ -138,10 +138,12 @@ therefore dispatches on a `strategy` seam (`workshop.Config.Strategy`):
   deletes the exact mechanism that fails in CI on LXD and GitHub Actions: the
   back-pointer and prune trap above. It first refuses a dirty checkout (a `git
   switch -c` in place would otherwise carry uncommitted changes onto the run's
-  branch). Dispose is a no-op, because the workspace is the checkout, so there is
-  no linked worktree to `git worktree remove`. The cost is one run per checkout:
-  a single working tree and a single HEAD, so it cannot back the concurrent
-  `Pool` or the local daemon. Use it for CI and other disposable checkouts.
+  branch). Dispose is the inverse of Setup: with no linked worktree to remove, it
+  restores HEAD to the ref the checkout was on before `git switch -c` (refusing a
+  dirty tracked tree rather than carrying changes onto the base), leaving the run
+  branch behind as the artifact. The cost is one run at a time per checkout: a
+  single working tree and a single HEAD, so it cannot back the concurrent `Pool`
+  or the local daemon, though sequential reuse is safe. Use it for CI.
 - **`worktree`** (and `""`) keeps today's linked-worktree
   behavior, including the three-mount rule above. It is what the concurrent
   `Pool` (`internal/run/pool.go`) requires: each slot fans a run out onto its own
@@ -153,13 +155,13 @@ silently selecting the worktree path. The concurrent `Pool` forces the worktree
 strategy on every slot (`Pool.slotConfig`), so fan-out stays correct regardless
 of the configured default.
 
-The one-run-per-disposable-checkout contract, and the consequences of breaking
-it (HEAD left on the run branch, a second no-`BaseRef` run chaining off the
-prior tip, and `git switch -c` aborting on an existing branch), are explained
-for users in `docs/explanation/isolation-model.md` ("The branch strategy: one
-run per disposable checkout"). Each is reachable only by reusing a checkout,
-which the contract forbids; the fix for a reusable checkout is the worktree
-strategy, not hardening the branch path.
+The one-run-at-a-time-per-checkout contract, why sequential reuse is safe
+(Dispose restores HEAD), and the residual sharp edge (`git switch -c` aborting
+on an existing branch — shared with the worktree strategy's `worktree add -b`),
+are explained for users in `docs/explanation/isolation-model.md` ("The branch
+strategy: one run at a time per checkout"). The one thing reuse cannot buy is
+concurrency; for parallel runs the answer is the worktree strategy, not hardening
+the branch path.
 
 **Mount-plug mechanics.** A `mount` plug is declared **inline in `workshop.yaml`**
 under any SDK entry (`plugs: { <name>: { interface: mount, workshop-target:

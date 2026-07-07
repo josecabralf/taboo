@@ -61,6 +61,14 @@ type runResultHandle struct {
 	repoPath     string
 	worktreePath string
 	cmd          exec.Commander
+	// originHead is the ref HEAD pointed at before the branch strategy's
+	// `git switch -c` moved it: a branch short-name, or a commit SHA when
+	// originDetached. Dispose switches the checkout back to it — the inverse of
+	// Setup — so the run leaves the checkout where it found it and a later run
+	// branches from the same base instead of inheriting this run's commits. Empty
+	// for the worktree strategy, whose HEAD never moves.
+	originHead     string
+	originDetached bool
 }
 
 // RunResult reports the outcome of a run.
@@ -116,12 +124,14 @@ func (r RunResult) Artifact(relpath string) (string, error) {
 	return string(b), nil
 }
 
-// Dispose removes the run's worktree with a non-force `git worktree remove`,
-// matching taboo clean's teardown. It is explicit, never automatic. A worktree
-// already gone is success, not an error. The branch ref and the workshop are
-// left intact (persisting is the default) so a later push or run can reuse them.
-// It returns an error, rather than panicking, when the result has no worktree
-// handle.
+// Dispose tears the run's workspace down, the inverse of Setup. For the worktree
+// strategy it removes the run's worktree with a non-force `git worktree remove`,
+// matching taboo clean's teardown; for the branch strategy it switches the
+// checkout's HEAD back to the ref Setup found it on. Either way it is explicit,
+// never automatic. A worktree already gone is success, not an error. The run's
+// branch ref and the workshop are left intact (persisting is the default) so a
+// later push or run can reuse them. It returns an error, rather than panicking,
+// when the result has no worktree handle.
 func (r RunResult) Dispose() error {
 	if r.handle == nil {
 		return errors.New("dispose: result has no worktree handle")
@@ -132,11 +142,12 @@ func (r RunResult) Dispose() error {
 // dispose performs the worktree removal for Dispose. Idempotency lives here: a
 // worktree already gone (a prior Dispose, or a manual `git worktree remove`)
 // short-circuits to success before shelling out, so git's "not a working tree"
-// failure never surfaces. The branch strategy returns first: its workspace IS
-// the checkout (worktreePath == repoPath), so there is nothing to remove.
+// failure never surfaces. The branch strategy diverges first: its workspace IS
+// the checkout (worktreePath == repoPath), so there is no worktree to remove —
+// instead it restores HEAD (restoreHead) to where Setup found it.
 func (h *runResultHandle) dispose(ctx context.Context) error {
 	if h.worktreePath == h.repoPath {
-		return nil
+		return h.restoreHead(ctx)
 	}
 	if _, err := os.Stat(h.worktreePath); errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -148,6 +159,62 @@ func (h *runResultHandle) dispose(ctx context.Context) error {
 		Name: "git",
 		Args: []string{"-C", h.repoPath, "worktree", "remove", h.worktreePath},
 	})
+}
+
+// restoreHead returns the checkout to the ref it was on before the branch
+// strategy's `git switch -c` (originHead), the inverse of Setup. The run's branch
+// persists as the artifact — just as `git worktree remove` leaves a worktree's
+// branch behind — but the checkout goes back to its base, so a later run branches
+// from there rather than chaining off this run's tip.
+//
+// It refuses on a dirty *tracked* tree rather than let `git switch` carry the
+// run's uncommitted changes onto the base ref; the non-force `git worktree
+// remove` likewise refuses a dirty worktree. Untracked files are ignored, as in
+// the entry guard (ensureCleanCheckout). `git switch` to the ref you are already
+// on is a no-op, so a second Dispose is harmless.
+func (h *runResultHandle) restoreHead(ctx context.Context) error {
+	if h.originHead == "" {
+		return nil // nothing recorded to restore (e.g. a hand-built handle)
+	}
+	if h.cmd == nil {
+		return errors.New("dispose: result handle has no commander")
+	}
+	out, err := gitCaptureCmd(ctx, h.cmd, []string{"-C", h.repoPath, "status", "--porcelain", "--untracked-files=no"})
+	if err != nil {
+		return fmt.Errorf("git status: %w", err)
+	}
+	if out != "" {
+		return fmt.Errorf("branch strategy: checkout %s has uncommitted changes after the run; commit or discard them before disposing", h.repoPath)
+	}
+	args := []string{"-C", h.repoPath, "switch", h.originHead}
+	if h.originDetached {
+		args = []string{"-C", h.repoPath, "switch", "--detach", h.originHead}
+	}
+	return h.cmd.Run(ctx, exec.Cmd{Name: "git", Args: args})
+}
+
+// gitCaptureCmd runs git through cmd and returns trimmed stdout. It mirrors
+// Runner.gitCapture for callers that hold only a Commander (the result handle),
+// not a *Runner.
+func gitCaptureCmd(ctx context.Context, cmd exec.Commander, args []string) (string, error) {
+	out, err := exec.Output(ctx, cmd, exec.Cmd{Name: "git", Args: args})
+	return strings.TrimSpace(out), err
+}
+
+// capturedHead reports the ref HEAD points at in repo: the branch short-name when
+// HEAD is on a branch (detached == false), else the commit SHA (detached ==
+// true). The branch strategy records this before `git switch -c` so Dispose can
+// restore it, and the form drives how restoreHead switches back — by name, or
+// `--detach` by SHA.
+func capturedHead(ctx context.Context, cmd exec.Commander, repo string) (head string, detached bool, err error) {
+	if name, nerr := gitCaptureCmd(ctx, cmd, []string{"-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD"}); nerr == nil && name != "" {
+		return name, false, nil
+	}
+	sha, err := gitCaptureCmd(ctx, cmd, []string{"-C", repo, "rev-parse", "HEAD"})
+	if err != nil {
+		return "", false, fmt.Errorf("capture HEAD: %w", err)
+	}
+	return sha, true, nil
 }
 
 // Runner orchestrates agent runs in a taboo-managed workshop.
@@ -340,7 +407,8 @@ func (r *Runner) prepareWorktree(ctx context.Context, req RunRequest, res *RunRe
 func (r *Runner) prepareBranch(ctx context.Context, req RunRequest, res *RunResult) (string, error) {
 	checkout := r.cfg.RepoPath
 	// worktreePath == repoPath marks the in-place branch strategy: Dispose reads it
-	// to short-circuit (the workspace IS the checkout, nothing to remove).
+	// to take the restore-HEAD path (the workspace IS the checkout, nothing to
+	// remove).
 	res.handle = &runResultHandle{repoPath: checkout, worktreePath: checkout, cmd: r.cmd}
 	// Unlike the worktree path (which always branches into a fresh worktree), this
 	// switches the checkout in place, so a dirty tree is unsafe: uncommitted changes
@@ -349,6 +417,14 @@ func (r *Runner) prepareBranch(ctx context.Context, req RunRequest, res *RunResu
 	if err := r.ensureCleanCheckout(ctx, checkout); err != nil {
 		return "", err
 	}
+	// Record where HEAD is before `git switch -c` moves it, so Dispose can put it
+	// back (see runResultHandle.originHead). After the clean-tree guard: no point
+	// capturing a base we are about to refuse.
+	head, detached, err := capturedHead(ctx, r.cmd, checkout)
+	if err != nil {
+		return "", err
+	}
+	res.handle.originHead, res.handle.originDetached = head, detached
 	if req.BaseRef != "" {
 		// Update remote-tracking refs so BaseRef (and origin/main) are current,
 		// then create the run's branch FROM BaseRef's tip rather than HEAD.
