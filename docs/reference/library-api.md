@@ -192,13 +192,18 @@ escape is rejected with `artifact "<relpath>": path escapes worktree`, and a
 result that carries no worktree handle returns
 `artifact: result has no worktree handle`.
 
-`Dispose` removes the run's worktree with a non-force `git worktree remove`,
-matching `taboo clean`'s teardown. It is explicit, never automatic: nothing on
-the run path calls it for you. It is idempotent (a worktree already gone is
-success), and it leaves the branch ref and the workshop intact, so a later push
-or run can reuse them. There is no library equivalent of the full `clean`
-command, which also tears down the workshop and branch. `Dispose` returns
-`dispose: result has no worktree handle` when the result carries no handle.
+`Dispose` is the inverse of `Setup`, and what it does depends on the run's
+strategy. For the worktree strategy it removes the run's worktree with a
+non-force `git worktree remove`, matching `taboo clean`'s teardown; it is
+idempotent (a worktree already gone is success). For the branch strategy, which
+ran in place on the checkout, there is no worktree to remove, so `Dispose`
+instead restores `HEAD` to the ref the checkout was on before the run's
+`git switch -c` (refusing if the run left uncommitted tracked changes). Either
+way it is explicit, never automatic — nothing on the run path calls it for you —
+and it leaves the run's branch ref and the workshop intact, so a later push or
+run can reuse them. There is no library equivalent of the full `clean` command,
+which also tears down the workshop and branch. `Dispose` returns `dispose:
+result has no worktree handle` when the result carries no handle.
 
 `NewResultWithWorktree` and `NewResultWithWorktreeCmd` build a `RunResult` around
 a bare worktree path so a consumer test can exercise `Artifact`/`Dispose` without

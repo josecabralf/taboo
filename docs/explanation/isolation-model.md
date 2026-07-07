@@ -195,6 +195,66 @@ on workshop 0.9.1 and LXD 6.8, and that the out-of-repo layout remains a sound
 fallback. The only host-side cost the nested layout inherits is the
 repo-not-under-`/tmp` constraint, which already existed for the git-common mount.
 
+## The branch strategy: one run at a time per checkout
+
+Everything above describes the **worktree strategy**: a fresh linked worktree per
+run, the two mounts that make a linked worktree resolve, and the per-slot
+isolation that lets a `Pool` fan out. taboo has a second workspace seam, the
+**branch strategy**, that deletes all of it.
+
+The seam is `Config.Strategy` (`internal/workshop/template.go`), and
+`Runner.Setup` (`internal/run/runner.go`) dispatches on it. The set is closed:
+`worktree` (the default, and what an omitted value resolves to) and `branch` are
+the only accepted values, and any other value is rejected with a validation
+error rather than silently resolved to the worktree path. With
+`strategy: worktree`, Setup takes the worktree path above. With `strategy: branch`,
+`Runner.prepareBranch` runs the agent in place on the checkout itself: it creates
+the run's branch with `git switch -c`, binds only the checkout as the single
+`/taboo/workspace` mount, and skips the git-common and worktrees mounts entirely.
+The checkout's `.git` is a real, self-contained repository that travels with the
+workspace mount, so the linked-worktree machinery the rest of this page describes
+is unnecessary. The CI dogfooding loop uses this seam (`.taboo/taboo.yaml` sets
+`strategy: branch`), because that machinery is what failed under LXD on GitHub
+Actions.
+
+The cost of deleting the machinery is a contract: **one run at a time per
+checkout.** A single checkout has one working tree and one `HEAD`, so the branch
+strategy cannot back the concurrent `Pool` (`slotConfig` in
+`internal/run/pool.go` forces `worktree` on every slot for this reason) — that
+limit is inherent and cannot be designed away. Sequential reuse, however, is
+safe, because `Dispose` is the inverse of `Setup`:
+
+- `RunResult.Dispose` restores `HEAD` to the ref it was on before `git switch -c`
+  (a branch name, or the exact commit when it started detached). The run's branch
+  persists as the artifact — exactly as `git worktree remove` leaves a worktree's
+  branch behind — but the checkout returns to its base. Restoration happens at
+  `Dispose`, not at the end of the run: until then `HEAD` stays on the run branch
+  so `res.Artifact(relpath)` reads the run's output from the working tree. If the
+  run left uncommitted *tracked* changes, `Dispose` refuses rather than carry them
+  onto the base ref — the same non-force stance as `git worktree remove` on a
+  dirty worktree (commit or discard, then dispose).
+- A second run with no `BaseRef` therefore branches off the restored base, not the
+  first run's tip — provided you called `Dispose` between them. Skip `Dispose` and
+  `HEAD` is still on the first run's branch, so the second run chains off it; the
+  `BaseRef` arm sidesteps the question by branching from the fetched ref.
+- A second run whose branch name already exists fails at `git switch -c`, which
+  aborts rather than reusing or overwriting the branch. The worktree strategy's
+  `git worktree add -b` fails the same way, so this is shared behaviour, not a
+  branch-strategy quirk: every run needs a distinct branch name.
+
+The one thing sequential reuse still cannot buy is concurrency — overlapping runs
+need the separate working trees only the worktree strategy provides. For any
+checkout where you want parallelism, use the worktree strategy, the default:
+every run gets its own branch and worktree, and the checkout's `HEAD` is never
+touched at all.
+
+The disposable-checkout contract also covers what the agent can *read*: a linked
+worktree contains only tracked files, but the branch strategy binds the whole
+checkout — including untracked files such as `.taboo/.env` (credentials) and
+`.taboo/logs/` — into the agent's workspace. On a fresh CI checkout none of that
+exists; on a checkout you keep, it is one more reason this strategy is off the
+table.
+
 ## Teardown is not on the run path
 
 Setup creates a worktree; nothing on the run path removes it. `Runner.Run`,

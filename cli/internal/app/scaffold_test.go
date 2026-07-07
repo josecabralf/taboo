@@ -223,8 +223,8 @@ func TestPlan_TemplateFanout(t *testing.T) {
 }
 
 // TestRenderTabooYAML_RoundTrips asserts the marshaled taboo.yaml loads back
-// through taboo.LoadConfig with every scalar preserved and strategy defaulted to
-// "branch".
+// through taboo.LoadConfig with every scalar preserved and strategy set to
+// the collision-safe "worktree".
 func TestRenderTabooYAML_RoundTrips(t *testing.T) {
 	t.Parallel()
 	in := newScaffoldInputs(t, "opencode", "some/model")
@@ -256,8 +256,8 @@ func TestRenderTabooYAML_RoundTrips(t *testing.T) {
 	if cfg.Repo != "/home/me/demo" {
 		t.Errorf("cfg.Repo = %q, want /home/me/demo", cfg.Repo)
 	}
-	if cfg.Strategy != "branch" {
-		t.Errorf("cfg.Strategy = %q, want branch", cfg.Strategy)
+	if cfg.Strategy != "worktree" {
+		t.Errorf("cfg.Strategy = %q, want worktree", cfg.Strategy)
 	}
 }
 
@@ -318,8 +318,10 @@ func TestRenderTabooYAML_SeedsWorkflows(t *testing.T) {
 	}
 }
 
-// TestRenderGitignore_Entries asserts .gitignore contains exactly the six
-// ignore entries, each on its own line.
+// TestRenderGitignore_Entries asserts .gitignore contains exactly the seven
+// ignore entries, each on its own line. The sessions/ entry is load-bearing
+// for the branch strategy: the sessions dir lives inside the checkout there, and an
+// agent's `git add -A` must never sweep it into a commit.
 func TestRenderGitignore_Entries(t *testing.T) {
 	t.Parallel()
 	data := renderGitignore()
@@ -327,7 +329,7 @@ func TestRenderGitignore_Entries(t *testing.T) {
 	for _, l := range strings.Split(string(data), "\n") {
 		lines[strings.TrimSpace(l)] = true
 	}
-	for _, want := range []string{"worktrees/", ".workshop/", "/workshop.yaml", "/workshop.fingerprint", ".env", "logs/"} {
+	for _, want := range []string{"worktrees/", ".workshop/", "/workshop.yaml", "/workshop.fingerprint", ".env", "logs/", "sessions/"} {
 		if !lines[want] {
 			t.Errorf(".gitignore missing entry %q\nfull:\n%s", want, data)
 		}

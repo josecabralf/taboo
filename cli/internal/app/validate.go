@@ -102,6 +102,7 @@ func configCorrectnessChecks(ctx context.Context, env Env, statFile func(string)
 	checks := []check{ok("config", "parsed "+path)}
 	checks = append(checks, agentChecks(cfg)...)
 	checks = append(checks, modelChecks(cfg)...)
+	checks = append(checks, strategyChecks(cfg)...)
 	if includePromptFiles {
 		checks = append(checks, promptFileChecks(cfg, path, statFile)...)
 		checks = append(checks, varsChecks(cfg, path, statFile)...)
@@ -491,6 +492,25 @@ func defaultWorkflowCheck(cfg taboo.ProjectConfig) []check {
 			" is not defined (configured workflows: "+availableWorkflows(&cfg)+")")}
 	}
 	return []check{ok("default-workflow", "resolves to workflow "+strconv.Quote(cfg.DefaultWorkflow))}
+}
+
+// strategyChecks validates the workspace strategy against the closed set the
+// runner accepts (taboo.StrategyBranch / taboo.StrategyWorktree). An omitted
+// strategy is valid — it defaults to the worktree path — so it reports nothing,
+// mirroring defaultWorkflowCheck. The failure it catches is a set-but-unknown
+// value: decodeValidate accepts any string into the field, so without this check
+// a typo (e.g. strategy: worktre) would pass `taboo validate` and only surface
+// later at run/doctor via LoadConfig. It delegates to BranchingStrategy.Validate,
+// the same closed-set guard LoadConfig uses, so validate and run agree by
+// construction.
+func strategyChecks(cfg taboo.ProjectConfig) []check {
+	if cfg.Strategy == "" {
+		return nil
+	}
+	if err := cfg.Strategy.Validate(); err != nil {
+		return []check{fail("strategy", err.Error())}
+	}
+	return []check{ok("strategy", "workspace strategy "+strconv.Quote(string(cfg.Strategy)))}
 }
 
 // effectivePrompt resolves a workflow's prompt text from the config layers

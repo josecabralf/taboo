@@ -243,16 +243,20 @@ func projectSDKNamesFromSeq(sdks *yaml.Node) []string {
 	return names
 }
 
-// agentPlugs returns the mount plugs for the injected agent SDK: workspace,
-// gitcommon, and worktrees always, plus sessions for a session-capable agent.
-// The worktrees plug mounts the parent of every run's worktree at its identical
-// host path so the linked worktree's admin-dir back-pointer resolves in the
-// workshop and git never prunes it (see WorktreesCommonTarget).
+// agentPlugs returns the mount plugs for the injected agent SDK. The workspace
+// plug is always present, plus sessions for a session-capable agent. The
+// gitcommon and worktrees plugs are declared only for the worktree strategy; the
+// branch strategy operates in place on a self-contained checkout and omits them.
+// See CONTEXT.md for the mount-strategy rationale.
 func agentPlugs(cfg Config) map[string]plug {
 	plugs := map[string]plug{
 		"workspace": {Interface: "mount", WorkshopTarget: WorkspaceTarget},
-		"gitcommon": {Interface: "mount", WorkshopTarget: GitCommonTarget(cfg.RepoPath)},
-		"worktrees": {Interface: "mount", WorkshopTarget: WorktreesCommonTarget(cfg.ProjectDir)},
+	}
+	// The strategy's extra git mounts (single source of truth in
+	// StrategyGitMounts): each plug's workshop-target IS the mount's identical-path
+	// target. The branch strategy returns none.
+	for _, m := range StrategyGitMounts(cfg) {
+		plugs[m.Plug] = plug{Interface: "mount", WorkshopTarget: m.Target}
 	}
 	if _, ok := cfg.Agent.Sessions(); ok {
 		plugs["sessions"] = plug{Interface: "mount", WorkshopTarget: SessionsTarget}

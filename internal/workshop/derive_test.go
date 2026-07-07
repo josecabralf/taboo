@@ -328,6 +328,51 @@ func TestDeriveDefinition_OmitsSessionsForSessionlessAgent(t *testing.T) {
 	assertMountPlug(t, plugs, "worktrees", "/home/dev/repos/myproject/.taboo/worktrees")
 }
 
+// The branch strategy operates in place on a self-contained checkout, so the
+// derived definition must NOT declare the gitcommon/worktrees mounts (only the
+// worktree strategy repoints them). Declaring mounts the run never uses would
+// leave the definition diverging from what Setup actually mounts. The workspace
+// (and sessions, here) plugs stay.
+func TestDeriveDefinition_BranchStrategyOmitsGitMounts(t *testing.T) {
+	source := []byte("name: p\nbase: ubuntu@24.04\n")
+	cfg := Config{
+		Workshop:   "taboo-run",
+		Base:       "ubuntu@24.04",
+		Agent:      mustProfile("opencode", openCodeModel), // session-capable
+		RepoPath:   "/home/dev/repos/myproject",
+		ProjectDir: "/home/dev/repos/myproject/.taboo",
+		Strategy:   StrategyBranch,
+	}
+
+	out, _, err := deriveDefinition(cfg, source)
+	if err != nil {
+		t.Fatalf("deriveDefinition: %v", err)
+	}
+	var def map[string]any
+	if err := yaml.Unmarshal([]byte(out), &def); err != nil {
+		t.Fatalf("derived definition is not valid YAML: %v\n%s", err, out)
+	}
+
+	sdks, _ := def["sdks"].([]any)
+	agentSDK := findSDK(sdks, "project-opencode")
+	if agentSDK == nil {
+		t.Fatalf("agent sdk missing; got %v", sdks)
+	}
+	plugs, ok := agentSDK["plugs"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent sdk plugs = %v, want a mapping", agentSDK["plugs"])
+	}
+	if _, ok := plugs["gitcommon"]; ok {
+		t.Error("gitcommon plug present for the branch strategy, want none")
+	}
+	if _, ok := plugs["worktrees"]; ok {
+		t.Error("worktrees plug present for the branch strategy, want none")
+	}
+	// The in-place mounts the branch strategy does use are still declared.
+	assertMountPlug(t, plugs, "workspace", "/taboo/workspace")
+	assertMountPlug(t, plugs, "sessions", "/taboo/sessions")
+}
+
 // A source that is not a YAML mapping (an empty/comment-only file, a bare scalar,
 // a top-level list) carries no name/sdks, so deriveDefinition rejects it with a
 // clear error rather than panicking on the document node or emitting a malformed
