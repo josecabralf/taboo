@@ -627,25 +627,26 @@ func TestInit_NextStepsAreGatedAndSequential(t *testing.T) {
 	}
 }
 
-// TestInit_PrintsErrorToStderr asserts a failed run surfaces its message on
-// stderr (not just as a returned error): the root silences cobra errors and main
-// exits without printing, so a silent failure would hide the named flag from the
-// user.
+// TestInit_PrintsErrorToStderr asserts a failed init surfaces its message on
+// stderr through executeRoot — the central print seam — exactly once: it used
+// to pin init's local workaround wrapper; now it pins the contract and guards
+// against reintroducing the double print. No t.Parallel: execRoot swaps
+// os.Args.
 func TestInit_PrintsErrorToStderr(t *testing.T) {
-	t.Parallel()
 	repo := gitRepo(t)
 	env := initEnv(t, &fakeCommander{}, repo)
-	cmd := newInitCmd(env)
-	cmd.SetArgs([]string{"--model", "x", "--repo", repo}) // missing --agent
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("init error = nil, want missing-flag error")
+	code, stdout, stderr := execRoot(t, env, "init", "--model", "x", "--repo", repo) // missing --agent
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
 	}
-	stderr, ok := env.Stderr.(*bytes.Buffer)
-	if !ok {
-		t.Fatal("env.Stderr must be a *bytes.Buffer")
+	if !strings.Contains(stderr, "--agent") {
+		t.Errorf("stderr should name the missing flag, got: %q", stderr)
 	}
-	if !strings.Contains(stderr.String(), "--agent") {
-		t.Errorf("stderr should name the missing flag, got: %q", stderr.String())
+	if got := strings.Count(stderr, "Error:"); got != 1 {
+		t.Errorf("stderr carries %d Error: lines, want exactly 1 (no double print):\n%s", got, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout must stay empty on an error path, got: %q", stdout)
 	}
 }
 

@@ -11,8 +11,9 @@
 //
 // The label state machine an issue moves through is what makes the drain
 // terminate. At claim time the loop removes ready-for-agent and adds
-// agent:in-progress; on success it removes agent:in-progress, and on failure it
-// also adds agent:blocked plus a diagnostic comment before releasing in-progress.
+// agent:in-progress; on success it removes agent:in-progress; on failure it adds
+// agent:blocked plus a diagnostic comment; on a no-commit run it also adds
+// agent:blocked plus a no-change comment. All three settle the in-progress claim.
 // Claiming takes an issue out of the next wave's candidate set two independent
 // ways: removing ready-for-agent drops it from the planner's
 // ListOpenIssuesByLabel(ready-for-agent) listing, and adding agent:in-progress
@@ -36,8 +37,9 @@ import (
 )
 
 // blockedLabel is the label the loop applies to an issue whose implement run
-// failed, taking it out of the ready pool until a human intervenes (see runWave's
-// failure branch, which adds it alongside a diagnostic comment).
+// failed — or completed without producing any commits — taking it out of the
+// ready pool until a human intervenes (see settleResult, which adds it
+// alongside a diagnostic comment).
 const blockedLabel = "agent:blocked"
 
 const (
@@ -215,12 +217,16 @@ func resolveRequests(ctx context.Context, startDir string, gh loopGH, resolve pl
 
 // settleResult records one run's outcome and releases its in-progress claim. A
 // run's failure is recorded on res.Err (the pool never aborts the wave for it):
-// a failed run gets agent:blocked plus a diagnostic comment, a successful one is
-// just logged. The label/comment ops are best-effort — a failing one is logged,
-// not propagated, so it cannot strand the rest of the batch — and the in-progress
-// claim is always released afterward.
+// a failed run gets agent:blocked plus a diagnostic comment; a nil-Err run that
+// produced no commits (Changed() false — meaningful only because the run
+// actually executed) is fruitless, not implemented, so it gets agent:blocked
+// plus the no-change comment instead of the implemented log line; a changed run
+// is just logged. The label/comment ops are best-effort — a failing one is
+// logged, not propagated, so it cannot strand the rest of the batch — and the
+// in-progress claim is always released afterward.
 func settleResult(ctx context.Context, gh loopGH, item planItem, res taboo.RunResult) {
-	if res.Err != nil {
+	switch {
+	case res.Err != nil:
 		fmt.Fprintf(os.Stderr, "afk: implement run failed for #%d: %v\n", item.Number, res.Err)
 		if err := gh.AddIssueLabel(ctx, item.Number, blockedLabel); err != nil {
 			fmt.Fprintf(os.Stderr, "afk: add blocked label on #%d: %v\n", item.Number, err)
@@ -228,7 +234,15 @@ func settleResult(ctx context.Context, gh loopGH, item planItem, res taboo.RunRe
 		if err := gh.CommentIssue(ctx, item.Number, blockedComment(item, res.Err)); err != nil {
 			fmt.Fprintf(os.Stderr, "afk: comment blocked on #%d: %v\n", item.Number, err)
 		}
-	} else {
+	case !res.Changed():
+		fmt.Fprintf(os.Stderr, "afk: implement run for #%d produced no commits on %s\n", item.Number, item.Branch)
+		if err := gh.AddIssueLabel(ctx, item.Number, blockedLabel); err != nil {
+			fmt.Fprintf(os.Stderr, "afk: add blocked label on #%d: %v\n", item.Number, err)
+		}
+		if err := gh.CommentIssue(ctx, item.Number, noChangeComment(item)); err != nil {
+			fmt.Fprintf(os.Stderr, "afk: comment no-change on #%d: %v\n", item.Number, err)
+		}
+	default:
 		fmt.Fprintf(os.Stderr, "afk: implemented #%d on %s\n", item.Number, item.Branch)
 	}
 	releaseInProgress(ctx, gh, item.Number)
@@ -267,6 +281,12 @@ func unclaimIssue(ctx context.Context, gh loopGH, number int) {
 // implement run fails, naming the issue, the error, and how to retry.
 func blockedComment(item planItem, runErr error) string {
 	return fmt.Sprintf("The implement run failed for issue #%d.\n\nError:\n\n```\n%v\n```\n\nRe-add the `%s` label to retry.", item.Number, runErr, readyLabel)
+}
+
+// noChangeComment composes the comment the loop posts when an implement run
+// completed without producing any commits, naming the issue and how to retry.
+func noChangeComment(item planItem) string {
+	return fmt.Sprintf("The implement run for issue #%d completed but produced no commits — no branch was pushed and no PR was opened.\n\nRe-add the `%s` label to retry.", item.Number, readyLabel)
 }
 
 // claimIssue moves an issue into the in-progress state, best-effort: it logs any

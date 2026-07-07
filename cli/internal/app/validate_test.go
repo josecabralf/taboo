@@ -413,6 +413,139 @@ func findCheck(checks []check, name string) *check {
 	return nil
 }
 
+// TestValidate_VarsChecks covers the per-workflow vars/ OK-level check: a
+// workflow whose effective prompt references {{VAR}} placeholders emits an ok
+// check naming them sorted — from an inline prompt, a prompt-file's contents,
+// or the defaults layer the workflow falls back to — while a placeholder-free
+// workflow emits nothing (mirroring modelChecks' clean-config silence) and a
+// missing prompt-file emits no vars check (promptFileChecks already hard-fails
+// it; don't double-report).
+func TestValidate_VarsChecks(t *testing.T) {
+	t.Parallel()
+	base := "" +
+		"workshop: demo\n" +
+		"agent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\n" +
+		"repo: /home/me/repo\n"
+
+	t.Run("inline prompt placeholders named sorted", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt: 'B: {{ISSUE_TITLE}} A: {{ISSUE_BODY}}'\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/triage")
+		if c == nil {
+			t.Fatalf("no vars/triage check emitted\nchecks: %+v", checks)
+		}
+		if c.Status != statusOK {
+			t.Errorf("vars/triage status = %v, want ok", c.Status)
+		}
+		if !strings.Contains(c.Message, "ISSUE_BODY, ISSUE_TITLE") {
+			t.Errorf("vars/triage message = %q, want the sorted placeholder names", c.Message)
+		}
+	})
+
+	t.Run("prompt-file contents scanned when the file exists", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt-file: triage.md\n")
+		writePromptFile(t, root, "triage.md", "Title: {{ISSUE_TITLE}}\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/triage")
+		if c == nil {
+			t.Fatalf("no vars/triage check emitted for a prompt-file-backed workflow\nchecks: %+v", checks)
+		}
+		if !strings.Contains(c.Message, "ISSUE_TITLE") {
+			t.Errorf("vars/triage message = %q, want it to name ISSUE_TITLE", c.Message)
+		}
+	})
+
+	t.Run("defaults prompt backs a bare workflow", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  prompt: 'do {{TASK}}'\n"+
+			"workflows:\n  fix: {}\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/fix")
+		if c == nil {
+			t.Fatalf("no vars/fix check for a defaults-backed workflow\nchecks: %+v", checks)
+		}
+		if !strings.Contains(c.Message, "TASK") {
+			t.Errorf("vars/fix message = %q, want it to name TASK", c.Message)
+		}
+	})
+
+	t.Run("defaults prompt-file backs a bare workflow", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  prompt-file: shared.md\n"+
+			"workflows:\n  fix: {}\n")
+		writePromptFile(t, root, "shared.md", "do {{TASK}} now\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "vars/fix")
+		if c == nil {
+			t.Fatalf("no vars/fix check for a defaults prompt-file-backed workflow\nchecks: %+v", checks)
+		}
+		if !strings.Contains(c.Message, "TASK") {
+			t.Errorf("vars/fix message = %q, want it to name TASK", c.Message)
+		}
+	})
+
+	t.Run("placeholder-free workflow emits nothing", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  fix:\n    prompt: no vars at all\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "vars/fix"); c != nil {
+			t.Errorf("placeholder-free workflow emitted %+v, want no vars check", *c)
+		}
+	})
+
+	t.Run("missing prompt-file emits no vars check", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt-file: gone.md\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "vars/triage"); c != nil {
+			t.Errorf("missing prompt-file emitted %+v, want no vars check (promptFileChecks owns the failure)", *c)
+		}
+		if c := findCheck(checks, "prompt-file/gone.md"); c == nil || c.Status != statusError {
+			t.Errorf("prompt-file/gone.md check = %+v, want the existing hard failure", c)
+		}
+	})
+
+	t.Run("run preflight is unaffected", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  triage:\n    prompt: 'T: {{ISSUE_TITLE}}'\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := runConfigChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "vars/triage"); c != nil {
+			t.Errorf("run's preflight emitted %+v; the vars group is validate-only", *c)
+		}
+	})
+}
+
 // TestValidate_BadModelFormatWarns asserts a model that does not match the
 // agent's format hint produces a WARN, never an error, and the command still
 // exits 0: the heuristic is advisory, so a deliberate but unusual model is
@@ -711,6 +844,520 @@ func TestValidate_NoConfigFound(t *testing.T) {
 	if !strings.Contains(out, "taboo init") {
 		t.Errorf("output missing the 'taboo init' hint:\n%s", out)
 	}
+}
+
+// TestValidate_DefaultWorkflowCheck covers the default-workflow wiring check: a
+// default-workflow naming a configured workflow is ok, one naming no configured
+// workflow hard-fails with the same wording selectRun uses at run time, and an
+// unset default-workflow emits nothing (unset is legal — a bare `taboo run`
+// just refuses via noSelectionError).
+func TestValidate_DefaultWorkflowCheck(t *testing.T) {
+	t.Parallel()
+	base := "" +
+		"workshop: demo\n" +
+		"agent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\n" +
+		"repo: /home/me/repo\n"
+
+	t.Run("resolves to a configured workflow", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"default-workflow: fix\n"+
+			"workflows:\n  fix:\n    prompt: fix it\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "default-workflow")
+		if c == nil {
+			t.Fatalf("no default-workflow check emitted\nchecks: %+v", checks)
+		}
+		if c.Status != statusOK {
+			t.Errorf("default-workflow status = %v, want ok (message %q)", c.Status, c.Message)
+		}
+	})
+
+	t.Run("undefined default-workflow fails with selectRun's wording", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"default-workflow: gone\n"+
+			"workflows:\n  fix:\n    prompt: fix it\n  triage:\n    prompt: triage it\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "default-workflow")
+		if c == nil {
+			t.Fatalf("no default-workflow check emitted\nchecks: %+v", checks)
+		}
+		if c.Status != statusError {
+			t.Errorf("default-workflow status = %v, want error", c.Status)
+		}
+		want := `default-workflow "gone" is not defined (configured workflows: fix, triage)`
+		if c.Message != want {
+			t.Errorf("default-workflow message = %q, want %q (aligned with selectRun)", c.Message, want)
+		}
+	})
+
+	t.Run("unset default-workflow emits nothing", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  fix:\n    prompt: fix it\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "default-workflow"); c != nil {
+			t.Errorf("unset default-workflow emitted %+v, want no check", *c)
+		}
+	})
+}
+
+// TestValidate_SignalChecks covers the per-workflow signal/ warn: a workflow
+// whose effective completion signal (workflow over defaults, plan.go's
+// precedence minus the CLI override layer) is never mentioned in its effective
+// prompt gets an advisory warn — the agent is never told to print the sentinel,
+// so the signal-based early stop can never fire — while a prompt that contains
+// the signal as a plain substring (the same strings.Contains semantics the
+// orchestrator applies to stdout) is silent. Inheritance is honored both ways,
+// and an unresolvable prompt emits no signal check (promptFileChecks already
+// hard-fails the missing file; don't double-report).
+func TestValidate_SignalChecks(t *testing.T) {
+	t.Parallel()
+	base := "" +
+		"workshop: demo\n" +
+		"agent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\n" +
+		"repo: /home/me/repo\n"
+
+	t.Run("uninstructed workflow signal warns", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  iterate:\n    prompt: fix the failing tests\n    completion-signal: DONE\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "signal/iterate")
+		if c == nil {
+			t.Fatalf("no signal/iterate check emitted\nchecks: %+v", checks)
+		}
+		if c.Status != statusWarn {
+			t.Errorf("signal/iterate status = %v, want warn", c.Status)
+		}
+		if !strings.Contains(c.Message, "set it intentionally to silence this") {
+			t.Errorf("signal/iterate message = %q, want the modelChecks-style advisory tail", c.Message)
+		}
+	})
+
+	t.Run("instructed workflow signal is silent", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  iterate:\n    prompt: fix the tests, print DONE when they pass\n    completion-signal: DONE\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "signal/iterate"); c != nil {
+			t.Errorf("instructed signal emitted %+v, want no signal check", *c)
+		}
+	})
+
+	t.Run("defaults signal satisfied by a defaults prompt-file", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  completion-signal: DONE\n  prompt-file: prompt.md\n"+
+			"workflows:\n  fix: {}\n")
+		writePromptFile(t, root, "prompt.md", "fix the tests; print DONE when they pass\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "signal/fix"); c != nil {
+			t.Errorf("defaults-satisfied signal emitted %+v, want no signal check", *c)
+		}
+	})
+
+	t.Run("inherited defaults signal missing from the prompt warns", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  completion-signal: DONE\n"+
+			"workflows:\n  fix:\n    prompt: just fix the tests\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "signal/fix")
+		if c == nil {
+			t.Fatalf("no signal/fix check for an inherited uninstructed signal\nchecks: %+v", checks)
+		}
+		if c.Status != statusWarn {
+			t.Errorf("signal/fix status = %v, want warn", c.Status)
+		}
+	})
+
+	t.Run("workflow signal overrides defaults for the check", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		// The prompt instructs the defaults sentinel DONE, but the workflow overrides
+		// the signal to REVIEW COMPLETE — the check must judge against the override,
+		// so this warns (and names the override, not the inherited value).
+		writeTabooProject(t, root, base+
+			"defaults:\n  completion-signal: DONE\n"+
+			"workflows:\n  review:\n    prompt: review the diff, print DONE when satisfied\n"+
+			"    completion-signal: REVIEW COMPLETE\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "signal/review")
+		if c == nil {
+			t.Fatalf("no signal/review check; the workflow override must be judged, not defaults\nchecks: %+v", checks)
+		}
+		if !strings.Contains(c.Message, "REVIEW COMPLETE") {
+			t.Errorf("signal/review message = %q, want it to name the overriding signal", c.Message)
+		}
+	})
+
+	t.Run("missing prompt-file emits no signal check", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  iterate:\n    prompt-file: gone.md\n    completion-signal: DONE\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "signal/iterate"); c != nil {
+			t.Errorf("unresolvable prompt emitted %+v, want no signal check (promptFileChecks owns the failure)", *c)
+		}
+		if c := findCheck(checks, "prompt-file/gone.md"); c == nil || c.Status != statusError {
+			t.Errorf("prompt-file/gone.md check = %+v, want the existing hard failure", c)
+		}
+	})
+}
+
+// TestValidate_LoopChecks covers the per-workflow loop/ warn: an effective
+// max-iterations above 1 with no effective signal anywhere disables the early
+// stop entirely — every run pays the full N iterations by construction — so
+// validate nudges. Silent when a signal exists (signal/'s territory) or at
+// max-iterations <= 1 (single run, nothing to stop). Needs no prompt
+// resolution, so it fires even for a workflow whose prompt is unresolvable.
+func TestValidate_LoopChecks(t *testing.T) {
+	t.Parallel()
+	base := "" +
+		"workshop: demo\n" +
+		"agent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\n" +
+		"repo: /home/me/repo\n"
+
+	t.Run("capped loop with no signal warns", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  iterate:\n    prompt: fix the tests\n    max-iterations: 5\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "loop/iterate")
+		if c == nil {
+			t.Fatalf("no loop/iterate check emitted\nchecks: %+v", checks)
+		}
+		if c.Status != statusWarn {
+			t.Errorf("loop/iterate status = %v, want warn", c.Status)
+		}
+		if !strings.Contains(c.Message, "5") {
+			t.Errorf("loop/iterate message = %q, want it to name the iteration cap", c.Message)
+		}
+	})
+
+	t.Run("capped loop with a signal is silent", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  iterate:\n    prompt: fix the tests, print DONE when green\n"+
+			"    max-iterations: 5\n    completion-signal: DONE\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "loop/iterate"); c != nil {
+			t.Errorf("signaled loop emitted %+v, want no loop check", *c)
+		}
+	})
+
+	t.Run("capped loop with stop-on-no-change is silent", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  stop-on-no-change: true\n"+
+			"workflows:\n  iterate:\n    prompt: fix the tests\n    max-iterations: 5\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		if c := findCheck(checks, "loop/iterate"); c != nil {
+			t.Errorf("stop-on-no-change loop emitted %+v, want no loop check (the knob IS an early stop)", *c)
+		}
+	})
+
+	t.Run("single run is silent", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"workflows:\n  once:\n    prompt: do it once\n    max-iterations: 1\n  plain:\n    prompt: no cap\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		for _, name := range []string{"loop/once", "loop/plain"} {
+			if c := findCheck(checks, name); c != nil {
+				t.Errorf("%s emitted %+v, want no loop check at max-iterations <= 1", name, *c)
+			}
+		}
+	})
+
+	t.Run("defaults max-iterations counts and fires on an unresolvable prompt", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, base+
+			"defaults:\n  max-iterations: 3\n"+
+			"workflows:\n  iterate:\n    prompt-file: gone.md\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := validateChecks(context.Background(), env, realStat)
+		c := findCheck(checks, "loop/iterate")
+		if c == nil {
+			t.Fatalf("no loop/iterate check; the loop warn needs no prompt resolution\nchecks: %+v", checks)
+		}
+		if c.Status != statusWarn {
+			t.Errorf("loop/iterate status = %v, want warn", c.Status)
+		}
+	})
+}
+
+// TestDefaultWorkflowCheck table-drives the pure helper directly: unset emits
+// nothing, a resolving name is ok, an unknown name is an error naming the
+// configured workflows sorted.
+func TestDefaultWorkflowCheck(t *testing.T) {
+	t.Parallel()
+	workflows := map[string]taboo.Workflow{"fix": {Prompt: "p"}, "triage": {Prompt: "p"}}
+	tests := []struct {
+		name    string
+		cfg     taboo.ProjectConfig
+		want    int // number of checks
+		status  severity
+		message string
+	}{
+		{name: "unset emits nothing", cfg: taboo.ProjectConfig{Workflows: workflows}, want: 0},
+		{
+			name:   "defined is ok",
+			cfg:    taboo.ProjectConfig{DefaultWorkflow: "fix", Workflows: workflows},
+			want:   1,
+			status: statusOK,
+		},
+		{
+			name:    "undefined fails",
+			cfg:     taboo.ProjectConfig{DefaultWorkflow: "gone", Workflows: workflows},
+			want:    1,
+			status:  statusError,
+			message: `default-workflow "gone" is not defined (configured workflows: fix, triage)`,
+		},
+		{
+			// An exotic name escapes exactly as selectRun's %q renders it.
+			name:    "undefined exotic name escapes like selectRun",
+			cfg:     taboo.ProjectConfig{DefaultWorkflow: `go"ne`, Workflows: workflows},
+			want:    1,
+			status:  statusError,
+			message: `default-workflow "go\"ne" is not defined (configured workflows: fix, triage)`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			checks := defaultWorkflowCheck(tt.cfg)
+			if len(checks) != tt.want {
+				t.Fatalf("defaultWorkflowCheck = %d checks, want %d: %+v", len(checks), tt.want, checks)
+			}
+			if tt.want == 0 {
+				return
+			}
+			if checks[0].Name != "default-workflow" || checks[0].Status != tt.status {
+				t.Errorf("check = %+v, want default-workflow/%v", checks[0], tt.status)
+			}
+			if tt.message != "" && checks[0].Message != tt.message {
+				t.Errorf("message = %q, want %q", checks[0].Message, tt.message)
+			}
+		})
+	}
+}
+
+// TestLoopChecks table-drives the per-workflow signal/loop resolution directly,
+// pinning the branches the command-level tests reach indirectly: the two warns
+// are mutually exclusive per workflow, a workflow max-iterations overrides the
+// defaults cap for the loop warn, and workflows iterate in sorted name order.
+func TestLoopChecks(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cfg  taboo.ProjectConfig
+		want []string // check names in order
+	}{
+		{
+			name: "at most one warn per workflow, sorted order",
+			cfg: taboo.ProjectConfig{
+				Defaults: &taboo.RunDefaults{MaxIterations: 3},
+				Workflows: map[string]taboo.Workflow{
+					"b-capped":   {Prompt: "no signal here"},
+					"a-signaled": {Prompt: "no mention", CompletionSignal: "DONE"},
+				},
+			},
+			want: []string{"signal/a-signaled", "loop/b-capped"},
+		},
+		{
+			name: "workflow cap of 1 overrides a defaults cap above 1",
+			cfg: taboo.ProjectConfig{
+				Defaults:  &taboo.RunDefaults{MaxIterations: 5},
+				Workflows: map[string]taboo.Workflow{"once": {Prompt: "p", MaxIterations: 1}},
+			},
+			want: nil,
+		},
+		{
+			name: "nil defaults with a capped workflow still warns",
+			cfg: taboo.ProjectConfig{
+				Workflows: map[string]taboo.Workflow{"iterate": {Prompt: "p", MaxIterations: 2}},
+			},
+			want: []string{"loop/iterate"},
+		},
+		{
+			name: "stop-on-no-change on defaults silences the loop warn",
+			cfg: taboo.ProjectConfig{
+				Defaults:  &taboo.RunDefaults{MaxIterations: 3, StopOnNoChange: true},
+				Workflows: map[string]taboo.Workflow{"iterate": {Prompt: "p"}},
+			},
+			want: nil,
+		},
+		{
+			name: "stop-on-no-change on the workflow silences the loop warn",
+			cfg: taboo.ProjectConfig{
+				Defaults:  &taboo.RunDefaults{MaxIterations: 3},
+				Workflows: map[string]taboo.Workflow{"iterate": {Prompt: "p", StopOnNoChange: true}},
+			},
+			want: nil,
+		},
+		{
+			name: "stop-on-no-change does not silence the signal warn",
+			cfg: taboo.ProjectConfig{
+				Defaults: &taboo.RunDefaults{MaxIterations: 3},
+				Workflows: map[string]taboo.Workflow{
+					"iterate": {Prompt: "no mention", CompletionSignal: "DONE", StopOnNoChange: true},
+				},
+			},
+			want: []string{"signal/iterate"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			checks := loopChecks(tt.cfg, "/proj/.taboo/taboo.yaml", func(string) bool { return false })
+			var got []string
+			for _, c := range checks {
+				got = append(got, c.Name)
+				if c.Status != statusWarn {
+					t.Errorf("check %s status = %v, want warn", c.Name, c.Status)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("loopChecks names = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidate_LoopKnobChecksGating proves the three new keys are validate-only
+// (gated behind includePromptFiles): a config that would emit all of
+// default-workflow, signal/, and loop/ through validateChecks emits none of
+// them through runConfigChecks — run's preflight is byte-identical to before,
+// selectRun owns the default-workflow refusal at run time. It also proves the
+// two warns never fail the command: with everything else clean, validate still
+// exits 0.
+func TestValidate_LoopKnobChecksGating(t *testing.T) {
+	t.Parallel()
+	body := "" +
+		"workshop: demo\n" +
+		"agent: opencode\n" +
+		"model: openrouter/qwen/qwen3-coder-plus\n" +
+		"repo: /home/me/repo\n" +
+		"default-workflow: gone\n" +
+		"workflows:\n" +
+		"  iterate:\n    prompt: fix the tests\n    completion-signal: DONE\n" +
+		"  capped:\n    prompt: refactor\n    max-iterations: 4\n"
+
+	t.Run("run preflight is unaffected", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, body)
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		checks := runConfigChecks(context.Background(), env, realStat)
+		for _, name := range []string{"default-workflow", "signal/iterate", "loop/capped"} {
+			if c := findCheck(checks, name); c != nil {
+				t.Errorf("run's preflight emitted %+v; the %s check is validate-only", *c, name)
+			}
+		}
+	})
+
+	t.Run("warns never fail the command", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		// Same workflows but a resolvable default-workflow and a real repo, so the
+		// only new checks are the signal/ and loop/ warns.
+		writeTabooProject(t, root, ""+
+			"workshop: demo\n"+
+			"agent: opencode\n"+
+			"model: openrouter/qwen/qwen3-coder-plus\n"+
+			"repo: "+tabooRepoRoot(t)+"\n"+
+			"default-workflow: iterate\n"+
+			"workflows:\n"+
+			"  iterate:\n    prompt: fix the tests\n    completion-signal: DONE\n"+
+			"  capped:\n    prompt: refactor\n    max-iterations: 4\n")
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		out, err := runValidate(t, env)
+		if err != nil {
+			t.Fatalf("validate error = %v, want nil (warns must not fail)\n%s", err, out)
+		}
+		for name, want := range map[string]string{
+			"default-workflow": "ok",
+			"signal/iterate":   "warn",
+			"loop/capped":      "warn",
+		} {
+			if got := findStatus(out, name); got != want {
+				t.Errorf("check %q status = %q, want %s\nfull output:\n%s", name, got, want, out)
+			}
+		}
+	})
+
+	t.Run("json carries the new keys in the existing shape", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTabooProject(t, root, body)
+		env := configEnv(t, &fakeCommander{stdoutFn: okHostStdout}, root, nil)
+
+		out, err := runValidate(t, env, "--json")
+		if !errors.Is(err, errValidateFailed) {
+			t.Fatalf("validate --json error = %v, want errValidateFailed (undefined default-workflow)\n%s", err, out)
+		}
+		rep := decodeJSONReport(t, out)
+		status := map[string]string{}
+		for _, c := range rep.Checks {
+			status[c.Name] = c.Status
+		}
+		for name, want := range map[string]string{
+			"default-workflow": "error",
+			"signal/iterate":   "warn",
+			"loop/capped":      "warn",
+		} {
+			if status[name] != want {
+				t.Errorf("json check %q status = %q, want %q\n%s", name, status[name], want, out)
+			}
+		}
+	})
 }
 
 // TestValidate_JSON asserts --json emits the generic report document: ok=true on a

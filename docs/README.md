@@ -15,7 +15,7 @@ Learning-oriented, start-to-finish walkthroughs.
 
 Goal-oriented recipes for a single task.
 
-- [Iterate until done](guides/iterate-until-done.md) — re-run an agent with `RunWorkflow` until it emits a completion signal or hits the iteration cap.
+- [Iterate until done](guides/iterate-until-done.md) — re-run an agent with `RunWorkflow` until it emits a completion signal, stalls with no new commit (opt-in), or hits the iteration cap.
 - [Fan out runs](guides/fan-out-runs.md) — run many prompts in parallel with `Pool`.
 - [Typed results](guides/typed-results.md) — decode a structured result from agent output with `JSONResult` and validate it.
 - [Prepare the workspace with hooks](guides/prepare-the-workspace-with-hooks.md) — run setup commands with `Hooks` before the agent starts.

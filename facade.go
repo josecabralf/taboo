@@ -154,6 +154,11 @@ func Substitute(tmpl string, vars map[string]string) (string, error) {
 	return prompt.Substitute(tmpl, vars)
 }
 
+// Placeholders returns the distinct {{VAR}} placeholder names tmpl references, sorted ascending.
+func Placeholders(tmpl string) []string {
+	return prompt.Placeholders(tmpl)
+}
+
 // --- internal/workshop: the workshop runner input and the CLI-support facet ---
 
 // Config describes a taboo-managed workshop and the agent that runs inside it.
@@ -212,6 +217,10 @@ const StopSignal = run.StopSignal
 
 // StopMaxIterations means the loop exhausted MaxIterations without the signal.
 const StopMaxIterations = run.StopMaxIterations
+
+// StopNoChange means stop-on-no-change was enabled and an iteration ended with
+// the branch tip unmoved, so the loop stopped at the fixed point.
+const StopNoChange = run.StopNoChange
 
 // NewPool returns a Pool that fans runs out across at most limit concurrent workshops.
 func NewPool(cfg Config, limit int, cmd Commander) *Pool { return run.NewPool(cfg, limit, cmd) }

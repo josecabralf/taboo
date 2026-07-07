@@ -27,6 +27,11 @@ const (
 	// StopSignal means the agent emitted the completion signal and the loop
 	// stopped early.
 	StopSignal StopReason = "signal"
+	// StopNoChange means stop-on-no-change was enabled and an iteration ended
+	// with the branch tip unmoved. This is a commit-based heuristic: it compares
+	// branch tips, so uncommitted or untracked worktree changes do not count as
+	// progress.
+	StopNoChange StopReason = "no-change"
 )
 
 // OrchestratedRequest describes a looped run: a single-run RunRequest plus the
@@ -40,6 +45,11 @@ type OrchestratedRequest struct {
 	// CompletionSignal is the sentinel watched for in the agent's stdout to stop
 	// the loop early (empty = no early stop).
 	CompletionSignal string
+	// StopOnNoChange stops the loop early when an iteration produces no new
+	// commit (the branch tip after Exec equals the tip before it). Off by
+	// default: a loop whose work product is output rather than commits would
+	// otherwise stop after one iteration.
+	StopOnNoChange bool
 	// ResultExtractor, if set, parses a typed result from the final iteration's
 	// output once the loop ends (nil = skip; OrchestratedResult.Result stays nil).
 	ResultExtractor result.ResultExtractor
@@ -66,7 +76,8 @@ type OrchestratedResult struct {
 // Orchestrator composes a Runner into an iteration loop. It prepares the
 // worktree once via Runner.Setup, then re-runs the agent with Runner.Exec up to
 // MaxIterations, stopping early once the completion signal appears in the
-// agent's stdout.
+// agent's stdout or — when StopOnNoChange is set — once an iteration leaves the
+// branch tip unmoved.
 type Orchestrator struct {
 	runner *Runner
 }
@@ -78,7 +89,8 @@ func NewOrchestrator(runner *Runner) *Orchestrator {
 
 // Run prepares the worktree once, then re-execs the agent up to
 // req.MaxIterations times in that same worktree, stopping early once the
-// completion signal appears in the agent's stdout. On a Setup or Exec failure it
+// completion signal appears in the agent's stdout or, with req.StopOnNoChange
+// set, once an iteration produces no new commit. On a Setup or Exec failure it
 // returns the populated result so far alongside the error, with StopReason left
 // at its zero value; StopReason is only meaningful when the returned error is nil.
 func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (OrchestratedResult, error) {
@@ -99,6 +111,9 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 	}
 
 	res := OrchestratedResult{RunResult: base}
+	// prev tracks the branch tip going into each iteration, seeded from Setup's
+	// base capture, so the no-change check needs no git commands of its own.
+	prev := base.BaseCommit
 	for i := 0; i < maxIter; i++ {
 		rr, err := o.runner.Exec(ctx, req.RunRequest, base)
 		res.RunResult = rr
@@ -110,6 +125,16 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 			res.StopReason = StopSignal
 			return o.extract(req, res)
 		}
+		// The signal check keeps priority: an iteration that both prints the
+		// sentinel and lands no commit reports StopSignal. Like the signal check,
+		// this runs after every Exec including the last — the reason names why
+		// the loop ended, and the budget running out at the same moment doesn't
+		// change that the tip stopped moving.
+		if req.StopOnNoChange && rr.Commit == prev {
+			res.StopReason = StopNoChange
+			return o.extract(req, res)
+		}
+		prev = rr.Commit
 	}
 
 	res.StopReason = StopMaxIterations
@@ -118,7 +143,7 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 
 // extract runs req.ResultExtractor once over the final iteration's output and
 // records the typed value on res.Result. It is the single post-loop step shared
-// by both stop paths. On extraction failure res stays fully populated (the
+// by all three stop paths. On extraction failure res stays fully populated (the
 // agent's commit is never discarded) and the wrapped sentinel error is
 // returned alongside it.
 func (o *Orchestrator) extract(req OrchestratedRequest, res OrchestratedResult) (OrchestratedResult, error) {

@@ -66,6 +66,7 @@ value.
 | `timeout` | duration string | `0` | Bounds a single agent invocation, e.g. `30m`. |
 | `max-iterations` | int | `0` | Caps how many times the agent is re-run for one task. |
 | `completion-signal` | string | `""` | String whose appearance in agent output ends the run early. |
+| `stop-on-no-change` | bool | `false` | Stops a looped run early when an iteration produces no new commit. Enable-only: any layer can turn it on, none can turn it off. |
 
 Both `prompt` (inline) and `prompt-file` exist here and at the workflow level to
 mirror the CLI's `--prompt` and `--prompt-file` flags; the `run` command
@@ -90,9 +91,11 @@ named task type.
 | `agent` | string | `""` | Overrides the top-level agent for this workflow. |
 | `max-iterations` | int | `0` | Overrides the default iteration cap for this workflow. |
 | `timeout` | duration string | `0` | Overrides the default per-invocation timeout, e.g. `30m`. |
+| `completion-signal` | string | `""` | Overrides the default loop-stop sentinel for this workflow. |
+| `stop-on-no-change` | bool | `false` | Enables the commit-based early stop for this workflow. Enable-only: it cannot turn off a `defaults`-level enable. |
 
-A workflow has no `branch-prefix` and no `completion-signal` field: those live
-only in `defaults` and as CLI flags. A workflow with no agent set anywhere
+A workflow has no `branch-prefix` field: that lives only in `defaults` and as a
+CLI flag. A workflow with no agent set anywhere
 (neither its own `agent` nor a top-level `agent`) leaves its resolved `Profile`
 nil (`resolveProfiles`). Like the top level, `Profile` is not serialized
 (`yaml:"-"`).
@@ -101,7 +104,9 @@ nil (`resolveProfiles`). Like the top level, `Profile` is not serialized
 
 `default-workflow` (string) names the workflow `taboo run` selects when given no
 positional workflow and no prompt flag (`cli/internal/app/run.go`, `selectRun`).
-When it names a workflow that is not defined, `run` errors. When it is empty and
+When it names a workflow that is not defined, `run` errors — and `taboo
+validate` reports the same mismatch as a hard failure (its `default-workflow`
+check) before any run. When it is empty and
 no workflow is named, a bare `run` errors listing the available workflows.
 
 ## Precedence chain
@@ -112,22 +117,30 @@ scalar (`internal/config/plan.go`). For most parameters resolution is a
 `cmp.Or` over three layers, first non-zero wins, highest first:
 
 1. The CLI flag, carried as a `PlanOverrides` field (`--model`, `--agent`,
-   `--timeout`, `--iterations`).
+   `--timeout`, `--iterations`, `--signal`).
 2. The selected workflow block.
 3. The top-level config and the `defaults:` block.
 
 So `model` is `cmp.Or(ov.Model, wf.Model, c.Model)`, `agent` is
 `cmp.Or(ov.Agent, wf.Agent, c.Agent)`, `timeout` is
-`cmp.Or(ov.Timeout, wf.Timeout, defaults.Timeout)`, and `max-iterations` is
-`cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)`.
+`cmp.Or(ov.Timeout, wf.Timeout, defaults.Timeout)`, `max-iterations` is
+`cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)`, and
+`completion-signal` is
+`cmp.Or(ov.CompletionSignal, wf.CompletionSignal, defaults.CompletionSignal)`.
 
 Some parameters resolve through fewer or different layers:
 
-- `completion-signal` has no workflow field, so it is `cmp.Or(ov.CompletionSignal, defaults.CompletionSignal)` — flag then defaults only.
 - `branch-prefix` lives only in `defaults` and feeds the auto-generated branch
   name (`resolveBranch`); `--branch` overrides the whole name verbatim.
 - `source-definition` is `cmp.Or(ov.From, c.SourceDefinition)` — the `--from`
   flag then the top-level config.
+- `stop-on-no-change` is the exception to the first-non-zero chain: it
+  resolves by boolean OR across the layers —
+  `ov.StopOnNoChange || wf.StopOnNoChange || defaults.StopOnNoChange` —
+  because the knob is enable-only, with no tri-state. Any layer can enable
+  it; no layer can disable a lower layer's enable (there is no
+  `--stop-on-no-change=false` override semantics). A workflow that must not
+  stop on no-change simply doesn't set it anywhere.
 
 The prompt resolves through six layers, first non-empty wins: flag inline, flag
 file, workflow inline, workflow file, defaults inline, defaults file
@@ -216,6 +229,6 @@ default-workflow: fix
 ```
 
 `strategy` is omitted, so `LoadConfig` defaults it to `branch`. The `defaults:`
-block is omitted, so `branch-prefix`, `timeout`, `max-iterations`, and
-`completion-signal` take their zero values until a workflow or a CLI flag sets
-them.
+block is omitted, so `timeout`, `max-iterations`, and `completion-signal` take
+their zero values until a workflow or a CLI flag sets them, and `branch-prefix`
+— which only `defaults` carries — stays empty.

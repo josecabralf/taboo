@@ -269,9 +269,12 @@ func runLoop(ctx context.Context, args []string) error {
 
 // implement is the testable core of the implement subcommand: it fetches the
 // issue, runs the implement workflow, pushes the branch, opens a draft PR
-// carrying the agent's plan, and applies the review label, in that order. The gh
-// and taboo seams are injected so tests drive the full sequence with fakes; each
-// step's failure is wrapped and short-circuits the rest.
+// carrying the agent's plan, and applies the review label, in that order. A
+// nil-error run that produced no commits is refused before the push (the
+// worktree is freed, the error names the issue and branch), so origin never
+// sees an empty branch. The gh and taboo seams are injected so tests drive the
+// full sequence with fakes; each step's failure is wrapped and short-circuits
+// the rest.
 func implement(ctx context.Context, startDir string, issue int, gh ghClient, runWorkflow workflowRunner) error {
 	iss, err := gh.IssueView(ctx, issue)
 	if err != nil {
@@ -294,6 +297,18 @@ func implement(ctx context.Context, startDir string, issue int, gh ghClient, run
 	}, taboo.NewExecCommander())
 	if err != nil {
 		return fmt.Errorf("run implement agent: %w", err)
+	}
+
+	// runWorkflow's error return already covers the failed-run case, so an
+	// unchanged result here genuinely means "ran fine, committed nothing". Refuse
+	// before the push: origin never sees an empty branch and GitHub never emits
+	// its opaque no-commits error at CreateDraftPR. The worktree is still freed,
+	// best-effort, like the happy path's dispose.
+	if !res.Changed() {
+		if derr := res.Dispose(); derr != nil {
+			fmt.Fprintf(os.Stderr, "afk: dispose worktree for #%d: %v\n", iss.Number, derr)
+		}
+		return fmt.Errorf("implement run for issue #%d produced no commits on %q — nothing to push or open a PR for", iss.Number, branch)
 	}
 
 	if err := gh.PushBranch(ctx, branch); err != nil {

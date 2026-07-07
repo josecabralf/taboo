@@ -50,3 +50,6 @@ release tag.
    release.
 7. For a cross-module release (library + CLI together), tag the library `vX.Y.Z`
    first so the CLI release can require the published library version.
+8. Before tagging the CLI, drop `replace github.com/josecabralf/taboo => ../`
+   from `cli/go.mod` and update the require to the just-released library version
+   (e.g., `require github.com/josecabralf/taboo vX.Y.Z`), then commit.

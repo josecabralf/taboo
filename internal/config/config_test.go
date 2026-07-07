@@ -270,6 +270,96 @@ workflows:
 	}
 }
 
+// TestLoadConfig_WorkflowCompletionSignal proves the strict decoder accepts a
+// workflow-level completion-signal — the exact document that failed with
+// ErrConfigParse before Workflow carried the field — and that the value both
+// lands on the workflow and survives a marshal round-trip.
+func TestLoadConfig_WorkflowCompletionSignal(t *testing.T) {
+	path := writeConfig(t, `
+workshop: demo
+base: ubuntu@24.04
+repo: /home/me/repo
+agent: claude-code
+model: `+claudeCodeModel+`
+defaults:
+  completion-signal: DONE
+workflows:
+  iterate:
+    prompt: fix the tests, print REVIEW COMPLETE when green
+    completion-signal: REVIEW COMPLETE
+`)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v, want nil", err)
+	}
+	wf, ok := cfg.Workflows["iterate"]
+	if !ok {
+		t.Fatalf("cfg.Workflows[%q] missing", "iterate")
+	}
+	if got, want := wf.CompletionSignal, "REVIEW COMPLETE"; got != want {
+		t.Errorf("workflow CompletionSignal = %q, want %q", got, want)
+	}
+
+	// Marshal round-trip: the field re-serializes under its kebab-case key and
+	// decodes back to the same value.
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v, want nil", err)
+	}
+	var reloaded ProjectConfig
+	if err := yaml.Unmarshal(out, &reloaded); err != nil {
+		t.Fatalf("yaml.Unmarshal(round-trip) error = %v, want nil", err)
+	}
+	if got, want := reloaded.Workflows["iterate"].CompletionSignal, "REVIEW COMPLETE"; got != want {
+		t.Errorf("round-tripped workflow CompletionSignal = %q, want %q", got, want)
+	}
+}
+
+// TestLoadConfig_StopOnNoChange proves the strict decoder accepts
+// stop-on-no-change on both the defaults block and a workflow — the exact
+// document that would fail with ErrConfigParse before the fields existed —
+// and that both values survive a marshal round-trip.
+func TestLoadConfig_StopOnNoChange(t *testing.T) {
+	path := writeConfig(t, `
+workshop: demo
+base: ubuntu@24.04
+repo: /home/me/repo
+agent: claude-code
+model: `+claudeCodeModel+`
+defaults:
+  stop-on-no-change: true
+workflows:
+  iterate:
+    prompt: fix the tests
+    stop-on-no-change: true
+`)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v, want nil", err)
+	}
+	if !cfg.Defaults.StopOnNoChange {
+		t.Error("Defaults.StopOnNoChange = false, want true")
+	}
+	if !cfg.Workflows["iterate"].StopOnNoChange {
+		t.Error("workflow StopOnNoChange = false, want true")
+	}
+
+	// Marshal round-trip: both fields re-serialize under the kebab-case key and
+	// decode back to the same values.
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v, want nil", err)
+	}
+	var reloaded ProjectConfig
+	if err := yaml.Unmarshal(out, &reloaded); err != nil {
+		t.Fatalf("yaml.Unmarshal(round-trip) error = %v, want nil", err)
+	}
+	if !reloaded.Defaults.StopOnNoChange || !reloaded.Workflows["iterate"].StopOnNoChange {
+		t.Errorf("round-tripped stop-on-no-change = defaults:%v workflow:%v, want both true",
+			reloaded.Defaults.StopOnNoChange, reloaded.Workflows["iterate"].StopOnNoChange)
+	}
+}
+
 // TestLoadConfig_UnknownTopLevelAgent surfaces an unresolvable top-level agent
 // as a wrapped ErrUnknownAgent, with a message that names both the offending
 // agent and the config path so the CLI can quote them back.

@@ -21,7 +21,12 @@ type PlanOverrides struct {
 	Timeout          time.Duration
 	MaxIterations    int
 	CompletionSignal string
-	Branch           string
+	// StopOnNoChange enables the commit-based early stop for this run. It is
+	// enable-only, not part of the first-non-zero precedence chain: the effective
+	// value is the OR of this field and the workflow/defaults layers, so a false
+	// here cannot disable a config-level enable.
+	StopOnNoChange bool
+	Branch         string
 	// BaseRef is threaded straight onto RunRequest.BaseRef (a per-call concern with
 	// no config/workflow layer); see that field for the behavior. Empty = default.
 	BaseRef            string
@@ -41,6 +46,12 @@ type Plan struct {
 	Request  OrchestratedRequest
 	Workflow string
 	Model    string
+	// Placeholders are the sorted, deduped {{VAR}} placeholder names of the
+	// resolved pre-substitution prompt. Request.Prompt is the post-substitution
+	// text, so this field is the only record of which variables the template
+	// referenced (a caller cannot recover them once substitution has filled
+	// them). Empty for a placeholder-free prompt.
+	Placeholders []string
 }
 
 // Run executes the resolved Plan over cmd, driving the orchestrator loop. It is

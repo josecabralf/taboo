@@ -81,7 +81,9 @@ it plans the next parallel-safe batch, *claims* every issue in it (removing
 `ready-for-agent`, adding `agent:in-progress`) so a later wave can never
 re-select one in flight, fans the implement flow out across the batch through
 `taboo.Pool`, and settles each run — success releases the in-progress label, a
-failure also adds `agent:blocked` with a diagnostic comment. It repeats up to
+failure also adds `agent:blocked` with a diagnostic comment, and a run that
+ends cleanly but lands no new commit is likewise blocked, with a no-change
+comment. It repeats up to
 `--max-iterations` waves; an empty plan means the queue is drained and it stops.
 
 ## The trust boundary: GitHub I/O is on the host, the agent is push-denied
