@@ -240,6 +240,13 @@ branch strategy at a reused or local checkout, which the contract forbids. For
 any checkout you keep, use the worktree strategy, the default: every run gets its
 own branch and worktree, and the checkout's `HEAD` is never touched.
 
+The disposable-checkout contract also covers what the agent can *read*: a linked
+worktree contains only tracked files, but the branch strategy binds the whole
+checkout — including untracked files such as `.taboo/.env` (credentials) and
+`.taboo/logs/` — into the agent's workspace. On a fresh CI checkout none of that
+exists; on a checkout you keep, it is one more reason this strategy is off the
+table.
+
 ## Teardown is not on the run path
 
 Setup creates a worktree; nothing on the run path removes it. `Runner.Run`,

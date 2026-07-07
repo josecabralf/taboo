@@ -40,6 +40,17 @@ explained in [the branch strategy](../explanation/isolation-model.md#the-branch-
 an agent is set; an empty agent leaves the resolved `Profile` nil without error.
 Enforcing a required agent is the `validate` command's job, not the loader's.
 
+!!! warning "Migrating from earlier versions: `strategy: branch` was inert"
+    Earlier releases wrote `strategy: branch` into every scaffolded `taboo.yaml`
+    but ignored the value: every run used the worktree behavior regardless. The
+    field is now real. If your `taboo.yaml` says `strategy: branch` and you did
+    not choose it deliberately, change it to `strategy: worktree` (or delete the
+    line — that is the default). Left as `branch`, runs will start operating in
+    place on your checkout: `HEAD` moves onto the run's branch and stays there,
+    and the checkout becomes single-use per run. Also note that values other
+    than `worktree` and `branch` are now rejected at load instead of being
+    preserved.
+
 `Profile` (the resolved top-level profile) is not serialized (`yaml:"-"`). It is
 populated by `LoadConfig`, not read from the file.
 
@@ -192,9 +203,9 @@ default-workflow: fix
 ```
 
 `taboo init` marshals this through `yaml.v3`, which indents nested mappings by
-four spaces. The seeded `.taboo/.gitignore` lists six entries — `worktrees/`,
-`.workshop/`, `/workshop.yaml`, `/workshop.fingerprint`, `.env`, and `logs/`
-(`renderGitignore`). The `.env.example` header names the chosen agent and lists
+four spaces. The seeded `.taboo/.gitignore` lists seven entries — `worktrees/`,
+`.workshop/`, `/workshop.yaml`, `/workshop.fingerprint`, `.env`, `logs/`, and
+`sessions/` (`renderGitignore`). The `.env.example` header names the chosen agent and lists
 one `KEY=` line per credential env key the agent reads (`renderEnvExample`).
 
 ## Minimal example
