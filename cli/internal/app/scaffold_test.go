@@ -319,8 +319,8 @@ func TestRenderTabooYAML_SeedsWorkflows(t *testing.T) {
 }
 
 // TestRenderGitignore_Entries asserts .gitignore contains exactly the seven
-// ignore entries, each on its own line. sessions/ is load-bearing for the
-// branch strategy: the sessions dir lives inside the checkout there, and an
+// ignore entries, each on its own line. The sessions/ entry is load-bearing
+// for the branch strategy: the sessions dir lives inside the checkout there, and an
 // agent's `git add -A` must never sweep it into a commit.
 func TestRenderGitignore_Entries(t *testing.T) {
 	t.Parallel()

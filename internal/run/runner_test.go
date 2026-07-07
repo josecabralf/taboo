@@ -715,7 +715,7 @@ func TestSetup_BranchStrategy_DisposeRestoresHead(t *testing.T) {
 // TestSetup_BranchStrategy_DisposeRefusesDirtyCheckout pins the exit guard: if the
 // agent leaves uncommitted TRACKED changes, Dispose refuses to switch HEAD back
 // rather than let `git switch` carry that work onto the base ref — the inverse of
-// the dirty-tree refusal Setup applies on entry, and the analogue of the non-force
+// the dirty-tree refusal Setup applies on entry, and the analog of the non-force
 // `git worktree remove` refusing a dirty worktree.
 func TestSetup_BranchStrategy_DisposeRefusesDirtyCheckout(t *testing.T) {
 	cfg := testConfig(t)
