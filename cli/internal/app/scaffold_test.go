@@ -318,6 +318,24 @@ func TestRenderTabooYAML_SeedsWorkflows(t *testing.T) {
 	}
 }
 
+// TestRenderGitignore_Entries asserts .gitignore contains exactly the seven
+// ignore entries, each on its own line. sessions/ is load-bearing for the
+// branch strategy: the sessions dir lives inside the checkout there, and an
+// agent's `git add -A` must never sweep it into a commit.
+func TestRenderGitignore_Entries(t *testing.T) {
+	t.Parallel()
+	data := renderGitignore()
+	lines := map[string]bool{}
+	for _, l := range strings.Split(string(data), "\n") {
+		lines[strings.TrimSpace(l)] = true
+	}
+	for _, want := range []string{"worktrees/", ".workshop/", "/workshop.yaml", "/workshop.fingerprint", ".env", "logs/", "sessions/"} {
+		if !lines[want] {
+			t.Errorf(".gitignore missing entry %q\nfull:\n%s", want, data)
+		}
+	}
+}
+
 // TestRenderEnvExample_Keys asserts .env.example lists the chosen agent's
 // credential env keys, one KEY= line each. One representative multi-key agent
 // suffices; the full per-agent key sets are owned by pkg/taboo/agent_*_test.go.

@@ -240,9 +240,9 @@ func (r *Runner) sessionEnv() []workshop.EnvAssignment {
 	return nil
 }
 
-// Run executes one agent run end-to-end: Setup the worktree, then Exec the
+// Run executes one agent run end-to-end: Setup the workspace, then Exec the
 // agent once in it. It is the single-run primitive. The Orchestrator splits
-// these steps to Setup once and Exec repeatedly into the same worktree.
+// these steps to Setup once and Exec repeatedly into the same workspace.
 func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	res, err := r.Setup(ctx, req)
 	if err != nil {
