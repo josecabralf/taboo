@@ -1181,8 +1181,9 @@
 
 
 <h1 id="iterate-until-the-agent-signals-done">Iterate until the agent signals done<a class="headerlink" href="#iterate-until-the-agent-signals-done" title="Permanent link">&para;</a></h1>
-<p>Re-run an agent in one worktree until it emits a completion signal or a maximum
-iteration count is reached, then read why the loop stopped.</p>
+<p>Re-run an agent in one worktree until it emits a completion signal, stalls with
+no new commit (opt-in), or a maximum iteration count is reached, then read why
+the loop stopped.</p>
 <p>Use a looped run when a single agent pass is not enough: a fix that needs a
 second look at the test output, a refactor that converges over a few passes.
 taboo prepares the worktree once and re-execs the agent into it, so each pass
@@ -1198,7 +1199,7 @@ whether the agent signalled done or the loop hit its cap.</p>
 the worktree once, then re-runs the agent into that same worktree. Every
 iteration shares one worktree and the agent commits in place, so each pass
 continues from the previous pass's commit.</p>
-<p>The loop stops on the first of two conditions:</p>
+<p>The loop stops on the first of three conditions:</p>
 <table>
 <thead>
 <tr>
@@ -1214,6 +1215,11 @@ continues from the previous pass's commit.</p>
 <td><code>"signal"</code></td>
 </tr>
 <tr>
+<td><code>stop-on-no-change</code> is on and an iteration lands no new commit</td>
+<td><code>StopNoChange</code></td>
+<td><code>"no-change"</code></td>
+</tr>
+<tr>
 <td>The loop has run <code>MaxIterations</code> times</td>
 <td><code>StopMaxIterations</code></td>
 <td><code>"max-iterations"</code></td>
@@ -1221,14 +1227,29 @@ continues from the previous pass's commit.</p>
 </tbody>
 </table>
 <p><code>MaxIterations</code> below 1 means a single run. An empty completion signal disables
-the early stop, so the loop always runs the full <code>MaxIterations</code>. The signal is
+the signal-based early stop (the loop then runs the full <code>MaxIterations</code>
+unless the opt-in no-change stop fires). The signal is
 matched as a plain substring of stdout (<code>strings.Contains</code>), not a whole line or
 an exact match, so choose a distinctive token: an agent that prints <code>not DONE
 yet</code> would stop a loop watching for <code>DONE</code>.</p>
+<p>The no-change stop is opt-in (<code>stop-on-no-change</code> in <code>taboo.yaml</code>, or
+<code>StopOnNoChange</code> on the request): when enabled, an iteration that ends with the
+branch tip unmoved stops the loop instead of paying the remaining iterations.
+This is a commit-based heuristic: it compares branch tips, so uncommitted or
+untracked worktree changes do not count as progress — an iteration that edits
+files but never commits still reads as no change and stops the loop, so do not
+assume it can see uncommitted work. The signal check outranks it: an iteration
+that both prints the sentinel and lands no commit reports <code>StopSignal</code>, and a stall on
+the final allowed iteration reports <code>StopNoChange</code>, not <code>StopMaxIterations</code>.
+It is off by default because a loop whose work product is output rather than
+commits would otherwise stop after one iteration.</p>
 <h2 id="configure-the-loop-in-tabooyaml">Configure the loop in taboo.yaml<a class="headerlink" href="#configure-the-loop-in-tabooyaml" title="Permanent link">&para;</a></h2>
 <p>The loop knobs live in your <code>taboo.yaml</code>, so the one-call bridge picks them up
-without extra Go code. <code>max-iterations</code> can sit on a workflow or in <code>defaults</code>;
-<code>completion-signal</code> is a <code>defaults</code>-only key:</p>
+without extra Go code. All four — <code>max-iterations</code>, <code>timeout</code>,
+<code>completion-signal</code>, and <code>stop-on-no-change</code> — can sit on a workflow or in
+<code>defaults</code>; a workflow value overrides the <code>defaults</code> one (except
+<code>stop-on-no-change</code>, which is enable-only and resolves by OR across the
+layers):</p>
 <div class="language-yaml highlight"><span class="filename">taboo.yaml</span><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">workshop</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">base</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu@24.04</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">repo</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/me/repos/demo</span>
@@ -1240,12 +1261,24 @@ without extra Go code. <code>max-iterations</code> can sit on a workflow or in <
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">iterate</span><span class="p">:</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Fix</span><span class="nv"> </span><span class="s">the</span><span class="nv"> </span><span class="s">failing</span><span class="nv"> </span><span class="s">tests.</span><span class="nv"> </span><span class="s">Print</span><span class="nv"> </span><span class="s">DONE</span><span class="nv"> </span><span class="s">when</span><span class="nv"> </span><span class="s">all</span><span class="nv"> </span><span class="s">tests</span><span class="nv"> </span><span class="s">pass.&quot;</span>
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">max-iterations</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="nt">review</span><span class="p">:</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Review</span><span class="nv"> </span><span class="s">the</span><span class="nv"> </span><span class="s">diff.</span><span class="nv"> </span><span class="s">Print</span><span class="nv"> </span><span class="s">REVIEW</span><span class="nv"> </span><span class="s">COMPLETE</span><span class="nv"> </span><span class="s">when</span><span class="nv"> </span><span class="s">satisfied.&quot;</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">max-iterations</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">completion-signal</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">REVIEW COMPLETE</span>
 </span></code></pre></div>
-<div class="admonition warning">
-<p class="admonition-title"><code>completion-signal</code> is <code>defaults</code>-only</p>
-<p><code>taboo.yaml</code> is parsed with unknown keys rejected. A workflow has no
-<code>completion-signal</code> field, so putting it under <code>workflows.iterate</code> makes
-<code>LoadConfig</code> fail with <code>ErrConfigParse</code>. Set it under <code>defaults</code>.</p>
+<p>Here <code>iterate</code> sets no signal of its own, so it falls through to the
+<code>defaults</code> sentinel <code>DONE</code>, while <code>review</code> watches for its own
+<code>REVIEW COMPLETE</code>. Sentinels are per-task semantics: give each workflow the
+token its prompt asks the agent to print, and keep <code>defaults</code> as the shared
+fallback. <code>taboo validate</code> warns when a workflow's effective prompt never
+mentions its effective signal — an agent that is never told to print the
+sentinel never prints it, so the signal-based early stop can never fire.</p>
+<div class="admonition note">
+<p class="admonition-title">Per-workflow <code>completion-signal</code> overrides <code>defaults</code></p>
+<p>The signal resolves like the other loop knobs — CLI flag (<code>--signal</code>) →
+workflow → <code>defaults</code>, first non-empty wins. A workflow with no
+<code>completion-signal</code> inherits the <code>defaults</code> one; <code>--signal</code> beats both for
+a single invocation.</p>
 </div>
 <p><code>RunWorkflow</code> locates this config above the start directory, resolves the
 <code>iterate</code> workflow into a plan, and runs the loop over a <code>Commander</code>:</p>
@@ -1308,11 +1341,13 @@ one run; <code>Plan.Request</code> is the <code>OrchestratedRequest</code> the l
 </span></code></pre></div>
 <h2 id="read-the-result">Read the result<a class="headerlink" href="#read-the-result" title="Permanent link">&para;</a></h2>
 <p>Both <code>RunWorkflow</code> and <code>Plan.Run</code> return an <code>OrchestratedResult</code>. It embeds
-<code>RunResult</code> (the final iteration's <code>Branch</code>, <code>Commit</code>, <code>Output</code>)
-and adds three fields:</p>
+<code>RunResult</code> (the final iteration's <code>Branch</code>, <code>Commit</code>, <code>Output</code>, plus
+<code>BaseCommit</code> — the tip the branch started from at setup time, which survives
+every iteration untouched) and adds three fields:</p>
 <ul>
 <li><code>Iterations</code> is how many times the agent ran.</li>
-<li><code>StopReason</code> is <code>StopSignal</code> or <code>StopMaxIterations</code>. It is only meaningful when
+<li><code>StopReason</code> is <code>StopSignal</code>, <code>StopNoChange</code>, or <code>StopMaxIterations</code>. It is
+  only meaningful when
   the call returns a nil error. On a setup or exec failure, the call returns the
   partial result with the error and leaves <code>StopReason</code> at its zero value (the
   empty string <code>""</code>), so check <code>err</code> before reading <code>StopReason</code>.</li>
@@ -1321,7 +1356,9 @@ and adds three fields:</p>
 </ul>
 <p>The final <code>Commit</code> is the branch HEAD after the last iteration. Because every
 iteration commits in place, the commit reflects all passes, not just the last
-one.</p>
+one. <code>res.Changed()</code> compares that final <code>Commit</code> against the original
+<code>BaseCommit</code>, so it reports whether the whole loop landed at least one new
+commit — use it to guard a push or PR stage against shipping an empty branch.</p>
 <h2 id="decode-a-typed-result-after-the-loop">Decode a typed result after the loop<a class="headerlink" href="#decode-a-typed-result-after-the-loop" title="Permanent link">&para;</a></h2>
 <p>Use <code>RunWorkflowAs[T]</code> to pull a structured value out of the final iteration's
 output. It runs the same locate-load-plan-run pipeline as <code>RunWorkflow</code>, but

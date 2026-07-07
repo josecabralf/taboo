@@ -1319,7 +1319,9 @@ it plans the next parallel-safe batch, <em>claims</em> every issue in it (removi
 <code>ready-for-agent</code>, adding <code>agent:in-progress</code>) so a later wave can never
 re-select one in flight, fans the implement flow out across the batch through
 <code>taboo.Pool</code>, and settles each run — success releases the in-progress label, a
-failure also adds <code>agent:blocked</code> with a diagnostic comment. It repeats up to
+failure also adds <code>agent:blocked</code> with a diagnostic comment, and a run that
+ends cleanly but lands no new commit is likewise blocked, with a no-change
+comment. It repeats up to
 <code>--max-iterations</code> waves; an empty plan means the queue is drained and it stops.</p>
 <h2 id="the-trust-boundary-github-io-is-on-the-host-the-agent-is-push-denied">The trust boundary: GitHub I/O is on the host, the agent is push-denied<a class="headerlink" href="#the-trust-boundary-github-io-is-on-the-host-the-agent-is-push-denied" title="Permanent link">&para;</a></h2>
 <p>taboo's contract is to run an agent inside a workshop and land its commits on a

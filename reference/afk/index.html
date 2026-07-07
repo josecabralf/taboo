@@ -1421,7 +1421,10 @@ branch, open a draft PR, and hand off to review.</p>
    agent runs inside a taboo-provisioned workshop and <strong>commits in place</strong>; it
    is git-<strong>push-denied</strong>. The issue body reaches the prompt through taboo's
    variable substitution, never the shell, so backticks and <code>$()</code> in it are data,
-   not commands.</li>
+   not commands. A run that ends cleanly but produces no commits
+   (<code>res.Changed()</code> false) is refused right here, before the push: the worktree
+   is freed and the command errors naming the issue and branch, so <code>origin</code>
+   never sees an empty branch.</li>
 <li><strong>Push</strong> the run's branch to <code>origin</code>.</li>
 <li><strong>Open a draft PR</strong> whose body is the agent's plan (read from
    <code>.taboo-plan.md</code> in the worktree), prefixed with <code>Closes #N</code>.</li>
@@ -1631,8 +1634,10 @@ bounded-parallel through <code>taboo.Pool</code>.</p>
    already in flight.</li>
 <li><strong>Fan out</strong> the implement workflow across the batch through <code>taboo.Pool</code>,
    bounded by <code>--parallelism</code>.</li>
-<li><strong>Settle</strong> each run: success releases <code>agent:in-progress</code>; failure also adds
-   <code>agent:blocked</code> plus a diagnostic comment, taking the issue out of the ready
+<li><strong>Settle</strong> each run: success (a run that landed commits) releases
+   <code>agent:in-progress</code>; failure also adds <code>agent:blocked</code> plus a diagnostic
+   comment, and a run that ends with no error but no new commit is likewise
+   blocked, with a no-change comment — either way the issue leaves the ready
    pool until a human re-adds the label.</li>
 </ol>
 <p>If the whole wave fails (the pool itself returns an error), every issue claimed

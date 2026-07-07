@@ -854,6 +854,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#discovering-a-workflows-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discovering a workflow's variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#failure-modes-cli" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1150,6 +1161,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#discovering-a-workflows-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discovering a workflow's variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#failure-modes-cli" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1304,6 +1326,52 @@ agent.</p>
 <p>Substitution applies to the resolved prompt regardless of where it came from, so
 <code>{{VAR}}</code> placeholders in a <code>prompt-file</code>'s contents are filled the same as an
 inline <code>prompt</code>.</p>
+<h2 id="discovering-a-workflows-variables">Discovering a workflow's variables<a class="headerlink" href="#discovering-a-workflows-variables" title="Permanent link">&para;</a></h2>
+<p>Nothing has to be run to learn which variables a workflow's prompt takes.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="2:2"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio" /><input id="__tabbed_2_2" name="__tabbed_2" type="radio" /><div class="tabbed-labels"><label for="__tabbed_2_1">Library</label><label for="__tabbed_2_2">CLI</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p><code>taboo.Placeholders</code> returns the distinct <code>{{VAR}}</code> names a template
+references, sorted ascending — the same grammar <code>Substitute</code> fills, so text
+that is not a placeholder is ignored by both:</p>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nx">names</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">taboo</span><span class="p">.</span><span class="nx">Placeholders</span><span class="p">(</span><span class="s">&quot;Title: {{ISSUE_TITLE}}\n\n{{ISSUE_BODY}}&quot;</span><span class="p">)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1">// []string{&quot;ISSUE_BODY&quot;, &quot;ISSUE_TITLE&quot;}</span>
+</span></code></pre></div>
+<p>A resolved <code>taboo.Plan</code> also carries the placeholder set of its
+pre-substitution prompt in <code>Plan.Placeholders</code> (the post-substitution
+<code>Request.Prompt</code> no longer shows them).</p>
+</div>
+<div class="tabbed-block">
+<p>Four surfaces report a workflow's variables:</p>
+<ul>
+<li><strong><code>taboo list</code></strong> names each configured workflow's placeholders without
+  selecting one: every line in the workflows section ends with
+  <code>vars: &lt;names&gt;</code> when the effective prompt has placeholders, and each
+  <code>list --json</code> workflow entry carries a <code>placeholders</code> array.</li>
+<li><strong><code>taboo run &lt;workflow&gt; --dry-run</code></strong> prints a <code>vars:</code> line in the plan.
+  It shows <code>(none)</code> for a placeholder-free prompt; the placeholder names
+  with a <code>(supplied)</code> marker when variables were passed; or the names
+  marked <code>(unfilled — will pass through literally; supply
+  --var/--vars-file)</code> when none were passed. In the first two states any
+  supplied-but-unused keys are appended (e.g. <code>— unused: TYPO</code>). With
+  <code>--json</code>, the plan document carries the same data machine-readably: a
+  <code>placeholders</code> array plus a structured <code>vars</code> object (<code>supplied</code>,
+  <code>unused</code>, <code>unfilled</code>) — see the <code>jsonPlan</code> shape in
+  <a href="../reference/cli/#run">the CLI reference</a>.</li>
+<li><strong>A real <code>taboo run</code></strong> warns on stderr — the run itself is unchanged —
+  when a supplied key matches no placeholder in the prompt, or when no
+  variables were supplied and the prompt carries placeholders (which then
+  reach the agent literally, per the no-vars rule below). The warning
+  appears before the interactive confirmation, so a run started with the
+  wrong keys can be aborted.</li>
+<li><strong><code>taboo validate</code></strong> emits an OK-level <code>vars/&lt;workflow&gt;</code> check naming the
+  placeholders each workflow's effective prompt references (inline
+  <code>prompt</code> or the contents of an existing <code>prompt-file</code>, falling back to
+  the <code>defaults:</code> block). Placeholder-free workflows emit nothing.</li>
+</ul>
+</div>
+</div>
+</div>
 <h2 id="failure-modes-cli">Failure modes (CLI)<a class="headerlink" href="#failure-modes-cli" title="Permanent link">&para;</a></h2>
 <p>These checks run during plan resolution, before anything executes, so they also
 fail a <code>--dry-run</code> preview, not just a real run. Each error is quoted verbatim:</p>
@@ -1318,21 +1386,21 @@ fail a <code>--dry-run</code> preview, not just a real run. Each error is quoted
 </ul>
 <h2 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h2>
 <p><code>.taboo/vars.json</code>:</p>
-<div class="language-json highlight"><span class="filename">.taboo/vars.json</span><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;ISSUE_TITLE&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Parser drops trailing comments&quot;</span><span class="p">,</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;ISSUE_BODY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Lines after a // comment are silently truncated.&quot;</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
+<div class="language-json highlight"><span class="filename">.taboo/vars.json</span><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;ISSUE_TITLE&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Parser drops trailing comments&quot;</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;ISSUE_BODY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Lines after a // comment are silently truncated.&quot;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>A workflow prompt in <code>taboo.yaml</code>:</p>
-<div class="language-yaml highlight"><span class="filename">taboo.yaml</span><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">workflows</span><span class="p">:</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">triage</span><span class="p">:</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="no">Title: {{ISSUE_TITLE}}</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="no">{{ISSUE_BODY}}</span>
+<div class="language-yaml highlight"><span class="filename">taboo.yaml</span><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">workflows</span><span class="p">:</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">triage</span><span class="p">:</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="no">Title: {{ISSUE_TITLE}}</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="no">{{ISSUE_BODY}}</span>
 </span></code></pre></div>
 <p>Run it, overriding one value inline:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>taboo<span class="w"> </span>run<span class="w"> </span>triage<span class="w"> </span>--vars-file<span class="w"> </span>vars.json<span class="w"> </span>--var<span class="w"> </span><span class="nv">ISSUE_TITLE</span><span class="o">=</span><span class="s2">&quot;Parser drops comments&quot;</span>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>taboo<span class="w"> </span>run<span class="w"> </span>triage<span class="w"> </span>--vars-file<span class="w"> </span>vars.json<span class="w"> </span>--var<span class="w"> </span><span class="nv">ISSUE_TITLE</span><span class="o">=</span><span class="s2">&quot;Parser drops comments&quot;</span>
 </span></code></pre></div>
 <p>The agent receives the prompt with both placeholders filled: the title taken
 from the <code>--var</code> override and the body from the file.</p>
@@ -1343,7 +1411,7 @@ from the <code>--var</code> override and the body from the file.</p>
 <li><a href="../reference/cli/">CLI reference</a> — the full <code>run</code> flag set and resolution
   order.</li>
 <li><a href="../reference/library-api/">Library API reference</a> — <code>RunWorkflow</code>,
-  <code>(*ProjectConfig).Plan</code>, and <code>Substitute</code>.</li>
+  <code>(*ProjectConfig).Plan</code>, <code>Substitute</code>, and <code>Placeholders</code>.</li>
 </ul>
 
 

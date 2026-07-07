@@ -1355,6 +1355,12 @@ value.</p>
 <td><code>""</code></td>
 <td>String whose appearance in agent output ends the run early.</td>
 </tr>
+<tr>
+<td><code>stop-on-no-change</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Stops a looped run early when an iteration produces no new commit. Enable-only: any layer can turn it on, none can turn it off.</td>
+</tr>
 </tbody>
 </table>
 <p>Both <code>prompt</code> (inline) and <code>prompt-file</code> exist here and at the workflow level to
@@ -1414,17 +1420,31 @@ named task type.</p>
 <td><code>0</code></td>
 <td>Overrides the default per-invocation timeout, e.g. <code>30m</code>.</td>
 </tr>
+<tr>
+<td><code>completion-signal</code></td>
+<td>string</td>
+<td><code>""</code></td>
+<td>Overrides the default loop-stop sentinel for this workflow.</td>
+</tr>
+<tr>
+<td><code>stop-on-no-change</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Enables the commit-based early stop for this workflow. Enable-only: it cannot turn off a <code>defaults</code>-level enable.</td>
+</tr>
 </tbody>
 </table>
-<p>A workflow has no <code>branch-prefix</code> and no <code>completion-signal</code> field: those live
-only in <code>defaults</code> and as CLI flags. A workflow with no agent set anywhere
+<p>A workflow has no <code>branch-prefix</code> field: that lives only in <code>defaults</code> and as a
+CLI flag. A workflow with no agent set anywhere
 (neither its own <code>agent</code> nor a top-level <code>agent</code>) leaves its resolved <code>Profile</code>
 nil (<code>resolveProfiles</code>). Like the top level, <code>Profile</code> is not serialized
 (<code>yaml:"-"</code>).</p>
 <h2 id="default-workflow">default-workflow<a class="headerlink" href="#default-workflow" title="Permanent link">&para;</a></h2>
 <p><code>default-workflow</code> (string) names the workflow <code>taboo run</code> selects when given no
 positional workflow and no prompt flag (<code>cli/internal/app/run.go</code>, <code>selectRun</code>).
-When it names a workflow that is not defined, <code>run</code> errors. When it is empty and
+When it names a workflow that is not defined, <code>run</code> errors — and <code>taboo
+validate</code> reports the same mismatch as a hard failure (its <code>default-workflow</code>
+check) before any run. When it is empty and
 no workflow is named, a bare <code>run</code> errors listing the available workflows.</p>
 <h2 id="precedence-chain">Precedence chain<a class="headerlink" href="#precedence-chain" title="Permanent link">&para;</a></h2>
 <p>The CLI does not resolve run parameters itself; it packs its flags into a
@@ -1433,21 +1453,29 @@ scalar (<code>internal/config/plan.go</code>). For most parameters resolution is
 <code>cmp.Or</code> over three layers, first non-zero wins, highest first:</p>
 <ol>
 <li>The CLI flag, carried as a <code>PlanOverrides</code> field (<code>--model</code>, <code>--agent</code>,
-   <code>--timeout</code>, <code>--iterations</code>).</li>
+   <code>--timeout</code>, <code>--iterations</code>, <code>--signal</code>).</li>
 <li>The selected workflow block.</li>
 <li>The top-level config and the <code>defaults:</code> block.</li>
 </ol>
 <p>So <code>model</code> is <code>cmp.Or(ov.Model, wf.Model, c.Model)</code>, <code>agent</code> is
 <code>cmp.Or(ov.Agent, wf.Agent, c.Agent)</code>, <code>timeout</code> is
-<code>cmp.Or(ov.Timeout, wf.Timeout, defaults.Timeout)</code>, and <code>max-iterations</code> is
-<code>cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)</code>.</p>
+<code>cmp.Or(ov.Timeout, wf.Timeout, defaults.Timeout)</code>, <code>max-iterations</code> is
+<code>cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)</code>, and
+<code>completion-signal</code> is
+<code>cmp.Or(ov.CompletionSignal, wf.CompletionSignal, defaults.CompletionSignal)</code>.</p>
 <p>Some parameters resolve through fewer or different layers:</p>
 <ul>
-<li><code>completion-signal</code> has no workflow field, so it is <code>cmp.Or(ov.CompletionSignal, defaults.CompletionSignal)</code> — flag then defaults only.</li>
 <li><code>branch-prefix</code> lives only in <code>defaults</code> and feeds the auto-generated branch
   name (<code>resolveBranch</code>); <code>--branch</code> overrides the whole name verbatim.</li>
 <li><code>source-definition</code> is <code>cmp.Or(ov.From, c.SourceDefinition)</code> — the <code>--from</code>
   flag then the top-level config.</li>
+<li><code>stop-on-no-change</code> is the exception to the first-non-zero chain: it
+  resolves by boolean OR across the layers —
+  <code>ov.StopOnNoChange || wf.StopOnNoChange || defaults.StopOnNoChange</code> —
+  because the knob is enable-only, with no tri-state. Any layer can enable
+  it; no layer can disable a lower layer's enable (there is no
+  <code>--stop-on-no-change=false</code> override semantics). A workflow that must not
+  stop on no-change simply doesn't set it anywhere.</li>
 </ul>
 <p>The prompt resolves through six layers, first non-empty wins: flag inline, flag
 file, workflow inline, workflow file, defaults inline, defaults file
@@ -1525,9 +1553,9 @@ accepts.</p>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="nt">default-workflow</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fix</span>
 </span></code></pre></div>
 <p><code>strategy</code> is omitted, so <code>LoadConfig</code> defaults it to <code>branch</code>. The <code>defaults:</code>
-block is omitted, so <code>branch-prefix</code>, <code>timeout</code>, <code>max-iterations</code>, and
-<code>completion-signal</code> take their zero values until a workflow or a CLI flag sets
-them.</p>
+block is omitted, so <code>timeout</code>, <code>max-iterations</code>, and <code>completion-signal</code> take
+their zero values until a workflow or a CLI flag sets them, and <code>branch-prefix</code>
+— which only <code>defaults</code> carries — stays empty.</p>
 
 
 

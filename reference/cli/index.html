@@ -1162,16 +1162,25 @@
 <p>The <code>taboo</code> binary wraps the common library paths. The thin <code>cli/main.go</code>
 entrypoint delegates to the application package <code>cli/internal/app</code>. The root
 command is <code>taboo</code> ("taboo orchestrates agent runs inside workshop
-environments", <code>cli/internal/app/main.go</code>). It registers six subcommands:
-<code>doctor</code>, <code>init</code>, <code>validate</code>, <code>run</code>, <code>list</code>, <code>clean</code>
-(<code>cli/internal/app/main.go</code>, <code>newRootCmd</code>). There is no <code>version</code> subcommand and
-no <code>--version</code>/<code>-v</code> flag; the only version taboo surfaces is the workshop floor
-(<code>0.9.1</code>), reported by <code>doctor</code>.</p>
-<p>Every command exits <code>0</code> on success and <code>1</code> on failure. The process exits
-non-zero whenever a command returns an error; <code>Execute</code> in
-<code>cli/internal/app/main.go</code> maps any returned error to <code>os.Exit(1)</code>. The root
-sets <code>SilenceErrors</code> and <code>SilenceUsage</code>, so cobra does not print usage on
-failure.</p>
+environments", <code>cli/internal/app/main.go</code>). It registers seven subcommands:
+<code>doctor</code>, <code>init</code>, <code>validate</code>, <code>run</code>, <code>list</code>, <code>clean</code>, <code>version</code>
+(<code>cli/internal/app/main.go</code>, <code>newRootCmd</code>). There is no <code>--version</code>/<code>-v</code> flag;
+<code>taboo version</code> prints the CLI's build version from the binary's embedded
+module info (<code>cli/internal/app/version.go</code>, <code>newVersionCmd</code>) — a <code>go install</code>
+binary reports its module version, a plain local build reports <code>(devel)</code>. The
+workshop floor version (<code>0.9.1</code>) is reported separately, by <code>doctor</code>.</p>
+<p>Every command exits <code>0</code> on success and <code>1</code> on failure. <code>Execute</code> in
+<code>cli/internal/app/main.go</code> is a thin <code>os.Exit(executeRoot(env))</code>; <code>executeRoot</code>
+runs the root command and, when it returns an error, prints that error exactly
+once to stderr as <code>Error: &lt;message&gt;</code> before mapping it to exit <code>1</code>. Every
+failed command surfaces this way: command refusals, the report commands'
+sentinel verdicts (<code>doctor</code>/<code>validate</code>/<code>run</code> preflight print their report
+first, then gain exactly one trailing <code>Error:</code> line), and cobra's own
+flag-parse and unknown-command errors (<code>Error: unknown flag: --bogus</code>). The
+root sets <code>SilenceErrors</code> and <code>SilenceUsage</code>, so usage is still never dumped
+on failure. Errors go to stderr only — the <code>Error:</code> line never touches stdout,
+and beyond the report commands' own documents stdout receives nothing on an
+error path, so <code>--json</code> consumers always parse a clean stdout document.</p>
 <div class="admonition info">
 <p class="admonition-title">Where these facts come from</p>
 <p>Every command, flag, and message below is read from the source named in
@@ -1266,10 +1275,9 @@ remove it and re-run init</code>. An unknown agent is reported with the valid se
 with no <code>--source-definition</code> selected is rejected non-interactively:
 <code>multiple workshop definitions (...): pass --source-definition to pick one</code>.</p>
 <p>Output routing: progress, the scaffold confirmation, and next steps go to
-stdout (<code>printNextSteps</code>); errors go to stderr prefixed with <code>Error:</code>. A
-<code>--dry-run</code> invocation prints <code>taboo init (dry run) — would write:</code> followed by
-the absolute path of each planned file (<code>printDryRun</code>). There is no <code>--json</code>
-flag.</p>
+stdout (<code>printNextSteps</code>). A <code>--dry-run</code> invocation prints <code>taboo init (dry
+run) — would write:</code> followed by the absolute path of each planned file
+(<code>printDryRun</code>). There is no <code>--json</code> flag.</p>
 <p>Exit behaviour: non-zero on a missing required flag, an unknown agent or
 template, a refused overwrite, or a write failure.</p>
 <h2 id="run">run<a class="headerlink" href="#run" title="Permanent link">&para;</a></h2>
@@ -1348,6 +1356,11 @@ config. With neither a positional workflow, a prompt flag, nor a
 <td>String that, when it appears in agent output, stops the iteration loop early.</td>
 </tr>
 <tr>
+<td><code>--stop-on-no-change</code></td>
+<td><code>false</code></td>
+<td>Stop the iteration loop early when an iteration produces no new commit (the branch tip stops moving). Enable-only: it cannot disable a config-level enable.</td>
+</tr>
+<tr>
 <td><code>--branch</code></td>
 <td>auto-generated</td>
 <td>Branch name for this run. The default is composed of the prefix, the workflow (or <code>adhoc</code>), and a timestamp.</td>
@@ -1370,7 +1383,7 @@ config. With neither a positional workflow, a prompt flag, nor a
 <tr>
 <td><code>--json</code></td>
 <td><code>false</code></td>
-<td>Emit the run result as JSON.</td>
+<td>Emit the run result — or, with <code>--dry-run</code>, the resolved plan — as JSON.</td>
 </tr>
 </tbody>
 </table>
@@ -1380,8 +1393,10 @@ independently):</p>
 <ul>
 <li><code>agent</code> and <code>model</code>: flag &gt; workflow block &gt; top-level config.</li>
 <li><code>--timeout</code> and <code>--iterations</code>: flag &gt; workflow block &gt; the <code>defaults:</code> block.</li>
-<li><code>--signal</code> (completion signal): flag &gt; the <code>defaults:</code> block only. There is no
-  workflow-level completion signal.</li>
+<li><code>--signal</code> (completion signal): flag &gt; workflow block &gt; the <code>defaults:</code> block.</li>
+<li><code>--stop-on-no-change</code>: the OR of the flag, the workflow block, and the
+  <code>defaults:</code> block — not a precedence chain. Any layer can enable, none can
+  disable (see <a href="../taboo-yaml/">taboo-yaml.md</a>).</li>
 <li><code>--from</code> (source-definition): flag &gt; top-level <code>source-definition</code>.</li>
 </ul>
 <p>Template variables are layered last: <code>--var KEY=VALUE</code> flags override matching
@@ -1402,8 +1417,10 @@ the run is refused with <code>errRunFailed</code>. At a TTY without <code>--yes<
 prints a one-line summary to stderr and reads a <code>y/N</code> answer from stdin; a blank
 line, EOF, or anything but <code>y</code>/<code>yes</code> declines and prints <code>Aborted.</code>
 (<code>confirmRun</code>, <code>promptYesNo</code>). A non-interactive caller or <code>--yes</code> proceeds
-without prompting. A <code>--dry-run</code> invocation prints the resolved plan and never
-reaches the preflight.</p>
+without prompting. A <code>--dry-run</code> invocation emits the resolved plan — the human
+form, or a JSON document with <code>--json</code> — and never reaches the preflight (or
+the vars warnings: the JSON document carries the vars state itself, so dry-run
+writes nothing to stderr).</p>
 <p>Output routing: live agent output (both the agent's stdout and stderr) and all
 progress stream to stderr, so the machine result on stdout stays clean
 (<code>planOverrides</code> points the plan's <code>Stdout</code> and <code>Stderr</code> at <code>env.Stderr</code>, and
@@ -1414,19 +1431,74 @@ form is two lines (<code>writeRunResult</code>):</p>
 </span></code></pre></div>
 <p><code>commit</code> is the full 40-character branch HEAD (<code>res.Commit</code>), printed verbatim.
 The plain form omits the captured agent output (it already streamed to stderr).
-With <code>--json</code>, stdout carries an indented JSON object (<code>jsonRunResult</code>):</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;branch&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;taboo/fix-20260617-101500-000000001&quot;</span><span class="p">,</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;commit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9&quot;</span><span class="p">,</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;captured agent stdout&quot;</span><span class="p">,</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">&quot;iterations&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">&quot;stopReason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;max-iterations&quot;</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">}</span>
+When the run produced no new commits (<code>res.Changed()</code> is false — the branch tip
+never moved off the base it started from), the plain form additionally prints
+an advisory note to <strong>stderr</strong>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>note: the agent produced no new commits — branch tip unchanged
+</span></code></pre></div>
+<p>Like every advisory, the note never touches stdout: the two <code>branch:</code>/<code>commit:</code>
+lines stay byte-identical whether or not anything landed. With <code>--json</code>, stdout
+carries an indented JSON object (<code>jsonRunResult</code>):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;branch&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;taboo/fix-20260617-101500-000000001&quot;</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;commit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1f3c9ab2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9&quot;</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;captured agent stdout&quot;</span><span class="p">,</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;iterations&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;stopReason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;max-iterations&quot;</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">&quot;baseCommit&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d&quot;</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">&quot;changed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="p">}</span>
 </span></code></pre></div>
 <p>The <code>stopReason</code> field is the <code>StopReason</code> flattened to a string
-(<code>max-iterations</code> or <code>signal</code>). A <code>--dry-run</code> plan prints to stdout under
+(<code>max-iterations</code>, <code>signal</code>, or <code>no-change</code> — the last only when the effective
+<code>stop-on-no-change</code> is on and an iteration moved no commit; it is a new value
+in the frozen key, not a new key). <code>baseCommit</code> is the tip the run's branch
+started from (<code>res.BaseCommit</code>, captured at setup time) and <code>changed</code> is
+<code>res.Changed()</code> — true iff the run produced at least one new commit. Both are
+additive: the five keys that predate them (<code>branch</code>, <code>commit</code>, <code>output</code>,
+<code>iterations</code>, <code>stopReason</code>) are frozen and stay byte-identical, so existing
+consumers keep parsing unchanged. The <code>--json</code> path prints no no-commit note —
+scripted consumers read <code>changed</code> instead.</p>
+<p>A <code>--dry-run</code> plan prints to stdout under
 <code>taboo run (dry run) — resolved plan:</code> with one aligned label per line
-(<code>printPlan</code>).</p>
+(<code>printPlan</code>). With <code>--dry-run --json</code>, stdout instead carries the resolved
+plan as an indented JSON object (<code>jsonPlan</code>, built by the pure <code>planToJSON</code>):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;workflow&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fix&quot;</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;adhoc&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;branch&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;taboo/fix-20260617-101500-000000001&quot;</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;opencode&quot;</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;anthropic/claude-sonnet-4-5&quot;</span><span class="p">,</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;workshop&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-opencode&quot;</span><span class="p">,</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/project&quot;</span><span class="p">,</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">&quot;sourceDefinition&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;timeout&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;30m0s&quot;</span><span class="p">,</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">&quot;maxIterations&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span><span class="nt">&quot;completionSignal&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;DONE&quot;</span><span class="p">,</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span><span class="nt">&quot;stopOnNoChange&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;please fix the failing tests&quot;</span><span class="p">,</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">  </span><span class="nt">&quot;placeholders&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">  </span><span class="nt">&quot;vars&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">    </span><span class="nt">&quot;supplied&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">    </span><span class="nt">&quot;unused&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">    </span><span class="nt">&quot;unfilled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>workflow</code> is <code>""</code> and <code>adhoc</code> is <code>true</code> for an ad-hoc <code>--prompt</code> run.
+<code>sourceDefinition</code> is <code>""</code> when unset (the human plan omits the line; the JSON
+key is always present). <code>timeout</code> is the Go duration string the human plan
+renders. <code>stopOnNoChange</code> is the effective (OR-resolved) commit-based
+early-stop knob, mirroring the human plan's <code>stop-on-no-change:</code> line; it is
+additive on the dry-run document, which carries no key freeze. <code>prompt</code> is the same one-line preview (<code>promptSummary</code>) the human plan
+and <code>list</code> show — the full resolved prompt is deliberately not embedded.
+<code>placeholders</code> is the prompt's sorted <code>{{VAR}}</code> names, marshalled as <code>[]</code>
+(never <code>null</code>) when there are none. <code>vars</code> mirrors the human plan's <code>vars:</code>
+line as structured data: <code>supplied</code> is the sorted caller-supplied keys,
+<code>unused</code> the sorted supplied keys matching no placeholder (which substitution
+silently ignores), and <code>unfilled</code> is <code>true</code> exactly when the prompt has
+placeholders but no vars were supplied (they reach the agent literally). The
+run-result <code>jsonRunResult</code> shape above is unchanged.</p>
 <p>Exit behaviour: non-zero on a config/selection error, a preflight failure
 (<code>errRunFailed</code>), or a failure inside the run. A declined confirmation returns
 zero (nothing ran).</p>
@@ -1436,7 +1508,7 @@ zero (nothing ran).</p>
 strict-decodes the config, then runs the agent, model, prompt-file, repo, and
 workshop-derive correctness checks. It does not probe host tooling; that is
 <code>doctor</code>.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>taboo validate [flags]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>taboo validate [flags]
 </span></code></pre></div>
 <p>Positional arguments: none (<code>cobra.NoArgs</code>).</p>
 <table>
@@ -1470,6 +1542,30 @@ workshop-derive correctness checks. It does not probe host tooling; that is
   is a <code>warn</code>, not an error (<code>modelChecks</code>, <code>MatchModelFormat</code>).</li>
 <li><code>prompt-file/&lt;path&gt;</code>: every referenced prompt file exists, resolved relative
   to the config file's directory (<code>promptFileChecks</code>).</li>
+<li><code>vars/&lt;workflow&gt;</code>: an <code>ok</code>-level per-workflow check listing the <code>{{VAR}}</code>
+  placeholders the workflow's effective prompt references (<code>prompt references:
+  &lt;names&gt;</code>) — a discoverability surface ("what vars does this workflow
+  take?"), never a failure. Silent for a placeholder-free workflow, and
+  skipped when the effective prompt is unresolvable (<code>prompt-file/</code> already
+  fails it) (<code>varsChecks</code>).</li>
+<li><code>default-workflow</code>: a set <code>default-workflow</code> must name a configured workflow
+  — a hard failure with the same wording <code>taboo run</code> uses at run time; <code>ok</code>
+  when it resolves, and no check at all when unset (unset is legal)
+  (<code>defaultWorkflowCheck</code>).</li>
+<li><code>signal/&lt;workflow&gt;</code>: a <code>warn</code> when the workflow's effective
+  <code>completion-signal</code> (workflow over <code>defaults</code>) never appears in its
+  effective prompt as a plain substring — the agent is never told to print the
+  sentinel, so the signal-based early stop can never fire; set it
+  intentionally to silence this. A workflow whose effective prompt is
+  unresolvable is skipped (<code>prompt-file/</code> already fails it) (<code>loopChecks</code>).</li>
+<li><code>loop/&lt;workflow&gt;</code>: a <code>warn</code> when the effective <code>max-iterations</code> (workflow
+  over <code>defaults</code>) is greater than 1 with no effective <code>completion-signal</code>
+  anywhere — the loop has no early stop, so every run pays the full N
+  iterations. Silent at <code>max-iterations &lt;= 1</code>, when a signal exists, or when
+  the effective <code>stop-on-no-change</code> (workflow OR <code>defaults</code>) is enabled — the
+  knob is itself an early stop, so the warning's premise no longer holds. It
+  does not silence <code>signal/</code>: stop-on-no-change cannot fix a mistyped
+  sentinel (<code>loopChecks</code>).</li>
 <li><code>repo</code>/<code>repo-path</code>/<code>repo-git</code>: the repo must be set, on persistent storage
   (not under <code>/tmp</code> or <code>/run</code>), and a git work tree (<code>repoValidateChecks</code>).</li>
 <li><code>source-definition</code>/<code>derive</code>: a <code>&lt;repo&gt;/workshop.yaml</code> source must exist, and
@@ -1488,7 +1584,7 @@ prints one line per check as <code>[STATUS] NAME MESSAGE</code> and a <code>resu
 <p>Check host readiness for running taboo (<code>cli/internal/app/doctor.go</code>,
 <code>newDoctorCmd</code>). It runs the always-on host checks and, inside a taboo project,
 config-aware checks.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>taboo doctor [flags]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>taboo doctor [flags]
 </span></code></pre></div>
 <p>Positional arguments: none (<code>cobra.NoArgs</code>).</p>
 <table>
@@ -1540,10 +1636,10 @@ no config checks; that absence is not an error.</p>
 <p>Exit behaviour: non-zero (<code>errChecksFailed</code>) when any check is an <code>error</code>.
 Warnings (a missing Go toolchain, missing credentials) do not fail the command.</p>
 <h2 id="list">list<a class="headerlink" href="#list" title="Permanent link">&para;</a></h2>
-<p>List the project's workshops, worktrees, and branches
+<p>List the project's workshops, worktrees, branches, and workflows
 (<code>cli/internal/app/list.go</code>, <code>newListCmd</code>). Read-only: it loads the config,
 probes the host through the command seam, and mutates nothing.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>taboo list [flags]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>taboo list [flags]
 </span></code></pre></div>
 <p>Positional arguments: none (<code>cobra.NoArgs</code>).</p>
 <table>
@@ -1573,19 +1669,33 @@ probes the host through the command seam, and mutates nothing.</p>
 <li>branches: the branches under the configured <code>branch-prefix</code>, from
   <code>git for-each-ref refs/heads/</code> (<code>gatherBranches</code>). An empty prefix returns
   every branch.</li>
+<li>workflows: one entry per configured workflow, sorted by name, computed from
+  the loaded config alone — no host probes (<code>gatherWorkflows</code>). Each line shows
+  the name (with a <code>(default)</code> marker when it equals <code>default-workflow</code>), the
+  effective agent and model (the workflow's own value falling back to the top
+  level), a one-line preview of the effective prompt (workflow inline →
+  workflow <code>prompt-file</code> → defaults inline → defaults <code>prompt-file</code>, via
+  <code>effectivePrompt</code> + <code>promptSummary</code>), and the <code>{{VAR}}</code> placeholder names it
+  references. An absent or unreadable prompt-file degrades to
+  <code>prompt: (unavailable)</code> rather than failing the listing — existence policing
+  stays <code>validate</code>'s job.</li>
 </ul>
 <p>Output routing: the listing goes to stdout. The human form prints a header and
-the three sections, each falling back to <code>(none)</code> when empty
+the four sections, each falling back to <code>(none)</code> when empty
 (<code>renderListResult</code>). With <code>--json</code>, stdout carries
 <code>{"workshops": [{"name","status"}], "worktrees": [{"branch","path"}],
-"branches": []}</code> (<code>jsonListResult</code>); empty sections marshal as <code>[]</code>.</p>
+"branches": [], "workflows": [{"name","default","agent","model","prompt",
+"promptAvailable","placeholders"}]}</code> (<code>jsonListResult</code>); empty sections marshal
+as <code>[]</code>. <code>prompt</code> is the one-line summary (empty when <code>promptAvailable</code> is
+<code>false</code>) and <code>placeholders</code> is the sorted <code>{{VAR}}</code> name list, <code>[]</code> when there
+are none.</p>
 <p>Exit behaviour: non-zero on a config-load error or a fatal git probe error. A
 workshop-info probe error is not fatal (it reports <code>not provisioned</code>).</p>
 <h2 id="clean">clean<a class="headerlink" href="#clean" title="Permanent link">&para;</a></h2>
 <p>Tear down the project's taboo-managed worktrees, workshops, and branches
 (<code>cli/internal/app/clean.go</code>, <code>newCleanCmd</code>). By default it removes only the
 worktrees.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>taboo clean [flags]
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>taboo clean [flags]
 </span></code></pre></div>
 <p>Positional arguments: none (<code>cobra.NoArgs</code>).</p>
 <table>
@@ -1627,6 +1737,11 @@ worktrees.</p>
 <td><code>false</code></td>
 <td>Skip the interactive confirmation.</td>
 </tr>
+<tr>
+<td><code>--json</code></td>
+<td><code>false</code></td>
+<td>Emit the dry-run teardown plan as JSON (requires <code>--dry-run</code>).</td>
+</tr>
 </tbody>
 </table>
 <p>Scope (<code>buildCleanPlan</code>): worktrees are removed with <code>git worktree remove</code>;
@@ -1646,7 +1761,38 @@ a <code>y/N</code> answer before any destructive action; declining prints <code>
 <p>Output routing: <code>--dry-run</code> and the <code>Nothing to clean.</code> message go to stdout;
 per-artifact progress (<code>removed worktree ...</code>, <code>tore down workshop ...</code>,
 <code>removed SDK link ...</code>, <code>deleted branch ...</code>) and warnings go to stderr
-(<code>executeClean</code>). There is no <code>--json</code> flag.</p>
+(<code>executeClean</code>). With <code>--dry-run --json</code>, stdout carries the resolved teardown
+plan as one indented JSON object instead of the human preview
+(<code>cleanPlanToJSON</code>); <code>--dry-run</code> without <code>--json</code> is unchanged. <code>--json</code>
+without <code>--dry-run</code> is refused up front (<code>--json requires --dry-run</code>), before
+any config load or host probe — the mutating path streams per-artifact
+progress and has no single result document to emit.</p>
+<p>The <code>--dry-run --json</code> shape (<code>jsonCleanPlan</code>):</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;repo&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/repo&quot;</span><span class="p">,</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;projectDir&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/repo/.taboo&quot;</span><span class="p">,</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;worktrees&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">      </span><span class="nt">&quot;branch&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;taboo/fix-123&quot;</span><span class="p">,</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/repo/.taboo/worktrees/taboo-fix-123&quot;</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span><span class="nt">&quot;workshops&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;demo-opencode&quot;</span><span class="p">],</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span><span class="nt">&quot;sdkLinks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;/home/user/repo/.taboo/.workshop/mylib&quot;</span><span class="p">],</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">  </span><span class="nt">&quot;branches&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;taboo/fix-123&quot;</span><span class="p">],</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">  </span><span class="nt">&quot;unmergedBranches&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;taboo/refactor-456&quot;</span><span class="p">]</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>worktrees</code> entries reuse the <code>{"branch","path"}</code> shape of <code>list --json</code>'s
+worktrees section, but the section is scope-gated like the others: it is
+populated unless <code>--workshops</code> narrows the scope to workshops only, in which
+case it marshals as <code>[]</code>. <code>workshops</code> and <code>sdkLinks</code> are populated only under
+<code>--workshops</code>/<code>--all</code>, and <code>branches</code>/<code>unmergedBranches</code> only under
+<code>--prune-branches</code> — <code>branches</code> is what a real clean would delete (merged
+branches, or all of them under <code>--force</code>) and <code>unmergedBranches</code> is what it
+would refuse without <code>--force</code>. Every key is always present; empty sections
+marshal as <code>[]</code> (never <code>null</code>), including <code>unmergedBranches</code>, which the human
+plan omits when empty.</p>
 <p>Exit behaviour: teardown is best-effort. A failure on one artifact warns and
 continues; every failure is joined into the returned error so the command still
 exits non-zero (<code>executeClean</code>). A refused prune or an unset <code>branch-prefix</code>
