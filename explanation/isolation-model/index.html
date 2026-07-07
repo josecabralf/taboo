@@ -1014,6 +1014,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-branch-strategy-one-run-at-a-time-per-checkout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The branch strategy: one run at a time per checkout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#teardown-is-not-on-the-run-path" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1198,6 +1209,17 @@
     <span class="md-ellipsis">
       
         Where worktrees live
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-branch-strategy-one-run-at-a-time-per-checkout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The branch strategy: one run at a time per checkout
       
     </span>
   </a>
@@ -1442,6 +1464,61 @@ worktree physically sits. ADR 0007 records that this nested arrangement was veri
 on workshop 0.9.1 and LXD 6.8, and that the out-of-repo layout remains a sound
 fallback. The only host-side cost the nested layout inherits is the
 repo-not-under-<code>/tmp</code> constraint, which already existed for the git-common mount.</p>
+<h2 id="the-branch-strategy-one-run-at-a-time-per-checkout">The branch strategy: one run at a time per checkout<a class="headerlink" href="#the-branch-strategy-one-run-at-a-time-per-checkout" title="Permanent link">&para;</a></h2>
+<p>Everything above describes the <strong>worktree strategy</strong>: a fresh linked worktree per
+run, the two mounts that make a linked worktree resolve, and the per-slot
+isolation that lets a <code>Pool</code> fan out. taboo has a second workspace seam, the
+<strong>branch strategy</strong>, that deletes all of it.</p>
+<p>The seam is <code>Config.Strategy</code> (<code>internal/workshop/template.go</code>), and
+<code>Runner.Setup</code> (<code>internal/run/runner.go</code>) dispatches on it. The set is closed:
+<code>worktree</code> (the default, and what an omitted value resolves to) and <code>branch</code> are
+the only accepted values, and any other value is rejected with a validation
+error rather than silently resolved to the worktree path. With
+<code>strategy: worktree</code>, Setup takes the worktree path above. With <code>strategy: branch</code>,
+<code>Runner.prepareBranch</code> runs the agent in place on the checkout itself: it creates
+the run's branch with <code>git switch -c</code>, binds only the checkout as the single
+<code>/taboo/workspace</code> mount, and skips the git-common and worktrees mounts entirely.
+The checkout's <code>.git</code> is a real, self-contained repository that travels with the
+workspace mount, so the linked-worktree machinery the rest of this page describes
+is unnecessary. The CI dogfooding loop uses this seam (<code>.taboo/taboo.yaml</code> sets
+<code>strategy: branch</code>), because that machinery is what failed under LXD on GitHub
+Actions.</p>
+<p>The cost of deleting the machinery is a contract: <strong>one run at a time per
+checkout.</strong> A single checkout has one working tree and one <code>HEAD</code>, so the branch
+strategy cannot back the concurrent <code>Pool</code> (<code>slotConfig</code> in
+<code>internal/run/pool.go</code> forces <code>worktree</code> on every slot for this reason) — that
+limit is inherent and cannot be designed away. Sequential reuse, however, is
+safe, because <code>Dispose</code> is the inverse of <code>Setup</code>:</p>
+<ul>
+<li><code>RunResult.Dispose</code> restores <code>HEAD</code> to the ref it was on before <code>git switch -c</code>
+  (a branch name, or the exact commit when it started detached). The run's branch
+  persists as the artifact — exactly as <code>git worktree remove</code> leaves a worktree's
+  branch behind — but the checkout returns to its base. Restoration happens at
+  <code>Dispose</code>, not at the end of the run: until then <code>HEAD</code> stays on the run branch
+  so <code>res.Artifact(relpath)</code> reads the run's output from the working tree. If the
+  run left uncommitted <em>tracked</em> changes, <code>Dispose</code> refuses rather than carry them
+  onto the base ref — the same non-force stance as <code>git worktree remove</code> on a
+  dirty worktree (commit or discard, then dispose).</li>
+<li>A second run with no <code>BaseRef</code> therefore branches off the restored base, not the
+  first run's tip — provided you called <code>Dispose</code> between them. Skip <code>Dispose</code> and
+  <code>HEAD</code> is still on the first run's branch, so the second run chains off it; the
+  <code>BaseRef</code> arm sidesteps the question by branching from the fetched ref.</li>
+<li>A second run whose branch name already exists fails at <code>git switch -c</code>, which
+  aborts rather than reusing or overwriting the branch. The worktree strategy's
+  <code>git worktree add -b</code> fails the same way, so this is shared behaviour, not a
+  branch-strategy quirk: every run needs a distinct branch name.</li>
+</ul>
+<p>The one thing sequential reuse still cannot buy is concurrency — overlapping runs
+need the separate working trees only the worktree strategy provides. For any
+checkout where you want parallelism, use the worktree strategy, the default:
+every run gets its own branch and worktree, and the checkout's <code>HEAD</code> is never
+touched at all.</p>
+<p>The disposable-checkout contract also covers what the agent can <em>read</em>: a linked
+worktree contains only tracked files, but the branch strategy binds the whole
+checkout — including untracked files such as <code>.taboo/.env</code> (credentials) and
+<code>.taboo/logs/</code> — into the agent's workspace. On a fresh CI checkout none of that
+exists; on a checkout you keep, it is one more reason this strategy is off the
+table.</p>
 <h2 id="teardown-is-not-on-the-run-path">Teardown is not on the run path<a class="headerlink" href="#teardown-is-not-on-the-run-path" title="Permanent link">&para;</a></h2>
 <p>Setup creates a worktree; nothing on the run path removes it. <code>Runner.Run</code>,
 <code>Setup</code>, <code>Exec</code>, the orchestrator loop, and <code>Pool.Run</code> all leave the worktree on

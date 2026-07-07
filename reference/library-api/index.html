@@ -1847,13 +1847,18 @@ contents. <code>relpath</code> must stay inside the worktree: an absolute path o
 escape is rejected with <code>artifact "&lt;relpath&gt;": path escapes worktree</code>, and a
 result that carries no worktree handle returns
 <code>artifact: result has no worktree handle</code>.</p>
-<p><code>Dispose</code> removes the run's worktree with a non-force <code>git worktree remove</code>,
-matching <code>taboo clean</code>'s teardown. It is explicit, never automatic: nothing on
-the run path calls it for you. It is idempotent (a worktree already gone is
-success), and it leaves the branch ref and the workshop intact, so a later push
-or run can reuse them. There is no library equivalent of the full <code>clean</code>
-command, which also tears down the workshop and branch. <code>Dispose</code> returns
-<code>dispose: result has no worktree handle</code> when the result carries no handle.</p>
+<p><code>Dispose</code> is the inverse of <code>Setup</code>, and what it does depends on the run's
+strategy. For the worktree strategy it removes the run's worktree with a
+non-force <code>git worktree remove</code>, matching <code>taboo clean</code>'s teardown; it is
+idempotent (a worktree already gone is success). For the branch strategy, which
+ran in place on the checkout, there is no worktree to remove, so <code>Dispose</code>
+instead restores <code>HEAD</code> to the ref the checkout was on before the run's
+<code>git switch -c</code> (refusing if the run left uncommitted tracked changes). Either
+way it is explicit, never automatic — nothing on the run path calls it for you —
+and it leaves the run's branch ref and the workshop intact, so a later push or
+run can reuse them. There is no library equivalent of the full <code>clean</code> command,
+which also tears down the workshop and branch. <code>Dispose</code> returns <code>dispose:
+result has no worktree handle</code> when the result carries no handle.</p>
 <p><code>NewResultWithWorktree</code> and <code>NewResultWithWorktreeCmd</code> build a <code>RunResult</code> around
 a bare worktree path so a consumer test can exercise <code>Artifact</code>/<code>Dispose</code> without
 a full run. A result from <code>NewResultWithWorktree</code> carries no <code>Commander</code>, so
