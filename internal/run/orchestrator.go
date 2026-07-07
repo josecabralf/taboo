@@ -47,7 +47,7 @@ type OrchestratedRequest struct {
 
 // OrchestratedResult reports the outcome of a looped run: the final iteration's
 // RunResult plus the loop's own bookkeeping. Because every iteration shares one
-// worktree and the agent commits in place, the final Commit is the branch HEAD
+// workspace and the agent commits in place, the final Commit is the branch HEAD
 // after the last iteration.
 type OrchestratedResult struct {
 	RunResult
@@ -64,7 +64,7 @@ type OrchestratedResult struct {
 }
 
 // Orchestrator composes a Runner into an iteration loop. It prepares the
-// worktree once via Runner.Setup, then re-runs the agent with Runner.Exec up to
+// workspace once via Runner.Setup, then re-runs the agent with Runner.Exec up to
 // MaxIterations, stopping early once the completion signal appears in the
 // agent's stdout.
 type Orchestrator struct {
@@ -76,8 +76,8 @@ func NewOrchestrator(runner *Runner) *Orchestrator {
 	return &Orchestrator{runner: runner}
 }
 
-// Run prepares the worktree once, then re-execs the agent up to
-// req.MaxIterations times in that same worktree, stopping early once the
+// Run prepares the workspace once, then re-execs the agent up to
+// req.MaxIterations times in that same workspace, stopping early once the
 // completion signal appears in the agent's stdout. On a Setup or Exec failure it
 // returns the populated result so far alongside the error, with StopReason left
 // at its zero value; StopReason is only meaningful when the returned error is nil.

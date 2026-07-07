@@ -6,3 +6,4 @@ worktrees/
 /workshop.fingerprint
 .env
 logs/
+sessions/
