@@ -13,16 +13,15 @@ type jsonCheck struct {
 	Message string `json:"message"`
 }
 
-// jsonReport is the top-level --json document: ok is true iff no check is an
-// error.
+// jsonReport is the top-level --json document; ok is true iff no check is an error.
 type jsonReport struct {
 	OK     bool        `json:"ok"`
 	Checks []jsonCheck `json:"checks"`
 }
 
-// writeHuman prints a human-readable report under title, one line per check,
-// with a footer summarizing the overall verdict. The title is supplied by the
-// caller (doctor and validate render the same shape under different headers).
+// writeHuman prints a human-readable report under title, one line per check, with
+// a verdict footer; doctor and validate render the same shape under different
+// titles.
 func writeHuman(w io.Writer, title string, checks []check) {
 	_, _ = fmt.Fprintln(w, title)
 	for _, c := range checks {
@@ -35,8 +34,7 @@ func writeHuman(w io.Writer, title string, checks []check) {
 	_, _ = fmt.Fprintln(w, "result: OK")
 }
 
-// writeJSON prints the machine-readable report. It returns any encoding error;
-// the caller still returns the failure sentinel separately when a check errored.
+// writeJSON prints the machine-readable report, returning any encoding error.
 func writeJSON(w io.Writer, checks []check) error {
 	rep := jsonReport{OK: !anyError(checks), Checks: make([]jsonCheck, len(checks))}
 	for i, c := range checks {
@@ -45,19 +43,16 @@ func writeJSON(w io.Writer, checks []check) error {
 	return writeIndentedJSON(w, rep)
 }
 
-// writeIndentedJSON encodes v to w as the CLI's standard machine document:
-// 2-space-indented JSON followed by Encode's trailing newline. Every --json
-// emitter in the package routes through it so the encoding convention has
-// exactly one home.
+// writeIndentedJSON encodes v to w as 2-space-indented JSON. Every --json emitter
+// routes through it so the encoding convention has one home.
 func writeIndentedJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
 
-// emptyIfNil normalizes a nil slice to an empty one so it marshals as the
-// conventional machine shape [] rather than null — the invariant every --json
-// document in the package shares.
+// emptyIfNil normalizes a nil slice to an empty one so it marshals as [] rather
+// than null, the invariant every --json document in the package shares.
 func emptyIfNil[T any](s []T) []T {
 	if s == nil {
 		return []T{}

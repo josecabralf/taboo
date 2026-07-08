@@ -7,14 +7,12 @@ import (
 	"strings"
 )
 
-// placeholderRe matches a {{VAR}} placeholder; VAR is a conventional
-// identifier (letters, digits, underscore; not leading with a digit).
+// placeholderRe matches a {{VAR}} placeholder; VAR is a conventional identifier.
 var placeholderRe = regexp.MustCompile(`\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 
-// Placeholders returns the distinct {{VAR}} placeholder names tmpl references,
-// sorted ascending. It is pure and reuses placeholderRe, so text that is not a
-// placeholder ({{ VAR }}, {{1ST}}, {{a-b}}) is ignored, exactly as Substitute
-// ignores it. An empty or placeholder-free template yields an empty result.
+// Placeholders returns the distinct {{VAR}} names tmpl references, sorted. Text
+// that is not a placeholder ({{ VAR }}, {{1ST}}) is ignored, as Substitute
+// ignores it.
 func Placeholders(tmpl string) []string {
 	seen := make(map[string]struct{})
 	var names []string
@@ -28,9 +26,8 @@ func Placeholders(tmpl string) []string {
 	return names
 }
 
-// Substitute replaces every {{VAR}} placeholder in tmpl with vars[VAR]. It is
-// pure. A placeholder with no matching key is an error (rather than left in
-// place), so an unfilled prompt never reaches the agent silently.
+// Substitute replaces every {{VAR}} in tmpl with vars[VAR]. A placeholder with no
+// matching key is an error, so an unfilled prompt never reaches the agent silently.
 func Substitute(tmpl string, vars map[string]string) (string, error) {
 	var missing []string
 	out := placeholderRe.ReplaceAllStringFunc(tmpl, func(match string) string {

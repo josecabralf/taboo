@@ -10,10 +10,9 @@ import (
 )
 
 // runWizard collects and confirms agent, model, base, and repo through an
-// interactive huh form, prefilling each field from opts and writing the
-// confirmed values back into it. It is wired to env.Stdin/env.Stdout and is the
-// one part of init that needs a real TTY, so it stays thin and is exercised
-// manually rather than in unit tests.
+// interactive huh form, prefilling each field from opts and writing the confirmed
+// values back. It is the one part of init that needs a real TTY, so it stays thin
+// and is exercised manually rather than in unit tests.
 func runWizard(env Env, opts *initOptions) error {
 	agentOptions := make([]huh.Option[string], len(taboo.AgentNames()))
 	for i, n := range taboo.AgentNames() {
@@ -45,7 +44,7 @@ func runWizard(env Env, opts *initOptions) error {
 			Value(&opts.template),
 	}
 	// Multi-definition projects have no implicit default, so let the user pick
-	// which named .workshop/*.yaml to derive from when there is more than one.
+	// which named .workshop/*.yaml to derive from.
 	if named, err := taboo.SourceDefinitions(opts.repo); err == nil && len(named) >= 2 {
 		fields = append(fields, huh.NewSelect[string]().
 			Title("Which workshop definition should the agent derive from?").
@@ -54,8 +53,8 @@ func runWizard(env Env, opts *initOptions) error {
 	}
 	form := huh.NewForm(huh.NewGroup(fields...)).WithInput(env.Stdin).WithOutput(env.Stdout)
 	if err := form.Run(); err != nil {
-		// A deliberate Ctrl-C / Esc out of the form surfaces as a clean
-		// "canceled" rather than huh's raw "user aborted".
+		// A deliberate Ctrl-C / Esc surfaces as a clean `canceled` rather than huh's
+		// raw `user aborted`.
 		if errors.Is(err, huh.ErrUserAborted) {
 			return errors.New("canceled")
 		}
@@ -64,8 +63,7 @@ func runWizard(env Env, opts *initOptions) error {
 	return nil
 }
 
-// notEmpty returns a huh validator that rejects a blank (whitespace-only) value,
-// naming the field in the error.
+// notEmpty returns a huh validator that rejects a blank value, naming the field.
 func notEmpty(field string) func(string) error {
 	return func(s string) error {
 		if strings.TrimSpace(s) == "" {

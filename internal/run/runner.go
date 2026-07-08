@@ -20,14 +20,11 @@ import (
 type RunRequest struct {
 	// Branch is the new branch created for this run's worktree.
 	Branch string
-	// BaseRef, when set, makes Setup fetch origin and start the run's worktree
-	// branch from this ref (e.g. "origin/feature-x") instead of the host repo's
-	// HEAD. The fetch updates the ref (and origin/main, which the agent may merge)
-	// before the worktree is added. Empty = the default: a fresh branch off HEAD,
-	// no fetch.
+	// BaseRef, when set, makes Setup fetch origin and start the run's branch from
+	// this ref (e.g. "origin/feature-x") instead of the host repo's HEAD. Empty =
+	// a fresh branch off HEAD, no fetch.
 	BaseRef string
-	// Prompt is the agent's instruction, delivered via Config.Agent's command
-	// (in argv or on stdin, per the agent).
+	// Prompt is the agent's instruction, delivered via Config.Agent's command.
 	Prompt string
 	// Timeout bounds the agent exec (zero = no timeout).
 	Timeout time.Duration
@@ -36,35 +33,27 @@ type RunRequest struct {
 	Stderr io.Writer
 	// Hooks are lifecycle commands run at defined points during the run.
 	Hooks Hooks
-	// ResumeSession, if set, continues a prior agent session by its id instead of
-	// starting fresh: the id is passed to Config.Agent's command builder, which
-	// renders the agent's resume flag (e.g. OpenCode's --session). The session
-	// store is bind-mounted independently of the worktree and is stable across a
-	// workshop's runs (see sessionsDir), so a prior id resolves regardless of
-	// which worktree this run uses. Empty = a fresh session.
+	// ResumeSession, if set, continues a prior agent session by its id. The
+	// session store is bind-mounted independently of the worktree and is stable
+	// across a workshop's runs (see sessionsDir), so a prior id resolves
+	// regardless of which worktree this run uses. Empty = a fresh session.
 	ResumeSession string
 	// Fork, when set together with ResumeSession, forks that session into a new
-	// one (the agent's fork flag, e.g. OpenCode's --fork) so the source
-	// conversation is not mutated. Paired with a fresh Branch — Setup always
-	// allocates a new worktree per branch — this isolates a divergent continuation
-	// at both the session and filesystem levels. Fork without ResumeSession is
-	// meaningless and ignored. Agents with no native fork degrade to worktree-only
-	// isolation (see docs/adr/0003-session-resume-fork-command-contract.md).
+	// one so the source conversation is not mutated. Fork without ResumeSession is
+	// ignored. Agents with no native fork degrade to worktree-only isolation. See
+	// docs/adr/0003-session-resume-fork-command-contract.md.
 	Fork bool
 }
 
 // runResultHandle is a RunResult's private capability to read and tear down a
-// run without callers needing to know the worktree's on-disk layout. Exec's
-// rev-parse capture and Artifact read worktreePath through the handle; dispose
-// also uses repoPath and cmd to shell out to `git -C <repoPath> worktree remove`.
+// run without callers knowing the worktree's on-disk layout.
 type runResultHandle struct {
 	repoPath     string
 	worktreePath string
 	cmd          exec.Commander
 	// originHead is the ref HEAD pointed at before the branch strategy's
 	// `git switch -c` moved it: a branch short-name, or a commit SHA when
-	// originDetached. Dispose switches the checkout back to it — the inverse of
-	// Setup — so the run leaves the checkout where it found it and a later run
+	// originDetached. Dispose switches the checkout back to it so a later run
 	// branches from the same base instead of inheriting this run's commits. Empty
 	// for the worktree strategy, whose HEAD never moves.
 	originHead     string
@@ -77,10 +66,9 @@ type RunResult struct {
 	Commit     string // HEAD of the branch after the agent ran
 	BaseCommit string // HEAD of the fresh worktree at Setup time — the tip the branch started from
 	Output     string // captured agent exec stdout (stderr is not retained)
-	// Err is this run's failure, populated by Pool when fanning out so that one
-	// failed run does not abort the whole batch (see Pool.Run). The single-run
-	// primitives (Runner.Run/Setup/Exec) return their error separately and leave
-	// Err nil.
+	// Err is this run's failure, populated by Pool when fanning out so one failed
+	// run does not abort the batch (see Pool.Run). The single-run primitives
+	// return their error separately and leave Err nil.
 	Err error
 	// handle is the run's private capability to read its artifacts; nil until
 	// Setup populates it.
@@ -88,27 +76,22 @@ type RunResult struct {
 }
 
 // NewResultWithWorktree returns a RunResult whose Artifact reads files from an
-// existing worktree directory. Runner.Setup is the normal source of a result's
-// worktree handle; this lets a caller that already has a worktree on disk (or a
-// consumer test) attach one to a hand-built result so the Artifact API works
-// without a full run.
+// existing worktree directory, so a caller that already has one on disk can use
+// the Artifact API without a full run.
 func NewResultWithWorktree(worktree string) RunResult {
 	return RunResult{handle: &runResultHandle{worktreePath: worktree}}
 }
 
 // NewResultWithWorktreeCmd is NewResultWithWorktree plus a Commander, so a
-// consumer test can exercise Dispose (which shells out to git) against a
-// hand-built result without a full run. The repoPath is left empty; Dispose
-// passes it to `git -C`, where the test's fake Commander records the call
-// instead of running it.
+// consumer test can exercise Dispose against a hand-built result. The repoPath is
+// left empty; Dispose passes it to `git -C`.
 func NewResultWithWorktreeCmd(worktree string, cmd exec.Commander) RunResult {
 	return RunResult{handle: &runResultHandle{worktreePath: worktree, cmd: cmd}}
 }
 
-// Changed reports whether the run produced at least one new commit: the final
-// Commit differs from the BaseCommit the worktree started at. It is meaningful
-// only after a successful Exec — before Exec, Commit is empty and Changed
-// returns false.
+// Changed reports whether the run produced at least one new commit. It is
+// meaningful only after a successful Exec; before Exec, Commit is empty and
+// Changed returns false.
 func (r RunResult) Changed() bool {
 	return r.Commit != "" && r.Commit != r.BaseCommit
 }
@@ -119,10 +102,9 @@ func (r RunResult) Artifact(relpath string) (string, error) {
 	if r.handle == nil {
 		return "", errors.New("artifact: result has no worktree handle")
 	}
-	// Artifact is public API. Today's only caller passes a constant, but a future
-	// caller could pass untrusted input, so confine reads to the worktree: reject
-	// absolute paths and any ".." escape. (Lexical only — a symlink inside the
-	// worktree could still point out; tighten to os.Root if that becomes a risk.)
+	// Confine reads to the worktree against untrusted relpath: reject absolute
+	// paths and any ".." escape. Lexical only; a symlink inside the worktree could
+	// still point out, so tighten to os.Root if that becomes a risk.
 	if !filepath.IsLocal(relpath) {
 		return "", fmt.Errorf("artifact %q: path escapes worktree", relpath)
 	}
@@ -133,14 +115,11 @@ func (r RunResult) Artifact(relpath string) (string, error) {
 	return string(b), nil
 }
 
-// Dispose tears the run's workspace down, the inverse of Setup. For the worktree
-// strategy it removes the run's worktree with a non-force `git worktree remove`,
-// matching taboo clean's teardown; for the branch strategy it switches the
-// checkout's HEAD back to the ref Setup found it on. Either way it is explicit,
-// never automatic. A worktree already gone is success, not an error. The run's
-// branch ref and the workshop are left intact (persisting is the default) so a
-// later push or run can reuse them. It returns an error, rather than panicking,
-// when the result has no worktree handle.
+// Dispose tears the run's workspace down, the inverse of Setup. The worktree
+// strategy removes the run's worktree with a non-force `git worktree remove`; the
+// branch strategy switches the checkout's HEAD back to the ref Setup found it on.
+// A worktree already gone is success, not an error. The run's branch ref and the
+// workshop are left intact so a later push or run can reuse them.
 func (r RunResult) Dispose() error {
 	if r.handle == nil {
 		return errors.New("dispose: result has no worktree handle")
@@ -149,11 +128,10 @@ func (r RunResult) Dispose() error {
 }
 
 // dispose performs the worktree removal for Dispose. Idempotency lives here: a
-// worktree already gone (a prior Dispose, or a manual `git worktree remove`)
-// short-circuits to success before shelling out, so git's "not a working tree"
-// failure never surfaces. The branch strategy diverges first: its workspace IS
-// the checkout (worktreePath == repoPath), so there is no worktree to remove —
-// instead it restores HEAD (restoreHead) to where Setup found it.
+// worktree already gone short-circuits to success before shelling out, so git's
+// "not a working tree" failure never surfaces. The branch strategy diverges
+// first: its workspace IS the checkout (worktreePath == repoPath), so there is
+// nothing to remove and it restores HEAD instead.
 func (h *runResultHandle) dispose(ctx context.Context) error {
 	if h.worktreePath == h.repoPath {
 		return h.restoreHead(ctx)
@@ -171,16 +149,14 @@ func (h *runResultHandle) dispose(ctx context.Context) error {
 }
 
 // restoreHead returns the checkout to the ref it was on before the branch
-// strategy's `git switch -c` (originHead), the inverse of Setup. The run's branch
-// persists as the artifact — just as `git worktree remove` leaves a worktree's
-// branch behind — but the checkout goes back to its base, so a later run branches
-// from there rather than chaining off this run's tip.
+// strategy's `git switch -c` (originHead). The run's branch persists as the
+// artifact, but the checkout goes back to its base so a later run branches from
+// there rather than chaining off this run's tip.
 //
 // It refuses on a dirty *tracked* tree rather than let `git switch` carry the
-// run's uncommitted changes onto the base ref; the non-force `git worktree
-// remove` likewise refuses a dirty worktree. Untracked files are ignored, as in
-// the entry guard (ensureCleanCheckout). `git switch` to the ref you are already
-// on is a no-op, so a second Dispose is harmless.
+// run's uncommitted changes onto the base ref. Untracked files are ignored, as in
+// ensureCleanCheckout. `git switch` to the current ref is a no-op, so a second
+// Dispose is harmless.
 func (h *runResultHandle) restoreHead(ctx context.Context) error {
 	if h.originHead == "" {
 		return nil // nothing recorded to restore (e.g. a hand-built handle)
@@ -202,9 +178,8 @@ func (h *runResultHandle) restoreHead(ctx context.Context) error {
 	return h.cmd.Run(ctx, exec.Cmd{Name: "git", Args: args})
 }
 
-// gitCaptureCmd runs git through cmd and returns trimmed stdout. It mirrors
-// Runner.gitCapture for callers that hold only a Commander (the result handle),
-// not a *Runner.
+// gitCaptureCmd runs git through cmd and returns trimmed stdout, for callers that
+// hold only a Commander (the result handle), not a *Runner.
 func gitCaptureCmd(ctx context.Context, cmd exec.Commander, args []string) (string, error) {
 	out, err := exec.Output(ctx, cmd, exec.Cmd{Name: "git", Args: args})
 	return strings.TrimSpace(out), err
@@ -213,8 +188,7 @@ func gitCaptureCmd(ctx context.Context, cmd exec.Commander, args []string) (stri
 // capturedHead reports the ref HEAD points at in repo: the branch short-name when
 // HEAD is on a branch (detached == false), else the commit SHA (detached ==
 // true). The branch strategy records this before `git switch -c` so Dispose can
-// restore it, and the form drives how restoreHead switches back — by name, or
-// `--detach` by SHA.
+// restore it, by name or `--detach` by SHA.
 func capturedHead(ctx context.Context, cmd exec.Commander, repo string) (head string, detached bool, err error) {
 	if name, nerr := gitCaptureCmd(ctx, cmd, []string{"-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD"}); nerr == nil && name != "" {
 		return name, false, nil
@@ -238,17 +212,16 @@ func New(cfg workshop.Config, cmd exec.Commander) *Runner {
 }
 
 // fingerprintPath is where taboo records the digest of the derived def the live
-// workshop was last provisioned (launched/refreshed) with. It sits beside the
-// derived definition under ProjectDir.
+// workshop was last provisioned with, beside the derived definition under
+// ProjectDir.
 func (r *Runner) fingerprintPath() string {
 	return filepath.Join(r.cfg.ProjectDir, "workshop.fingerprint")
 }
 
 // readFingerprint returns the persisted provisioning fingerprint, or "" if none
-// is recorded — "" never matches a real digest, so an absent record forces a
-// reconcile, which is the safe default. A missing sidecar is the expected absent
-// case (fs.ErrNotExist -> "", nil); any OTHER read error is surfaced rather than
-// silently masquerading as absent and forcing a spurious refresh.
+// is recorded. "" never matches a real digest, so an absent record forces a
+// reconcile. A missing sidecar is the expected absent case; any other read error
+// is surfaced rather than masquerading as absent and forcing a spurious refresh.
 func (r *Runner) readFingerprint() (string, error) {
 	b, err := os.ReadFile(r.fingerprintPath())
 	if err != nil {
@@ -267,10 +240,9 @@ func (r *Runner) writeFingerprint(fingerprint string) error {
 	return os.WriteFile(r.fingerprintPath(), []byte(fingerprint), 0o600) //nolint:gosec
 }
 
-// materialize regenerates the .taboo artifacts a workshop launch depends on
-// (the seeded agent SDK, the derived definition, the project-SDK symlinks) and
-// returns the provisioning fingerprint. The pure provisioning logic lives in
-// internal/workshop; this is the thin Runner-side call into it.
+// materialize regenerates the .taboo artifacts a workshop launch depends on and
+// returns the provisioning fingerprint. The pure logic lives in
+// internal/workshop.
 func (r *Runner) materialize() (fingerprint string, err error) {
 	return workshop.Materialize(r.cfg)
 }
@@ -291,24 +263,22 @@ func (r *Runner) worktreePath(branch string) string {
 
 // sessionsDir is the host directory taboo binds into the workshop for a
 // session-capable agent's session files. It is stable across a workshop's runs
-// (not per-branch) so a session can be resumed regardless of which worktree a
-// later run uses.
+// (not per-branch) so a session resumes regardless of which worktree a later run
+// uses.
 //
-// Because it is shared by every run in a ProjectDir, it is safe only for
-// sequential runs against one workshop: concurrent runs sharing a ProjectDir
-// would share OpenCode's single SQLite session DB and could corrupt it. Pool
-// keeps this invariant by giving each concurrency slot its own ProjectDir (see
-// Pool.slotConfig), so parallel fan-out runs never share a session store.
+// Being shared by every run in a ProjectDir, it is safe only for sequential runs:
+// concurrent runs sharing a ProjectDir would share OpenCode's single SQLite
+// session DB and could corrupt it. Pool gives each slot its own ProjectDir (see
+// Pool.slotConfig) to keep this invariant.
 func (r *Runner) sessionsDir() string {
 	return filepath.Join(r.cfg.ProjectDir, "sessions")
 }
 
 // sessionEnv returns the explicit `--env NAME=VALUE` assignment that redirects a
 // session-capable agent's session-dir env var at the sessions mount target, or
-// nil for a sessionless agent. Both the agent exec and any in-workshop setup
-// hook apply it: hooks run after start with no swap before the exec, so a hook
-// that prepares session state must resolve the store to the same bound path the
-// agent later reads, or their views of it would silently diverge.
+// nil for a sessionless agent. Both the agent exec and any in-workshop setup hook
+// apply it, so a hook that prepares session state resolves the store to the same
+// bound path the agent later reads.
 func (r *Runner) sessionEnv() []workshop.EnvAssignment {
 	if spec, ok := r.cfg.Agent.Sessions(); ok {
 		return []workshop.EnvAssignment{{Name: spec.DirEnv, Value: workshop.SessionsTarget}}
@@ -316,9 +286,9 @@ func (r *Runner) sessionEnv() []workshop.EnvAssignment {
 	return nil
 }
 
-// Run executes one agent run end-to-end: Setup the workspace, then Exec the
-// agent once in it. It is the single-run primitive. The Orchestrator splits
-// these steps to Setup once and Exec repeatedly into the same workspace.
+// Run executes one agent run end-to-end: Setup the workspace, then Exec the agent
+// once in it. It is the single-run primitive; the Orchestrator splits the steps
+// to Setup once and Exec repeatedly into the same workspace.
 func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	res, err := r.Setup(ctx, req)
 	if err != nil {
@@ -328,12 +298,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 }
 
 // Setup ensures the workshop exists, prepares the run's workspace on req.Branch,
-// and swaps it into the workshop via stop/remount/start. It runs once per
-// workspace; the returned RunResult carries Branch + a handle for the subsequent
-// Exec call(s). It dispatches on cfg.Strategy: StrategyBranch works in place on
-// the checkout, while the worktree strategy (the default) uses a linked
-// worktree. An unrecognized strategy is rejected by Validate, not silently
-// routed. See CONTEXT.md.
+// and swaps it into the workshop. It runs once per workspace; the returned
+// RunResult carries Branch and a handle for the subsequent Exec call(s). It
+// dispatches on cfg.Strategy: StrategyBranch works in place on the checkout, the
+// worktree strategy (the default) uses a linked worktree. See CONTEXT.md.
 func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	res := RunResult{Branch: req.Branch}
 
@@ -343,7 +311,7 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	// Prepare the workspace on req.Branch with host-side git BEFORE the costly
 	// workshop launch, so a precondition failure (e.g. a dirty checkout) aborts
-	// cheaply. Symmetric across strategies — each prepares, then we swap.
+	// cheaply.
 	var workspace string
 	var err error
 	if r.cfg.Strategy == workshop.StrategyBranch {
@@ -363,12 +331,10 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 		return res, fmt.Errorf("ensure workshop: %w", err)
 	}
 
-	// Record the tip the run's branch started from, strategy-agnostically: it
-	// reads the freshly prepared workspace's HEAD — BaseRef's tip when set, else
-	// the checkout's own HEAD — so one capture covers both the worktree and branch
-	// strategies. Deliberately before the OnWorkshopReady hooks: a setup hook that
-	// commits counts as a change the run produced, not as part of the base the
-	// caller's repo contributed.
+	// Record the tip the run's branch started from by reading the prepared
+	// workspace's HEAD, so one capture covers both strategies. Before the
+	// OnWorkshopReady hooks: a setup hook that commits counts as a change the run
+	// produced, not part of the base the caller's repo contributed.
 	base, err := r.gitCapture(ctx, []string{"-C", workspace, "rev-parse", "HEAD"})
 	if err != nil {
 		return res, fmt.Errorf("rev-parse base HEAD: %w", err)
@@ -376,15 +342,13 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	res.BaseCommit = base
 
 	// Swap the prepared workspace into the ready workshop, layering the strategy's
-	// extra git mounts (none for the branch strategy; gitcommon + worktrees for the
-	// worktree strategy — the three-mount rule, see CONTEXT.md).
+	// extra git mounts (the three-mount rule, see CONTEXT.md).
 	if err := r.swapIntoWorkshop(ctx, workspace, workshop.StrategyGitMounts(r.cfg)...); err != nil {
 		return res, err
 	}
 
-	// The workshop is ready with the workspace mounted: run caller-supplied
-	// setup hooks before handing control to the agent. This is the end of
-	// Setup, so hooks run once per workspace, before any Exec.
+	// Run caller-supplied setup hooks before handing control to the agent. This is
+	// the end of Setup, so hooks run once per workspace, before any Exec.
 	if err := r.runHooks(ctx, workspace, req.Timeout, req.Stderr, req.Hooks.OnWorkshopReady); err != nil {
 		return res, fmt.Errorf("on-workshop-ready hook: %w", err)
 	}
@@ -392,17 +356,15 @@ func (r *Runner) Setup(ctx context.Context, req RunRequest) (RunResult, error) {
 	return res, nil
 }
 
-// prepareWorktree allocates a fresh linked worktree on req.Branch (off the
-// repo's HEAD, or off req.BaseRef after a fetch) and records the handle that
-// removes it on Dispose. It does host-side git only; Setup swaps the returned
-// worktree path — plus the repo's .git via StrategyGitMounts — into the workshop.
+// prepareWorktree allocates a fresh linked worktree on req.Branch (off the repo's
+// HEAD, or off req.BaseRef after a fetch) and records the handle that removes it
+// on Dispose. Host-side git only; Setup swaps the returned path into the workshop.
 func (r *Runner) prepareWorktree(ctx context.Context, req RunRequest, res *RunResult) (string, error) {
 	wt := r.worktreePath(req.Branch)
 	res.handle = &runResultHandle{repoPath: r.cfg.RepoPath, worktreePath: wt, cmd: r.cmd}
 	if req.BaseRef != "" {
 		// Update remote-tracking refs so BaseRef (and origin/main, which the agent
-		// may merge offline) are current, then start the worktree branch FROM
-		// BaseRef's tip rather than the host repo's HEAD.
+		// may merge offline) are current, then start the branch FROM BaseRef's tip.
 		if err := r.fetchOrigin(ctx, r.cfg.RepoPath); err != nil {
 			return "", err
 		}
@@ -410,7 +372,6 @@ func (r *Runner) prepareWorktree(ctx context.Context, req RunRequest, res *RunRe
 			return "", fmt.Errorf("add worktree from %s: %w", req.BaseRef, err)
 		}
 	} else {
-		// A fresh linked worktree on req.Branch, off the repo's current HEAD.
 		if err := r.git(ctx, []string{"-C", r.cfg.RepoPath, "worktree", "add", "-b", req.Branch, wt}); err != nil {
 			return "", fmt.Errorf("add worktree: %w", err)
 		}
@@ -419,28 +380,23 @@ func (r *Runner) prepareWorktree(ctx context.Context, req RunRequest, res *RunRe
 }
 
 // prepareBranch runs the agent in place on the checkout (r.cfg.RepoPath): it
-// creates req.Branch with `git switch -c` and returns the checkout path. The
-// checkout's .git is self-contained, so StrategyGitMounts adds no
-// git-common/worktrees mount and Setup binds only the checkout. Single-use per
-// checkout: a re-run chains off the prior tip and an existing branch name aborts
-// at `git switch -c`, so use the worktree strategy for a reusable checkout. See
-// CONTEXT.md.
+// creates req.Branch with `git switch -c` and returns the checkout path.
+// Single-use per checkout: a re-run chains off the prior tip and an existing
+// branch name aborts at `git switch -c`, so use the worktree strategy for a
+// reusable checkout. See CONTEXT.md.
 func (r *Runner) prepareBranch(ctx context.Context, req RunRequest, res *RunResult) (string, error) {
 	checkout := r.cfg.RepoPath
 	// worktreePath == repoPath marks the in-place branch strategy: Dispose reads it
-	// to take the restore-HEAD path (the workspace IS the checkout, nothing to
-	// remove).
+	// to take the restore-HEAD path.
 	res.handle = &runResultHandle{repoPath: checkout, worktreePath: checkout, cmd: r.cmd}
-	// Unlike the worktree path (which always branches into a fresh worktree), this
-	// switches the checkout in place, so a dirty tree is unsafe: uncommitted changes
-	// either abort `git switch -c` or are carried onto the agent's branch and
-	// contaminate the result. Refuse up front with a clear message.
+	// This switches the checkout in place, so a dirty tree is unsafe: uncommitted
+	// changes either abort `git switch -c` or are carried onto the agent's branch
+	// and contaminate the result. Refuse up front.
 	if err := r.ensureCleanCheckout(ctx, checkout); err != nil {
 		return "", err
 	}
 	// Record where HEAD is before `git switch -c` moves it, so Dispose can put it
-	// back (see runResultHandle.originHead). After the clean-tree guard: no point
-	// capturing a base we are about to refuse.
+	// back. After the clean-tree guard: no point capturing a base we will refuse.
 	head, detached, err := capturedHead(ctx, r.cmd, checkout)
 	if err != nil {
 		return "", err
@@ -448,7 +404,7 @@ func (r *Runner) prepareBranch(ctx context.Context, req RunRequest, res *RunResu
 	res.handle.originHead, res.handle.originDetached = head, detached
 	if req.BaseRef != "" {
 		// Update remote-tracking refs so BaseRef (and origin/main) are current,
-		// then create the run's branch FROM BaseRef's tip rather than HEAD.
+		// then create the branch FROM BaseRef's tip rather than HEAD.
 		if err := r.fetchOrigin(ctx, checkout); err != nil {
 			return "", err
 		}
@@ -464,8 +420,7 @@ func (r *Runner) prepareBranch(ctx context.Context, req RunRequest, res *RunResu
 }
 
 // fetchOrigin updates the repo's remote-tracking refs so a BaseRef (and
-// origin/main, which the agent may merge offline) are current before a branch or
-// worktree is created from them. Shared by both strategies' BaseRef arms.
+// origin/main) are current before a branch or worktree is created from them.
 func (r *Runner) fetchOrigin(ctx context.Context, repo string) error {
 	if err := r.git(ctx, []string{"-C", repo, "fetch", "origin"}); err != nil {
 		return fmt.Errorf("fetch origin: %w", err)
@@ -473,11 +428,10 @@ func (r *Runner) fetchOrigin(ctx context.Context, repo string) error {
 	return nil
 }
 
-// ensureCleanCheckout fails if the checkout has uncommitted *tracked* changes,
-// so the branch strategy never switches in place over a user's (or a prior
-// run's) pending work. Untracked files are ignored (--untracked-files=no):
-// taboo itself writes untracked artifacts into the checkout (e.g. .taboo/
-// sessions/), and `git switch -c` tolerates them anyway.
+// ensureCleanCheckout fails if the checkout has uncommitted *tracked* changes, so
+// the branch strategy never switches in place over pending work. Untracked files
+// are ignored (--untracked-files=no): taboo itself writes untracked artifacts into
+// the checkout, and `git switch -c` tolerates them anyway.
 func (r *Runner) ensureCleanCheckout(ctx context.Context, checkout string) error {
 	out, err := r.gitCapture(ctx, []string{"-C", checkout, "status", "--porcelain", "--untracked-files=no"})
 	if err != nil {
@@ -490,12 +444,10 @@ func (r *Runner) ensureCleanCheckout(ctx context.Context, checkout string) error
 }
 
 // swapIntoWorkshop binds workspace into the workshop, plus any extra git mounts
-// and a sessions mount for a session-capable agent. A workspace source is
-// non-empty, so remount is not atomic: the swap is stop -> remount workspace
-// [-> remount extra...] [-> remount sessions] -> start. The sessions mount lets
-// a session-capable agent's files write through and survive the swap, which
-// wipes the rootfs. See CONTEXT.md for the extra git mounts the worktree
-// strategy passes (workshop.StrategyGitMounts).
+// and a sessions mount for a session-capable agent. The swap is not atomic: stop
+// -> remount workspace [-> remount extra...] [-> remount sessions] -> start. The
+// sessions mount lets session files write through and survive the swap, which
+// wipes the rootfs. See CONTEXT.md.
 func (r *Runner) swapIntoWorkshop(ctx context.Context, workspace string, extra ...workshop.GitMount) error {
 	proj, ws, sdk := r.cfg.ProjectDir, r.cfg.Workshop, string(r.cfg.Agent.Name())
 	if err := r.workshop(ctx, workshop.VerbArgs(proj, "stop", ws)); err != nil {
@@ -525,11 +477,10 @@ func (r *Runner) swapIntoWorkshop(ctx context.Context, workspace string, extra .
 }
 
 // Exec runs the agent once in the worktree Setup prepared (read from the result's
-// handle), then records the agent's stdout and the resulting branch HEAD on the
-// returned result. Calling it more than once re-runs the agent in place; because the
-// agent commits through the bind-mount, each Exec continues from the prior
-// iteration's commit. The base argument supplies Branch + the worktree handle from
-// Setup.
+// handle), then records the agent's stdout and the resulting branch HEAD. Calling
+// it more than once re-runs the agent in place; because the agent commits through
+// the bind-mount, each Exec continues from the prior iteration's commit. The base
+// argument supplies Branch and the worktree handle from Setup.
 func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunResult, error) {
 	res := base
 	proj, ws := r.cfg.ProjectDir, r.cfg.Workshop
@@ -539,11 +490,10 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 	var captured strings.Builder
 	stdout := io.Writer(&captured)
 	if req.Stdout != nil {
-		// captured always receives the RAW stdout — it is what ParseOutput reduces
-		// to res.Output below. Only the live display path is wrapped: an agent that
-		// implements OutputRenderer (Claude Code, whose stream-json stdout is JSONL)
-		// has its sink pretty-printed into a transcript for the workflow log, so
-		// display and scan stay separate concerns.
+		// captured always receives the RAW stdout; only the live display path is
+		// wrapped. An agent that implements OutputRenderer (Claude Code, whose
+		// stream-json stdout is JSONL) has its sink pretty-printed into a transcript
+		// for the workflow log, keeping display and scan separate.
 		sink := req.Stdout
 		if rf, ok := r.cfg.Agent.(agent.OutputRenderer); ok {
 			sink = rf.Render(sink)
@@ -558,8 +508,7 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 	})
 	opts := workshop.ExecOptions{Cwd: workshop.WorkspaceTarget, Timeout: req.Timeout, EnvKeys: r.cfg.Agent.CredentialEnvKeys()}
 	// Point the agent's session-dir env var at the sessions mount target so its
-	// session files land in the bound host directory (the same dir Setup mounted
-	// and that survives the swap).
+	// session files land in the bound host directory that survives the swap.
 	opts.Env = r.sessionEnv()
 	execCmd := exec.Cmd{
 		Name:   "workshop",
@@ -575,21 +524,17 @@ func (r *Runner) Exec(ctx context.Context, req RunRequest, base RunResult) (RunR
 	if err := r.cmd.Run(ctx, execCmd); err != nil {
 		return res, fmt.Errorf("exec agent: %w", err)
 	}
-	// res.Output must always be the agent's clean final text — the orchestrator's
-	// completion-signal scan and <result>{…}</result> extraction only ever see
-	// this. The display tee above already forwarded the raw stdout live, so
-	// reducing the captured buffer here keeps display and scan as separate
-	// concerns. Agents that implement OutputParser (Claude Code, whose stream-json
-	// stdout interleaves tool calls) collapse it to their final text; the rest
-	// retain their stdout verbatim.
+	// res.Output must always be the agent's clean final text, which the
+	// orchestrator's completion-signal scan and result extraction see. Agents that
+	// implement OutputParser (Claude Code, whose stream-json stdout interleaves tool
+	// calls) collapse it to their final text; the rest retain stdout verbatim.
 	res.Output = captured.String()
 	if p, ok := r.cfg.Agent.(agent.OutputParser); ok {
 		res.Output = p.ParseOutput(res.Output)
 	}
 
-	// The agent committed in place through the bind-mount; capture the branch
-	// HEAD from the host worktree. The path comes from the handle, which Setup
-	// always populates; guard hand-built results that lack one.
+	// The agent committed in place through the bind-mount; capture the branch HEAD
+	// from the host worktree. Guard hand-built results that lack a handle.
 	if res.handle == nil {
 		return res, fmt.Errorf("exec: result has no worktree handle")
 	}
@@ -609,12 +554,10 @@ func (r *Runner) gitCapture(ctx context.Context, args []string) (string, error) 
 }
 
 // ensureWorkshop reconciles the long-lived workshop with the just-derived
-// definition, identified by fingerprint (the digest of the def materialize
-// wrote this run). Absent: launch fresh and record the fingerprint. Present and
-// unchanged: reuse as-is — the amortization fast path (the expensive launch is
-// minutes; this is the common case). Present but changed (the project's
-// workshop.yaml drifted, e.g. an added SDK): refresh the workshop to the new
-// def, then record the new fingerprint.
+// definition, identified by fingerprint. Absent: launch fresh and record it.
+// Present and unchanged: reuse as-is (the amortization fast path; the expensive
+// launch is minutes). Present but changed (the project's workshop.yaml drifted):
+// refresh the workshop to the new def, then record the new fingerprint.
 func (r *Runner) ensureWorkshop(ctx context.Context, fingerprint string) error {
 	proj, ws := r.cfg.ProjectDir, r.cfg.Workshop
 	if err := r.workshop(ctx, workshop.VerbArgs(proj, "info", ws)); err != nil {
@@ -630,10 +573,8 @@ func (r *Runner) ensureWorkshop(ctx context.Context, fingerprint string) error {
 	if recorded == fingerprint {
 		return nil // unchanged — reuse the existing workshop as-is
 	}
-	// `workshop refresh` reconciles the live workshop to the new
-	// definition (base image, SDKs, and plugs), which covers the #70 drift case
-	// (e.g. an added SDK). A remove+launch fallback is only worth adding if a real
-	// refresh-failure case appears.
+	// `workshop refresh` reconciles the live workshop to the new definition (base
+	// image, SDKs, and plugs), covering the #70 drift case.
 	if err := r.workshop(ctx, workshop.VerbArgs(proj, "refresh", ws)); err != nil {
 		return err
 	}

@@ -7,14 +7,12 @@ import (
 )
 
 // probe runs a single host command through the Commander seam and returns its
-// captured stdout and the run error. All probe command names and args are static
-// literals, so there is no untrusted-input injection concern.
+// captured stdout and the run error.
 func probe(ctx context.Context, env Env, name string, args ...string) (string, error) {
 	return taboo.Output(ctx, env.Cmd, taboo.Cmd{Name: name, Args: args})
 }
 
-// hostChecks assembles every always-on host check in display order, threading
-// the LXD installed→reachable dependency.
+// hostChecks assembles every always-on host check in display order.
 func hostChecks(ctx context.Context, env Env) []check {
 	checks := []check{checkWorkshop(ctx, env)}
 	checks = append(checks, checkLXD(ctx, env)...)
@@ -24,7 +22,7 @@ func hostChecks(ctx context.Context, env Env) []check {
 }
 
 // checkWorkshop verifies the workshop snap is runnable and at least the floor
-// version. It errors when the probe fails or the reported version is too old.
+// version.
 func checkWorkshop(ctx context.Context, env Env) check {
 	const name = "workshop"
 	out, err := probe(ctx, env, "workshop", "--version")
@@ -48,9 +46,8 @@ func checkWorkshop(ctx context.Context, env Env) check {
 }
 
 // checkLXD verifies LXD is installed (`lxc version`) and, only when installed,
-// reachable/initialized (`lxc info`). It returns the installed check first and
-// the reachable check second; when LXD is not installed the reachable check is a
-// dependent skip rather than a misleading probe result.
+// reachable (`lxc info`). When not installed the reachable check is a dependent
+// skip rather than a misleading probe result.
 func checkLXD(ctx context.Context, env Env) []check {
 	const (
 		installedName = "lxd"
@@ -70,7 +67,7 @@ func checkLXD(ctx context.Context, env Env) []check {
 	return []check{installed, ok(reachableName, "LXD reachable (`lxc info` ok)")}
 }
 
-// checkGit verifies git is on PATH via `git --version`.
+// checkGit verifies git is on PATH.
 func checkGit(ctx context.Context, env Env) check {
 	const name = "git"
 	if _, err := probe(ctx, env, "git", "--version"); err != nil {
@@ -80,7 +77,7 @@ func checkGit(ctx context.Context, env Env) check {
 }
 
 // checkGo probes the Go toolchain. It is only needed to scaffold/run main.go, so
-// a missing toolchain is a warning, never an error.
+// a missing toolchain is a warning, not an error.
 func checkGo(ctx context.Context, env Env) check {
 	const name = "go"
 	if _, err := probe(ctx, env, "go", "version"); err != nil {

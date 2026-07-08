@@ -14,11 +14,7 @@ import (
 	"github.com/josecabralf/taboo"
 )
 
-// newListCmd builds the `list` subcommand: a read-only, per-.taboo lifecycle
-// view of the project's workshops, worktrees, branches, and configured
-// workflows. It loads the project config and probes the host through the
-// Commander seam to report current state, mutating nothing; the workflows
-// section is computed from the config alone.
+// newListCmd builds the `list` subcommand.
 func newListCmd(env Env) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
@@ -49,12 +45,9 @@ type jsonWorktree struct {
 	Path   string `json:"path"`
 }
 
-// jsonWorkflow is one configured workflow entry in the --json document: the
-// name, whether it is the config's default-workflow, the effective agent and
-// model (the workflow's own value falling back to the top level, mirroring
-// referencedAgents/referencedModels precedence), the one-line prompt preview
-// (empty when the prompt is unavailable), whether the effective prompt
-// resolved, and the {{VAR}} placeholder names it references.
+// jsonWorkflow is one configured workflow entry in the --json document. The
+// effective agent and model fall back to the top level, mirroring
+// referencedAgents/referencedModels precedence.
 type jsonWorkflow struct {
 	Name            string   `json:"name"`
 	Default         bool     `json:"default"`
@@ -65,9 +58,9 @@ type jsonWorkflow struct {
 	Placeholders    []string `json:"placeholders"`
 }
 
-// jsonListResult is the machine shape `list --json` emits: the same four
-// sections the human view renders. Workflows is declared last so the three
-// pre-existing keys marshal byte-identically to before the section existed.
+// jsonListResult is the machine shape `list --json` emits. Workflows is declared
+// last so the three pre-existing keys marshal byte-identically to before the
+// section existed.
 type jsonListResult struct {
 	Workshops []jsonWorkshop `json:"workshops"`
 	Worktrees []jsonWorktree `json:"worktrees"`
@@ -75,13 +68,10 @@ type jsonListResult struct {
 	Workflows []jsonWorkflow `json:"workflows"`
 }
 
-// runList discovers and loads the project config, gathers the three lifecycle
-// sections (workshops, worktrees, branches) by probing the host once, plus the
-// workflows section computed from the loaded config alone (no host probes),
-// then emits them — as a JSON document when asJSON, otherwise as the human
-// view. A workshop-info probe error means that workshop is not provisioned
-// (normal, not fatal); a git probe error is fatal. The injected statFile
-// resolves prompt-file-backed workflow prompts, mirroring validate.
+// runList loads the project config, gathers the workshops/worktrees/branches
+// sections by probing the host, plus the workflows section from the config alone,
+// then emits them as JSON or the human view. A workshop-info probe error means
+// that workshop is not provisioned (not fatal); a git probe error is fatal.
 func runList(ctx context.Context, env Env, asJSON bool, statFile func(string) bool) error {
 	configPath, cfg, err := loadProjectConfig(env)
 	if err != nil {
@@ -118,9 +108,8 @@ func runList(ctx context.Context, env Env, asJSON bool, statFile func(string) bo
 	return nil
 }
 
-// renderListResult writes the human view of the gathered listing to env.Stdout:
-// a header followed by the workshops, worktrees, branches, and workflows
-// sections, each falling back to "  (none)" when empty.
+// renderListResult writes the human view of the gathered listing to env.Stdout,
+// each section falling back to `  (none)` when empty.
 func renderListResult(env Env, r jsonListResult) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo list — workshops, worktrees, branches, workflows")
 
@@ -137,11 +126,9 @@ func renderListResult(env Env, r jsonListResult) {
 	renderSection(env.Stdout, "workflows:", workflowLines(r.Workflows))
 }
 
-// workflowLines formats workflows as human section lines: the name (with a
-// "(default)" marker when it is the config's default-workflow), the effective
-// agent and model, the one-line prompt preview — "(unavailable)" when the
-// effective prompt did not resolve — and, when the prompt references any, its
-// {{VAR}} placeholder names.
+// workflowLines formats workflows as human section lines: name (with a
+// `(default)` marker), effective agent and model, the one-line prompt preview
+// (`(unavailable)` when it did not resolve), and any {{VAR}} placeholder names.
 func workflowLines(wfs []jsonWorkflow) []string {
 	lines := make([]string, 0, len(wfs))
 	for _, wf := range wfs {
@@ -162,17 +149,10 @@ func workflowLines(wfs []jsonWorkflow) []string {
 	return lines
 }
 
-// gatherWorkflows computes the workflows section from the loaded config alone —
-// no host probes. One entry per configured workflow, sorted by name, carrying
-// the default marker (name equals a non-empty cfg.DefaultWorkflow; unset marks
-// nothing, not even an empty-string-named workflow), the effective agent and
-// model (workflow value falling back to the top level, exactly the
-// referencedAgents/referencedModels precedence), and the effective prompt's
-// one-line summary plus {{VAR}} placeholders. The prompt resolves through
-// effectivePrompt with the injected statFile (workflow inline → workflow
-// prompt-file → defaults inline → defaults prompt-file); an absent or
+// gatherWorkflows computes the workflows section from the loaded config alone (no
+// host probes): one entry per configured workflow, sorted by name. An absent or
 // unreadable prompt-file degrades to PromptAvailable=false rather than failing
-// the listing — existence policing stays validate's job.
+// the listing; existence policing stays validate's job.
 func gatherWorkflows(cfg *taboo.ProjectConfig, base string, statFile func(string) bool) []jsonWorkflow {
 	out := []jsonWorkflow{}
 	for _, name := range sortedWorkflowNames(*cfg) {
@@ -194,7 +174,7 @@ func gatherWorkflows(cfg *taboo.ProjectConfig, base string, statFile func(string
 	return out
 }
 
-// worktreeLines formats worktrees as "<branch>  <path>" section lines, shared by
+// worktreeLines formats worktrees as `<branch>  <path>` section lines, shared by
 // the list view and clean's dry-run plan.
 func worktreeLines(wts []jsonWorktree) []string {
 	lines := make([]string, 0, len(wts))
@@ -205,8 +185,7 @@ func worktreeLines(wts []jsonWorktree) []string {
 }
 
 // renderSection writes one section of the human view: the header line, then the
-// pre-formatted lines indented two spaces, falling back to "  (none)" when there
-// are none.
+// lines indented two spaces, falling back to `  (none)` when there are none.
 func renderSection(w io.Writer, header string, lines []string) {
 	_, _ = fmt.Fprintln(w, header)
 	if len(lines) == 0 {
@@ -218,8 +197,7 @@ func renderSection(w io.Writer, header string, lines []string) {
 	}
 }
 
-// gatherWorkshops probes each project workshop's lifecycle state and returns one
-// entry per configured workshop.
+// gatherWorkshops probes each project workshop's lifecycle state.
 func gatherWorkshops(ctx context.Context, env Env, projectDir string, cfg *taboo.ProjectConfig) []jsonWorkshop {
 	out := []jsonWorkshop{}
 	for _, name := range projectWorkshops(cfg) {
@@ -228,18 +206,16 @@ func gatherWorkshops(ctx context.Context, env Env, projectDir string, cfg *taboo
 	return out
 }
 
-// gatherBranches probes `git -C <repo> for-each-ref --format=%(refname:short)
-// refs/heads/` and returns only the branches under the configured branch-prefix
-// (taboo's own run branches). An empty prefix returns every branch, since
-// taboo's branches are then indistinguishable from the user's. A git probe error
-// is fatal.
+// gatherBranches returns the repo's branches under the configured branch-prefix
+// (taboo's own run branches). An empty prefix returns every branch, since taboo's
+// branches are then indistinguishable from the user's. A git probe error is fatal.
 func gatherBranches(ctx context.Context, env Env, repo, prefix string) ([]string, error) {
 	out, err := probe(ctx, env, "git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
 	if err != nil {
 		return nil, fmt.Errorf("list branches in %q: %w", repo, err)
 	}
 	branches := []string{}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		name := strings.TrimSpace(line)
 		if name == "" || !strings.HasPrefix(name, prefix) {
 			continue
@@ -249,10 +225,8 @@ func gatherBranches(ctx context.Context, env Env, repo, prefix string) ([]string
 	return branches, nil
 }
 
-// gatherWorktrees probes `git -C <repo> worktree list --porcelain` and returns
-// only the worktrees taboo manages for this project (those under
-// <projectDir>/worktrees/). A git probe error is fatal: enumerating worktrees
-// requires a working repo.
+// gatherWorktrees returns only the worktrees taboo manages for this project
+// (those under <projectDir>/worktrees/). A git probe error is fatal.
 func gatherWorktrees(ctx context.Context, env Env, projectDir, repo string) ([]jsonWorktree, error) {
 	out, err := probe(ctx, env, "git", "-C", repo, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -270,15 +244,13 @@ func gatherWorktrees(ctx context.Context, env Env, projectDir, repo string) ([]j
 }
 
 // parseWorktrees splits porcelain output (blank-line-separated entries) into
-// jsonWorktree entries, reading the "worktree <path>" and "branch
-// refs/heads/<name>" lines into the Path and Branch fields. An entry with no
-// branch line (detached HEAD) gets branch "(detached)"; an entry with no path is
-// skipped.
+// jsonWorktree entries. An entry with no branch line (detached HEAD) gets branch
+// `(detached)`; an entry with no path is skipped.
 func parseWorktrees(out string) []jsonWorktree {
 	var wts []jsonWorktree
-	for _, block := range strings.Split(out, "\n\n") {
+	for block := range strings.SplitSeq(out, "\n\n") {
 		var wt jsonWorktree
-		for _, line := range strings.Split(block, "\n") {
+		for line := range strings.SplitSeq(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "worktree "):
 				wt.Path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
@@ -298,17 +270,16 @@ func parseWorktrees(out string) []jsonWorktree {
 }
 
 // underDir reports whether path is dir itself or nested under it, comparing
-// cleaned paths with a separator boundary so "/a/worktrees-x" is not treated as
-// being under "/a/worktrees".
+// cleaned paths with a separator boundary so `/a/worktrees-x` is not treated as
+// being under `/a/worktrees`.
 func underDir(path, dir string) bool {
 	path = filepath.Clean(path)
 	dir = filepath.Clean(dir)
 	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
 }
 
-// workshopState probes a single workshop's lifecycle state via `workshop
-// --project <projectDir> info <name>`. On success the captured YAML's status
-// field is the state; a probe error means the workshop is not provisioned yet.
+// workshopState probes a single workshop's lifecycle state. A probe error means
+// the workshop is not provisioned yet.
 func workshopState(ctx context.Context, env Env, projectDir, name string) string {
 	out, err := probe(ctx, env, "workshop", "--project", projectDir, "info", name)
 	if err != nil {
@@ -317,9 +288,8 @@ func workshopState(ctx context.Context, env Env, projectDir, name string) string
 	return parseWorkshopStatus(out)
 }
 
-// parseWorkshopStatus pulls the status field out of `workshop info` YAML. An
-// unparseable or empty status falls back to "unknown" rather than failing the
-// listing.
+// parseWorkshopStatus pulls the status field out of `workshop info` YAML,
+// falling back to `unknown` when it is unparseable or empty.
 func parseWorkshopStatus(out string) string {
 	var info struct {
 		Status string `yaml:"status"`
@@ -330,11 +300,9 @@ func parseWorkshopStatus(out string) string {
 	return info.Status
 }
 
-// projectWorkshops returns the workshop names taboo provisions for this
-// project: one per distinct agent referenced by the config, each derived as
-// <workshop>-<agent> (workshopName) — matching what `run` launches, so
-// the listing reflects the workshops that actually exist. Deterministic order
-// follows distinctProfiles (sorted by agent name).
+// projectWorkshops returns the workshop names taboo provisions for this project:
+// one per distinct referenced agent, derived as <workshop>-<agent>, matching what
+// `run` launches. Order follows distinctProfiles (sorted by agent name).
 func projectWorkshops(cfg *taboo.ProjectConfig) []string {
 	if cfg.Workshop == "" {
 		return nil

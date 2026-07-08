@@ -7,15 +7,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// readBuildInfo is the seam onto runtime/debug.ReadBuildInfo. It lets the
-// version command's output be driven in tests without depending on how the test
-// binary was built.
+// readBuildInfo is the seam onto runtime/debug.ReadBuildInfo, so the version
+// command's output can be driven in tests.
 var readBuildInfo = debug.ReadBuildInfo
 
-// newVersionCmd builds the `version` subcommand: it prints the taboo CLI's build
-// version, read from the binary's embedded module info. A binary installed with
-// `go install github.com/josecabralf/taboo/cli/taboo@vX` reports that version; a
-// plain local `go build` reports "(devel)".
+// newVersionCmd builds the `version` subcommand.
 func newVersionCmd(env Env) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
@@ -31,9 +27,9 @@ func newVersionCmd(env Env) *cobra.Command {
 	}
 }
 
-// cliVersion returns the CLI's display version: the main module's version from
-// the binary's embedded build info. It falls back to "unknown" when build info
-// is unavailable (e.g. a binary stripped of it) or carries no main version.
+// cliVersion returns the CLI's display version from the binary's embedded build
+// info, falling back to `unknown` when it is unavailable or carries no main
+// version.
 func cliVersion() string {
 	info, ok := readBuildInfo()
 	if !ok || info.Main.Version == "" {

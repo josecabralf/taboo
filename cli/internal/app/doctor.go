@@ -10,9 +10,8 @@ import (
 )
 
 // errChecksFailed is the sentinel doctor returns when any check is an error. The
-// report is fully printed before it is returned; executeRoot maps it to a
-// non-zero exit and prints it once to stderr as the report's one trailing
-// "Error:" line (the report itself stays on stdout, untouched).
+// report is printed to stdout first; executeRoot maps this to a non-zero exit and
+// the one trailing `Error:` line on stderr.
 var errChecksFailed = errors.New("doctor: one or more checks failed")
 
 // statFileExists is the real existence probe used to discover taboo.yaml.
@@ -21,10 +20,7 @@ func statFileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// newDoctorCmd builds the `doctor` subcommand. It gathers the always-on host
-// checks plus any config-aware checks, prints a human or --json report to
-// env.Stdout, and returns errChecksFailed when any check is an error so the
-// process exits non-zero.
+// newDoctorCmd builds the `doctor` subcommand.
 func newDoctorCmd(env Env) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
@@ -50,10 +46,9 @@ func newDoctorCmd(env Env) *cobra.Command {
 	return cmd
 }
 
-// renderReport writes the report in the requested format to env.Stdout under
-// title and surfaces only an encoding error; the failure verdict is signaled
-// separately by the caller via its own sentinel. The JSON document is generic
-// (no title), so title applies only to the human form.
+// renderReport writes the report to env.Stdout under title and surfaces only an
+// encoding error; the failure verdict is signaled separately by the caller's
+// sentinel; title applies only to the human form.
 func renderReport(env Env, asJSON bool, title string, checks []check) error {
 	if asJSON {
 		return writeJSON(env.Stdout, checks)

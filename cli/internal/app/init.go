@@ -17,8 +17,7 @@ import (
 // defaultBase is the workshop base image init assumes when none is supplied.
 const defaultBase = "ubuntu@24.04"
 
-// initOptions are the resolved-or-flag values init scaffolds from. They are
-// filled from flags, defaulted, and (interactively) confirmed via the wizard.
+// initOptions are the resolved-or-flag values init scaffolds from.
 type initOptions struct {
 	agent string
 	model string
@@ -30,22 +29,15 @@ type initOptions struct {
 	// sourceDefinition names which .workshop/*.yaml the project derives from;
 	// required (non-interactively) only when the repo has multiple definitions.
 	sourceDefinition string
-	// workflows selects which example workflows to seed; "none" opts out (default: seed fix and refactor).
+	// workflows selects which example workflows to seed; `none` opts out.
 	workflows string
-	// template selects the optional Go scaffold: "none" (default), "single", or "fanout".
+	// template selects the optional Go scaffold: `none`, `single`, or `fanout`.
 	template string
-	// force overwrites an existing .taboo when true.
-	force bool
-	// dryRun lists the files it would write and touches nothing when true.
-	dryRun bool
+	force    bool
+	dryRun   bool
 }
 
-// newInitCmd builds the `init` subcommand. It scaffolds a .taboo/ directory into
-// a target repo, collecting agent/model/base/repo (and, in the wizard, whether to
-// seed workflows and which Go template) interactively (a huh wizard) or
-// non-interactively (one flag per prompt). It writes taboo.yaml, .gitignore, and
-// .env.example, seeds the example workflow prompts unless opted out, optionally
-// scaffolds a Go main.go + go.mod, never launches a workshop, and prints next steps.
+// newInitCmd builds the `init` subcommand.
 func newInitCmd(env Env) *cobra.Command {
 	opts := initOptions{}
 	cmd := &cobra.Command{
@@ -72,10 +64,7 @@ func newInitCmd(env Env) *cobra.Command {
 	return cmd
 }
 
-// runInitCmd orchestrates init's resolve-then-scaffold flow: it applies
-// defaults, collects values (wizard or required-flag check), resolves the agent
-// profile, refuses to clobber an existing .taboo without --force, and either
-// previews (--dry-run) or writes the scaffold and prints next steps.
+// runInitCmd orchestrates init's resolve-then-scaffold flow.
 func runInitCmd(env Env, opts *initOptions) error {
 	// Reject an unknown --template before any side effects (wizard, writes).
 	if err := validateTemplate(opts.template); err != nil {
@@ -84,31 +73,21 @@ func runInitCmd(env Env, opts *initOptions) error {
 	if err := applyDefaults(env, opts); err != nil {
 		return err
 	}
-	// Resolve the repo path (absolute, workshop name derived) and gate on it
-	// BEFORE any interactive prompting or scaffold writes: taboo derives the
-	// agent's workshop from the project's own workshop definition, so a
-	// non-workshop repo is out of scope and must fail fast — not after the user
-	// has answered the whole wizard. finalize is side-effect-free path
-	// resolution, so running it here (rather than after collection) is safe and
-	// lets the gate see the absolute repo for both the interactive and
-	// non-interactive paths.
+	// Gate on the repo being a workshop project BEFORE any prompting or writes, so
+	// a non-workshop repo fails fast rather than after the wizard. finalize is
+	// side-effect-free path resolution, safe to run here.
 	if err := finalize(env, opts); err != nil {
 		return err
 	}
 	if err := requireWorkshopProject(opts.repo); err != nil {
 		return err
 	}
-	// Collect agent, model, and the source-definition choice: at a TTY any unset
-	// required value (or an unresolved multi-definition choice) is prompted via
-	// the wizard; non-interactively a missing one is a fast error naming its flag.
-	// A fully flagged invocation prompts for nothing and stays scriptable.
 	if err := collectValues(env, opts); err != nil {
 		return err
 	}
 	// Re-resolve in case the wizard changed repo (its prefill is editable): a
-	// relative path typed at the prompt must still be cleaned to an absolute one
-	// before the scaffold write. finalize is idempotent on an already-absolute
-	// path, so the common case is a no-op.
+	// relative path typed at the prompt must still be cleaned to absolute before
+	// the write. finalize is idempotent on an already-absolute path.
 	if err := finalize(env, opts); err != nil {
 		return err
 	}
@@ -124,13 +103,12 @@ func runInitCmd(env Env, opts *initOptions) error {
 	}
 
 	in := scaffoldInputs{
-		Workshop: opts.workshop,
-		Base:     opts.base,
-		Repo:     opts.repo,
-		Agent:    taboo.AgentName(opts.agent),
-		Model:    opts.model,
-		Profile:  profile,
-		// Seed the example workflows unless the user opted out with --workflows none.
+		Workshop:         opts.workshop,
+		Base:             opts.base,
+		Repo:             opts.repo,
+		Agent:            taboo.AgentName(opts.agent),
+		Model:            opts.model,
+		Profile:          profile,
 		SeedWorkflows:    opts.workflows != "none",
 		Template:         opts.template,
 		SourceDefinition: opts.sourceDefinition,
@@ -151,9 +129,8 @@ func runInitCmd(env Env, opts *initOptions) error {
 }
 
 // collectValues fills agent, model, and the source-definition selection. At a
-// TTY it prompts via the wizard when a required value is unset or a
-// multi-definition project still needs a choice; non-interactively it fails fast
-// naming the missing flag. A fully flagged invocation prompts for nothing.
+// TTY it prompts via the wizard for any unset required value; non-interactively
+// it fails fast naming the missing flag.
 func collectValues(env Env, opts *initOptions) error {
 	pending, err := pendingSourceDefinitions(opts)
 	if err != nil {
@@ -176,11 +153,9 @@ func collectValues(env Env, opts *initOptions) error {
 }
 
 // pendingSourceDefinitions returns the candidate names when the repo has several
-// named definitions and none was selected, so a choice is still required; it
-// returns nil once the selection is settled (explicit, single, or none). An
-// explicit selection is validated against the project's definitions here so a
-// typo'd --source-definition fails fast at init — listing the candidates —
-// rather than being written into taboo.yaml and only failing later at run.
+// named definitions and none was selected; nil once the selection is settled. An
+// explicit selection is validated here so a typo'd --source-definition fails fast
+// at init rather than later at run.
 func pendingSourceDefinitions(opts *initOptions) ([]string, error) {
 	named, err := taboo.SourceDefinitions(opts.repo)
 	if err != nil {
@@ -198,10 +173,10 @@ func pendingSourceDefinitions(opts *initOptions) ([]string, error) {
 	return named, nil
 }
 
-// validTemplates are the accepted --template values; "none" scaffolds no Go.
+// validTemplates are the accepted --template values; `none` scaffolds no Go.
 var validTemplates = []string{"none", "single", "fanout"}
 
-// validateTemplate rejects an unknown --template value, naming the valid set.
+// validateTemplate rejects an unknown --template value.
 func validateTemplate(t string) error {
 	if slices.Contains(validTemplates, t) {
 		return nil
@@ -209,8 +184,8 @@ func validateTemplate(t string) error {
 	return fmt.Errorf("unknown template %q; valid templates: %s", t, strings.Join(validTemplates, ", "))
 }
 
-// applyDefaults fills the pre-wizard defaults: base falls back to defaultBase
-// and repo falls back to the working directory.
+// applyDefaults fills the pre-wizard defaults: base to defaultBase, repo to the
+// working directory.
 func applyDefaults(env Env, opts *initOptions) error {
 	if opts.base == "" {
 		opts.base = defaultBase
@@ -226,8 +201,7 @@ func applyDefaults(env Env, opts *initOptions) error {
 }
 
 // requireValues enforces the non-interactive contract: agent and model must be
-// supplied. It returns one error naming every missing flag so a scripted caller
-// fixes them in a single pass.
+// supplied. It names every missing flag in one error.
 func requireValues(opts *initOptions) error {
 	var missing []string
 	if opts.agent == "" {
@@ -243,10 +217,9 @@ func requireValues(opts *initOptions) error {
 	return nil
 }
 
-// finalize resolves repo to an absolute path (a relative --repo is joined to
-// env.Getwd, the injected working directory), derives the workshop name from it
-// when unset, and guarantees a non-empty base (the wizard's base field has no
-// required validator, so an interactive user can clear it).
+// finalize resolves repo to an absolute path, derives the workshop name when
+// unset, and guarantees a non-empty base (the wizard's base field has no required
+// validator, so an interactive user can clear it).
 func finalize(env Env, opts *initOptions) error {
 	if !filepath.IsAbs(opts.repo) {
 		wd, err := env.Getwd()
@@ -266,10 +239,9 @@ func finalize(env Env, opts *initOptions) error {
 }
 
 // requireWorkshopProject enforces ADR 0009's scope: taboo derives the agent's
-// workshop from the project's own workshop definition — a root workshop.yaml or
-// a named .workshop/*.yaml — so a project with neither is unsupported: a hard,
-// early error before any scaffold write, not a fallback (taboo does not
-// synthesize a toolchain).
+// workshop from the project's own definition (a root workshop.yaml or a named
+// .workshop/*.yaml), so a project with neither is a hard early error, not a
+// fallback.
 func requireWorkshopProject(repo string) error {
 	if _, err := os.Stat(filepath.Join(repo, "workshop.yaml")); err == nil {
 		return nil
@@ -285,8 +257,7 @@ func requireWorkshopProject(repo string) error {
 }
 
 // resolveProfile maps the chosen agent/model to an AgentProfile, turning an
-// unknown agent into an error that lists the valid agent names (the fuzzy "did
-// you mean" lives in the separate validate slice).
+// unknown agent into an error listing the valid agent names.
 func resolveProfile(agent, model string) (taboo.AgentProfile, error) {
 	profile, err := taboo.NewProfile(taboo.AgentName(agent), model)
 	if err != nil {
@@ -300,15 +271,13 @@ func resolveProfile(agent, model string) (taboo.AgentProfile, error) {
 }
 
 // ensureWritable refuses to clobber an existing .taboo directory unless force is
-// set; with force, only the generated scaffold files are regenerated (any other
-// files the user added under .taboo are left untouched). It also rejects a
-// non-directory at that path so the failure is clear rather than an opaque
-// MkdirAll error. It runs before the dry-run branch so a preview is honest about
-// the refusal.
+// set. It rejects a non-directory at that path for a clear error rather than an
+// opaque MkdirAll failure, and runs before the dry-run branch so a preview is
+// honest about the refusal.
 func ensureWritable(projectDir string, force bool) error {
 	info, err := os.Stat(projectDir)
 	if err != nil {
-		return nil // absent (or unstattable) — writeScaffold creates it or surfaces the error
+		return nil // absent or unstattable: writeScaffold creates it or surfaces the error.
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%s exists but is not a directory; remove it and re-run init", projectDir)
@@ -319,8 +288,8 @@ func ensureWritable(projectDir string, force bool) error {
 	return nil
 }
 
-// printDryRun lists the absolute path of every file init would write, writing
-// nothing to disk.
+// printDryRun lists the absolute path of every file init would write, touching
+// nothing on disk.
 func printDryRun(env Env, projectDir string, files []scaffoldFile) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo init (dry run) — would write:")
 	for _, f := range files {
@@ -328,8 +297,7 @@ func printDryRun(env Env, projectDir string, files []scaffoldFile) {
 	}
 }
 
-// printNextSteps confirms the scaffold and prints the suggested follow-ups,
-// including an offer to run doctor. It never launches a workshop.
+// printNextSteps confirms the scaffold and prints the suggested follow-ups.
 func printNextSteps(env Env, opts *initOptions, projectDir string) {
 	envExample := filepath.Join(projectDir, ".env.example")
 	envFile := filepath.Join(projectDir, ".env")
@@ -342,14 +310,12 @@ func printNextSteps(env Env, opts *initOptions, projectDir string) {
 	_, _ = fmt.Fprintf(env.Stdout, "  2. Review %s and adjust as needed.\n",
 		filepath.Join(projectDir, "taboo.yaml"))
 	_, _ = fmt.Fprintln(env.Stdout, "  3. Run `taboo doctor` to verify your host is ready.")
-	// The trailing steps are each conditional, so collect the ones that apply and
-	// number them sequentially after the three fixed steps — no skipped numbers.
+	// The trailing steps are conditional; number them sequentially after the three
+	// fixed steps so there are no skipped numbers.
 	var extra []string
-	// Only suggest the first run when the example workflows were actually seeded.
 	if opts.workflows != "none" {
 		extra = append(extra, "Try `taboo run fix` (or edit prompts/ and taboo.yaml).")
 	}
-	// Only suggest building the Go scaffold when --template emitted one.
 	if opts.template != "none" {
 		extra = append(extra, fmt.Sprintf("Build the Go scaffold: cd %s && go mod tidy && go run .", projectDir))
 	}
@@ -358,12 +324,9 @@ func printNextSteps(env Env, opts *initOptions, projectDir string) {
 	}
 }
 
-// isInteractive reports whether stdin is a real terminal we can run the wizard
-// on. It returns true only when env.Stdin is an *os.File backed by a TTY, so a
-// piped, redirected (including < /dev/null), or in-memory stdin (as in tests and
-// scripts) is non-interactive and takes the flag-or-fail path. A bare
-// os.ModeCharDevice check is not enough here: /dev/null is a character device
-// too, so this uses a real isatty probe.
+// isInteractive reports whether stdin is a real terminal. It uses a real isatty
+// probe rather than an os.ModeCharDevice check, since /dev/null is a character
+// device too, so a redirected < /dev/null still reads as non-interactive.
 func isInteractive(env Env) bool {
 	if env.Interactive != nil {
 		return env.Interactive()
@@ -375,10 +338,9 @@ func isInteractive(env Env) bool {
 	return term.IsTerminal(f.Fd())
 }
 
-// deriveWorkshopName slugifies the repo's base directory name into a workshop
-// name: lowercased, with every run of non-[a-z0-9] characters collapsed to a
-// single dash and leading/trailing dashes trimmed. It falls back to "taboo" when
-// the result is empty.
+// deriveWorkshopName slugifies the repo's base directory name: lowercased, every
+// run of non-[a-z0-9] collapsed to a single dash, ends trimmed. It falls back to
+// `taboo` when the result is empty.
 func deriveWorkshopName(repo string) string {
 	base := strings.ToLower(filepath.Base(filepath.Clean(repo)))
 	var b strings.Builder

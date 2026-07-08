@@ -13,26 +13,18 @@ import (
 // Pool fans multiple agent runs out across a bounded set of workshops and
 // aggregates their results.
 //
-// Each concurrency slot owns a distinct, deterministically-named workshop
-// ("<Workshop>-<slot>") under its own project directory ("<ProjectDir>/slot-<slot>"),
-// so a slot's rendered definition, worktrees, and session store never collide
-// with another slot's. A slot processes its queued requests sequentially,
-// reusing its workshop across waves (the launch cost is paid once per slot).
-// Every request still gets its own branch and worktree, so concurrent runs never
-// touch each other's files — isolation is at the workshop level.
+// Each concurrency slot owns a distinct workshop ("<Workshop>-<slot>") under its
+// own project directory ("<ProjectDir>/slot-<slot>"), so a slot's definition,
+// worktrees, and session store never collide with another slot's. A slot
+// processes its queued requests sequentially, reusing its workshop across waves.
 //
-// The limit bounds both the number of concurrent workshops and the number of
-// worker goroutines: with more requests than the limit, requests queue and run
-// in waves. All slots share the base RepoPath (the two-mount rule pins the
-// gitcommon mount to the host .git), so Pool serializes `git worktree add` and
+// All slots share the base RepoPath, so Pool serializes `git worktree add` and
 // `git worktree remove` across slots; concurrent commits to distinct branches
 // are otherwise safe because refs are per-worktree and the object store is
-// append-only. Callers
-// MUST NOT run `git gc`/`repack`/`prune` against RepoPath while a Pool run is in
-// flight. A single Pool is not safe for concurrent Run calls (overlapping calls
-// would collide on the same slot directories and workshop names); serialize them
-// per Pool instance. Config.Agent must be safe for concurrent use — the built-in
-// profiles are immutable values.
+// append-only. Callers MUST NOT run `git gc`/`repack`/`prune` against RepoPath
+// while a Pool run is in flight. A single Pool is not safe for concurrent Run
+// calls (they would collide on the same slot directories and workshop names).
+// Config.Agent must be safe for concurrent use.
 type Pool struct {
 	cfg   workshop.Config
 	limit int
@@ -50,30 +42,26 @@ func NewPool(cfg workshop.Config, limit int, cmd exec.Commander) *Pool {
 }
 
 // slotConfig derives the Config for concurrency slot i: a distinct workshop name
-// and an isolated project directory, so the slot's definition, worktrees, and
-// sessions never collide with another slot's.
+// and an isolated project directory.
 func (p *Pool) slotConfig(slot int) workshop.Config {
 	c := p.cfg
 	c.Workshop = fmt.Sprintf("%s-%d", p.cfg.Workshop, slot)
 	c.ProjectDir = filepath.Join(p.cfg.ProjectDir, fmt.Sprintf("slot-%d", slot))
 	// Slots share one RepoPath, which the branch strategy can't (it switches the
-	// single checkout in place), so force worktree — each slot still gets its own.
+	// single checkout in place), so force worktree.
 	c.Strategy = workshop.StrategyWorktree
 	return c
 }
 
 // Run executes each request concurrently, bounded by the pool's limit, and
-// returns one RunResult per request in input order (results[i] corresponds to
-// reqs[i]). A request that fails does not abort the batch: its error is recorded
-// on the corresponding RunResult.Err and the remaining runs proceed. The
-// returned error is non-nil only when the batch cannot be started at all (the
-// context is already canceled); per-run failures never surface there.
+// returns one RunResult per request in input order. A request that fails does
+// not abort the batch: its error is recorded on RunResult.Err and the remaining
+// runs proceed. The returned error is non-nil only when the batch cannot be
+// started at all (the context is already canceled).
 //
 // If ctx is canceled after the batch starts, runs already in flight finish on
-// their own (cancellation reaches them through the Commander) and queued runs
-// are skipped: each skipped run's RunResult carries its Branch and ctx.Err() on
-// RunResult.Err, with no workshop or git commands issued for it. The batch error
-// stays nil; cancellation surfaces per run, like any other per-run failure.
+// their own and queued runs are skipped, each skipped run's RunResult carrying
+// its Branch and ctx.Err(). The batch error stays nil.
 func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -88,8 +76,7 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) 
 	}
 
 	// Slots share one RepoPath, so serialize the `git worktree add` and `git
-	// worktree remove` that mutate it; everything else (workshop swaps, agent
-	// exec) still runs concurrently.
+	// worktree remove` that mutate it; everything else runs concurrently.
 	cmd := serialCommander{inner: p.cmd, gitLock: &sync.Mutex{}}
 
 	type job struct {
@@ -106,10 +93,9 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) 
 			defer wg.Done()
 			r := New(p.slotConfig(slot), cmd)
 			for j := range jobs {
-				// Skip queued runs once ctx is canceled rather than dispatching
-				// commands that would only fail: record the cancellation per run
-				// so results stay in input order and the caller can tell skipped
-				// runs from completed ones.
+				// Skip queued runs once ctx is canceled, recording the
+				// cancellation per run rather than dispatching commands that
+				// would only fail.
 				if err := ctx.Err(); err != nil {
 					results[j.idx] = RunResult{Branch: j.req.Branch, Err: err}
 					continue
@@ -125,18 +111,16 @@ func (p *Pool) Run(ctx context.Context, reqs []RunRequest) ([]RunResult, error) 
 	}
 	close(jobs)
 	// Wait before returning so no worker writes results after the slice is handed
-	// back to the caller (the property that keeps Run race-free).
+	// back to the caller.
 	wg.Wait()
 
 	return results, nil
 }
 
 // serialCommander wraps a Commander and serializes concurrent `git worktree add`
-// and `git worktree remove` invocations behind gitLock. Both mutate the shared
-// repo's .git metadata (the worktrees registry, and refs on add), which is not
-// safe to run from several processes at once; every other command passes
-// straight through and may run concurrently. Pool uses it so fan-out across
-// slots that share one RepoPath stays correct.
+// and `git worktree remove` behind gitLock. Both mutate the shared repo's .git
+// metadata, which is not safe to run from several processes at once; every other
+// command passes straight through and may run concurrently.
 type serialCommander struct {
 	inner   exec.Commander
 	gitLock *sync.Mutex

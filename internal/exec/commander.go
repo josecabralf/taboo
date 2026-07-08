@@ -20,30 +20,25 @@ type Cmd struct {
 	Stderr io.Writer // optional; nil discards
 }
 
-// Commander runs host-side commands. It is the single side-effecting seam in
-// taboo: the real implementation shells out, while tests substitute a fake that
-// records invocations.
+// Commander runs host-side commands, the single side-effecting seam in taboo:
+// production shells out, tests substitute a fake that records invocations.
 type Commander interface {
 	Run(ctx context.Context, c Cmd) error
 }
 
-// execCommander is the production Commander: it shells out via os/exec.
+// execCommander is the production Commander; it shells out via os/exec.
 type execCommander struct{}
 
-// NewExecCommander returns a Commander that runs commands as real host
-// processes.
+// NewExecCommander returns a Commander that runs commands as real host processes.
 func NewExecCommander() Commander { return execCommander{} }
 
-// Output runs cmd with a fresh stdout buffer and returns the raw captured
-// stdout together with the run error. The string is untrimmed: callers that
-// need trimming do it themselves. Any Stdout already set on cmd is overwritten.
-// On failure the returned error carries the command's stderr, so a failed run's
-// diagnostics survive in the error the same way os/exec's cmd.Output() does.
+// Output runs cmd with a fresh stdout buffer and returns the untrimmed captured
+// stdout and the run error. Any Stdout already set on cmd is overwritten. On
+// failure the error carries the command's stderr, like os/exec's cmd.Output().
 func Output(ctx context.Context, c Commander, cmd Cmd) (string, error) {
 	var out strings.Builder
 	cmd.Stdout = &out
-	// Capture stderr only when the caller didn't wire its own, so a caller that
-	// supplied a Stderr keeps it.
+	// Capture stderr only when the caller didn't wire its own.
 	var stderr strings.Builder
 	if cmd.Stderr == nil {
 		cmd.Stderr = &stderr
@@ -56,15 +51,14 @@ func Output(ctx context.Context, c Commander, cmd Cmd) (string, error) {
 }
 
 func (execCommander) Run(ctx context.Context, c Cmd) error {
-	// Running caller-supplied commands is this type's entire purpose; the
-	// command and args originate from trusted definition config, not end users.
+	// Commands come from trusted definition config, not end users.
 	cmd := osexec.CommandContext(ctx, c.Name, c.Args...) // #nosec G204
 	cmd.Dir = c.Dir
 	cmd.Stdin = c.Stdin
 	cmd.Stdout = c.Stdout
 	cmd.Stderr = c.Stderr
-	// Inherit the host environment so `workshop exec --env NAME` can resolve
-	// values held by this process; append any extra entries.
+	// Inherit the host environment so `workshop exec --env NAME` can resolve values
+	// this process holds; append any extra entries.
 	if len(c.Env) > 0 {
 		cmd.Env = append(os.Environ(), c.Env...)
 	}

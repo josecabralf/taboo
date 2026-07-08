@@ -5,9 +5,8 @@ import (
 	"time"
 )
 
-// WorkshopName derives the per-agent workshop name from a base name and an
-// agent name, so taboo provisions one workshop per distinct agent (reused
-// across runs) rather than one per run.
+// WorkshopName derives the per-agent workshop name, so taboo provisions one
+// workshop per distinct agent (reused across runs) rather than one per run.
 func WorkshopName(base, agent string) string {
 	return base + "-" + agent
 }
@@ -17,7 +16,7 @@ func projectArgs(project string) []string {
 	return []string{"--project", project}
 }
 
-// VerbArgs builds a plain `workshop --project <p> <verb> <ws>` invocation — the
+// VerbArgs builds a plain `workshop --project <p> <verb> <ws>` invocation, the
 // shape shared by launch, stop, start, and info.
 func VerbArgs(project, verb, ws string) []string {
 	return append(projectArgs(project), verb, ws)
