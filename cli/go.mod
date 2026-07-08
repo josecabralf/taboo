@@ -11,7 +11,7 @@ retract (
 require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/x/term v0.2.1
-	github.com/josecabralf/taboo v0.1.3
+	github.com/josecabralf/taboo v0.2.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	gopkg.in/yaml.v3 v3.0.1
@@ -45,5 +45,3 @@ require (
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 )
-
-replace github.com/josecabralf/taboo => ../
