@@ -80,6 +80,34 @@ func TestMatchModelFormat_Copilot(t *testing.T) {
 	}
 }
 
+// Pi runs OpenRouter models addressed as provider/model slugs (it forwards
+// OPENROUTER_API_KEY), so a slash-form model is well-formed and a bare model
+// (no provider) warns — mirroring OpenCode, the other OpenRouter agent.
+func TestMatchModelFormat_Pi(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		wantOK bool
+	}{
+		{name: "provider slug ok", model: piModel, wantOK: true},
+		{name: "multi-segment slug ok", model: "openrouter/anthropic/claude-sonnet-4-6", wantOK: true},
+		{name: "surrounding space tolerated", model: "  openrouter/qwen  ", wantOK: true},
+		{name: "bare model warns", model: "sonnet", wantOK: false},
+		{name: "empty warns", model: "", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok, expected := MatchModelFormat(Pi, tt.model)
+			if ok != tt.wantOK {
+				t.Errorf("MatchModelFormat(pi, %q) ok = %v, want %v", tt.model, ok, tt.wantOK)
+			}
+			if expected == "" {
+				t.Errorf("MatchModelFormat(pi, %q) expected = empty, want a non-empty format hint", tt.model)
+			}
+		})
+	}
+}
+
 // An unknown agent is not the model heuristic's concern — the agent check fails
 // it separately. MatchModelFormat returns ok=true with no expected format so it
 // never layers a spurious model warning on top of the unknown-agent failure.

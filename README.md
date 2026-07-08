@@ -254,8 +254,8 @@ taboo core stays frozen.
 ## Status
 
 The library is feature-complete and tested. A run produces a named, isolated
-branch per worktree, driven by `RunWorkflow`, a resolved `Plan`, or `Pool`. Three
-agents are supported: `opencode`, `claude-code`, and `github-copilot`. The CLI covers `init`,
+branch per worktree, driven by `RunWorkflow`, a resolved `Plan`, or `Pool`. Four
+agents are supported: `opencode`, `claude-code`, `github-copilot`, and `pi`. The CLI covers `init`,
 `run`, `validate`, `doctor`, `list`, and `clean`; its `run` drives the iteration
 loop through `--iterations` and `--signal`. Fan-out, typed structured output,
 and lifecycle hooks are available through the Go API only. The current release

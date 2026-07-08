@@ -21,6 +21,7 @@ func TestNewProfile_KnownAgents(t *testing.T) {
 		{name: OpenCode, model: openCodeModel, wantName: OpenCode},
 		{name: ClaudeCode, model: claudeCodeModel, wantName: ClaudeCode},
 		{name: GitHubCopilot, model: copilotModel, wantName: GitHubCopilot},
+		{name: Pi, model: piModel, wantName: Pi},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.name), func(t *testing.T) {
@@ -75,7 +76,7 @@ func TestAgentNames_SortedAndComplete(t *testing.T) {
 	got := AgentNames()
 
 	// Complete: exactly the registered roster, nothing more, nothing missing.
-	want := []string{string(ClaudeCode), string(GitHubCopilot), string(OpenCode)}
+	want := []string{string(ClaudeCode), string(GitHubCopilot), string(OpenCode), string(Pi)}
 	if !slices.Equal(got, want) {
 		t.Errorf("AgentNames() = %v, want %v (complete roster)", got, want)
 	}
