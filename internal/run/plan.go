@@ -12,51 +12,44 @@ import (
 
 // PlanOverrides is the per-call override layer applied on top of the config when
 // resolving a Plan. A field's zero value means "unset": fall through to the
-// workflow, then the top-level/defaults layer. Numeric knobs gate on >0; strings
-// gate on non-empty. Stdout/Stderr are output sinks (nil = discard), not part of
-// the precedence chain.
+// workflow, then the defaults layer. Numeric knobs gate on >0; strings gate on
+// non-empty. Stdout/Stderr are output sinks (nil = discard), not part of the
+// precedence chain.
 type PlanOverrides struct {
 	Agent            agent.AgentName
 	Model            string
 	Timeout          time.Duration
 	MaxIterations    int
 	CompletionSignal string
-	// StopOnNoChange enables the commit-based early stop for this run. It is
-	// enable-only, not part of the first-non-zero precedence chain: the effective
-	// value is the OR of this field and the workflow/defaults layers, so a false
-	// here cannot disable a config-level enable.
+	// StopOnNoChange is enable-only, not part of the first-non-zero precedence
+	// chain: the effective value ORs this field with the workflow/defaults layers,
+	// so a false here cannot disable a config-level enable.
 	StopOnNoChange bool
 	Branch         string
-	// BaseRef is threaded straight onto RunRequest.BaseRef (a per-call concern with
-	// no config/workflow layer); see that field for the behavior. Empty = default.
+	// BaseRef is threaded straight onto RunRequest.BaseRef; see that field.
 	BaseRef            string
 	From               string
 	Prompt, PromptFile string
 	Stdout, Stderr     io.Writer
 }
 
-// Plan is a resolved, inspectable description of one run: the runner Config, the
-// looped Request, the originating workflow name ("" = ad-hoc), and the resolved
-// model string (a record of what NewProfile was built with — the field is
-// informational; the profile on Config.Agent is what the run actually uses).
-// Building it is pure (modulo reading a prompt file); running it via Run is the
-// sole side effect.
+// Plan is a resolved, inspectable description of one run. Building it is pure
+// (modulo reading a prompt file); running it via Run is the sole side effect.
 type Plan struct {
 	Config   workshop.Config
 	Request  OrchestratedRequest
 	Workflow string
-	Model    string
-	// Placeholders are the sorted, deduped {{VAR}} placeholder names of the
-	// resolved pre-substitution prompt. Request.Prompt is the post-substitution
-	// text, so this field is the only record of which variables the template
-	// referenced (a caller cannot recover them once substitution has filled
-	// them). Empty for a placeholder-free prompt.
+	// Model records what NewProfile was built with; it is informational, the
+	// profile on Config.Agent is what the run uses.
+	Model string
+	// Placeholders are the sorted, deduped {{VAR}} names of the pre-substitution
+	// prompt. Request.Prompt is the post-substitution text, so this is the only
+	// record of which variables the template referenced. Empty when none.
 	Placeholders []string
 }
 
 // Run executes the resolved Plan over cmd, driving the orchestrator loop. It is
-// the sole side effect of a Plan: building one is pure (modulo reading a prompt
-// file), running it dispatches the workshop/git commands.
+// the sole side effect of a Plan.
 func (p *Plan) Run(ctx context.Context, cmd exec.Commander) (OrchestratedResult, error) {
 	return NewOrchestrator(New(p.Config, cmd)).Run(ctx, p.Request)
 }

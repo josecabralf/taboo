@@ -1,5 +1,4 @@
-// Command taboo is the taboo CLI: it drives host-readiness checks and (later)
-// run orchestration through the pkg/taboo library boundary.
+// Package app implements the taboo CLI on top of the pkg/taboo library boundary.
 package app
 
 import (
@@ -13,8 +12,8 @@ import (
 	"github.com/josecabralf/taboo"
 )
 
-// Env carries the injected dependencies the CLI commands need so command
-// behavior is testable without spawning processes or a TTY.
+// Env carries the injected dependencies the CLI commands need so behavior is
+// testable without spawning processes or a TTY.
 type Env struct {
 	// Cmd is the pkg/taboo exec boundary every external probe runs through.
 	Cmd taboo.Commander
@@ -34,10 +33,9 @@ type Env struct {
 	Interactive func() bool
 }
 
-// newRootCmd builds the taboo root command, wires the injected env into its
-// streams, and registers every subcommand. SilenceErrors/SilenceUsage keep a
-// failure from dumping cobra usage/error noise; executeRoot prints the returned
-// error once to stderr and maps it to the exit code.
+// newRootCmd builds the taboo root command and registers every subcommand.
+// SilenceErrors/SilenceUsage keep a failure from dumping cobra noise; executeRoot
+// prints the returned error once and maps it to the exit code.
 func newRootCmd(env Env) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "taboo",
@@ -58,8 +56,8 @@ func newRootCmd(env Env) *cobra.Command {
 	return root
 }
 
-// Execute is the package-app entrypoint the thin cli/main.go delegates to. It
-// builds the real-process Env and exits with executeRoot's code.
+// Execute is the package entrypoint the thin cli/main.go delegates to. It builds
+// the real-process Env and exits with executeRoot's code.
 func Execute() {
 	env := Env{
 		Cmd:       taboo.NewExecCommander(),
@@ -73,13 +71,10 @@ func Execute() {
 }
 
 // executeRoot runs the root command against env and returns the process exit
-// code, printing a returned error once to env.Stderr as "Error: <err>". This is
-// the single seam where a command failure becomes user-visible: the root sets
-// SilenceErrors/SilenceUsage (no cobra echo, no usage dump), so RunE refusals,
-// sentinel verdicts, and cobra's own flag-parse/unknown-command errors all
-// surface here — exactly one line, stderr only, so stdout stays clean for the
-// machine (--json) surfaces. It returns an int instead of calling os.Exit so
-// the printing contract is unit-testable with an in-memory Env.
+// code, printing a returned error once to env.Stderr as `Error: <err>`. It is the
+// single seam where a command failure becomes user-visible: one line, stderr
+// only, so stdout stays clean for the machine (--json) surfaces. It returns an int
+// rather than calling os.Exit so the printing contract is unit-testable.
 func executeRoot(env Env) int {
 	if err := newRootCmd(env).ExecuteContext(context.Background()); err != nil {
 		_, _ = fmt.Fprintln(env.Stderr, "Error:", err)

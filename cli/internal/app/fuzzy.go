@@ -2,17 +2,12 @@ package app
 
 import "strings"
 
-// suggestAgent proposes the registered candidate that best corrects name, and
-// whether the correction is worth surfacing. It lowercases and trims both sides,
-// then ranks candidates so a prefix relationship (an abbreviation like "claude"
-// for "claude-code", or vice versa) always outranks a plain edit-distance match;
-// within the same class the smaller Levenshtein distance wins. A suggestion is
-// surfaced when the best candidate is a prefix match or its distance is within a
-// budget that scales with the input length (len/2 + 1) — close enough to be a
-// likely typo, not a coincidence. An empty name never suggests.
-//
-// The fuzzy policy lives in the CLI, not the registry (ADR 0005): the registry
-// only supplies the candidate set via taboo.AgentNames().
+// suggestAgent proposes the registered candidate that best corrects name and
+// whether the correction is worth surfacing. A prefix relationship outranks a
+// plain edit-distance match; within a class the smaller Levenshtein distance
+// wins. A suggestion surfaces on a prefix match or a distance within len/2+1. An
+// empty name never suggests. The fuzzy policy lives in the CLI, not the registry
+// (ADR 0005).
 func suggestAgent(name string, candidates []string) (string, bool) {
 	n := strings.ToLower(strings.TrimSpace(name))
 	if n == "" {
@@ -45,8 +40,7 @@ func suggestAgent(name string, candidates []string) (string, bool) {
 }
 
 // isBetterSuggestion reports whether candidate (prefix, dist) outranks the
-// current best: a prefix match beats a non-prefix one, and within the same
-// prefix class the smaller edit distance wins.
+// current best: a prefix match beats a non-prefix one, else the smaller distance.
 func isBetterSuggestion(prefix bool, dist int, bestPrefix bool, bestDist int) bool {
 	if prefix != bestPrefix {
 		return prefix
@@ -54,9 +48,8 @@ func isBetterSuggestion(prefix bool, dist int, bestPrefix bool, bestDist int) bo
 	return dist < bestDist
 }
 
-// levenshtein computes the edit distance (insertions, deletions, substitutions)
-// between a and b with the standard two-row dynamic-programming table. It is a
-// small self-contained helper so the CLI takes on no fuzzy-matching dependency.
+// levenshtein computes the edit distance between a and b with the two-row
+// dynamic-programming table. Self-contained so the CLI takes on no dependency.
 func levenshtein(a, b string) int {
 	ra, rb := []rune(a), []rune(b)
 	prev := make([]int, len(rb)+1)

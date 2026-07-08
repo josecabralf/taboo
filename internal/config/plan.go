@@ -27,9 +27,8 @@ var ErrNoPrompt = errors.New("taboo: no prompt configured")
 // in the override → workflow → top-level precedence chain.
 var ErrNoAgent = errors.New("taboo: no agent configured (set agent: on the workflow or a top-level agent:)")
 
-// Plan resolves the config, the named workflow, and the per-call overrides into
-// a single inspectable *run.Plan, replicating the CLI's resolvePlan precedence.
-// The agent profile is re-resolved here (not reused from the workflow) so
+// Plan resolves the config, workflow, and overrides into a *run.Plan, replicating
+// the CLI's resolvePlan precedence. The agent profile is re-resolved here so
 // override agent/model take effect.
 func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string, ov run.PlanOverrides) (*run.Plan, error) {
 	var wf Workflow
@@ -60,10 +59,9 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 	if err != nil {
 		return nil, err
 	}
-	// Record the template's placeholder set before substitution: the post-
-	// substitution prompt no longer carries the {{VAR}} names, and callers (the
-	// CLI's dry-run vars line and run warnings) need them to detect unused
-	// supplied keys and unfilled placeholders.
+	// Record the template's placeholders before substitution: the substituted
+	// prompt no longer carries the {{VAR}} names, and callers need them to detect
+	// unused supplied keys and unfilled placeholders.
 	placeholders := prompt.Placeholders(promptText)
 	if len(vars) > 0 {
 		promptText, err = prompt.Substitute(promptText, vars)
@@ -80,15 +78,13 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 
 	sourceDefinition := cmp.Or(ov.From, c.SourceDefinition)
 
-	// Precedence for the scalar loop knobs is override → workflow → defaults,
-	// first non-zero wins. defaults is non-nil here (defaulted just above), so
-	// cmp.Or covers every layer.
+	// Scalar loop knobs: override → workflow → defaults, first non-zero wins.
+	// defaults is non-nil here, so cmp.Or covers every layer.
 	timeout := cmp.Or(ov.Timeout, time.Duration(wf.Timeout), time.Duration(defaults.Timeout))
 	maxIter := cmp.Or(ov.MaxIterations, wf.MaxIterations, defaults.MaxIterations)
 	signal := cmp.Or(ov.CompletionSignal, wf.CompletionSignal, defaults.CompletionSignal)
-	// stop-on-no-change does NOT follow that chain: it is a boolean OR across
-	// the layers — opt-in only, no tri-state. Any layer can enable it, no layer
-	// can disable a lower layer's enable.
+	// stop-on-no-change is a boolean OR across layers, not the first-non-zero
+	// chain: opt-in only, any layer enables, none disables.
 	stopOnNoChange := ov.StopOnNoChange || wf.StopOnNoChange || defaults.StopOnNoChange
 
 	branch := resolveBranch(ov, defaults, workflow)
@@ -118,11 +114,9 @@ func (c *ProjectConfig) Plan(configDir, workflow string, vars map[string]string,
 	}, nil
 }
 
-// resolvePrompt applies the prompt precedence (first non-empty wins): inline
-// override → override prompt-file → workflow inline → workflow prompt-file →
-// defaults inline → defaults prompt-file → else ErrNoPrompt. A *-file value is
-// read from disk (resolved against configDir); a read error is wrapped and
-// returned (it is NOT ErrNoPrompt, which means nothing was configured anywhere).
+// resolvePrompt applies the prompt precedence (first non-empty wins): override
+// inline/file → workflow inline/file → defaults inline/file → else ErrNoPrompt. A
+// *-file value is read from disk; a read error is wrapped and is NOT ErrNoPrompt.
 func resolvePrompt(ov run.PlanOverrides, wf Workflow, defaults *RunDefaults, configDir string) (string, error) {
 	switch {
 	case ov.Prompt != "":
@@ -142,8 +136,8 @@ func resolvePrompt(ov run.PlanOverrides, wf Workflow, defaults *RunDefaults, con
 	}
 }
 
-// orDiscard returns w, or io.Discard when w is nil, so a nil output sink on
-// PlanOverrides safely becomes a no-op writer the runner can stream to.
+// orDiscard returns w, or io.Discard when w is nil, so a nil sink becomes a no-op
+// writer the runner can stream to.
 func orDiscard(w io.Writer) io.Writer {
 	if w == nil {
 		return io.Discard
@@ -151,17 +145,16 @@ func orDiscard(w io.Writer) io.Writer {
 	return w
 }
 
-// resolveRepoPath resolves the run's repo path, always absolute and
-// config-anchored. The cases: an explicit repo: override is used as-is when
-// absolute, else taken relative to configDir; a .taboo config dir resolves to its
-// parent; a bare taboo.yaml resolves to configDir itself. ProjectDir is then
-// repoPath/.taboo, structurally.
+// resolveRepoPath resolves the run's repo path, always absolute and config-
+// anchored: an explicit repo: is used as-is when absolute else relative to
+// configDir; a .taboo config dir resolves to its parent; a bare taboo.yaml
+// resolves to configDir itself.
 func resolveRepoPath(configDir, repo string) (string, error) {
 	base := configDir
 	switch {
 	case repo != "" && filepath.Clean(repo) != ".":
-		// An absolute repo: stands on its own; a relative one anchors to the
-		// config dir (filepath.Join would otherwise nest an absolute path under it).
+		// An absolute repo: stands alone; a relative one anchors to configDir (else
+		// filepath.Join would nest an absolute path under it).
 		base = repo
 		if !filepath.IsAbs(repo) {
 			base = filepath.Join(configDir, repo)
@@ -172,10 +165,9 @@ func resolveRepoPath(configDir, repo string) (string, error) {
 	return filepath.Abs(base)
 }
 
-// resolveBranch returns the override branch verbatim, or a fresh per-run branch
-// (prefix + label + timestamp + nanosecond) so back-to-back runs of the same
-// workflow never collide. The label is the workflow name, or "adhoc" for a
-// prompt-only run.
+// resolveBranch returns the override branch, or a fresh per-run branch (prefix +
+// label + timestamp + nanosecond) so back-to-back runs never collide. The label
+// is the workflow name, or "adhoc" for a prompt-only run.
 func resolveBranch(ov run.PlanOverrides, defaults *RunDefaults, workflow string) string {
 	if ov.Branch != "" {
 		return ov.Branch
@@ -188,11 +180,9 @@ func resolveBranch(ov run.PlanOverrides, defaults *RunDefaults, workflow string)
 	return fmt.Sprintf("%s%s-%s-%09d", defaults.BranchPrefix, label, now.Format("20060102-150405"), now.Nanosecond())
 }
 
-// FindConfig ascends from start (cleaned) looking for a config: at each dir it
-// probes <dir>/taboo.yaml first, then <dir>/.taboo/taboo.yaml, returning the
-// first existing path and true. It stops and returns "", false at the
-// filesystem root (where filepath.Dir(dir) == dir) with no hit. This folds the
-// CLI's findConfig into the library, statting the real filesystem directly.
+// FindConfig ascends from start looking for a config: at each dir it probes
+// taboo.yaml then .taboo/taboo.yaml, returning the first hit. It stops at the
+// filesystem root with "", false.
 func FindConfig(start string) (string, bool) {
 	dir := filepath.Clean(start)
 	for {
@@ -210,8 +200,7 @@ func FindConfig(start string) (string, bool) {
 	}
 }
 
-// fileExists reports whether p can be stat'd without error (presence-based, like
-// the CLI's discovery probe).
+// fileExists reports whether p can be stat'd without error.
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil

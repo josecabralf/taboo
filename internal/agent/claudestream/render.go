@@ -7,28 +7,17 @@ import (
 	"strings"
 )
 
-// NewRenderer returns an io.Writer that turns Claude Code's raw stream-json
-// stdout into a human-readable transcript and forwards it to out. It is the
-// display-side counterpart to ResultText: the runner tees the agent's stdout
-// into both a capture buffer (which ResultText later reduces to res.Output) and
-// this renderer (which writes the transcript to the workflow log), so display
-// and scan stay separate concerns.
+// NewRenderer returns an io.Writer that turns Claude Code's stream-json stdout
+// into a readable transcript and forwards it to out. It decodes `assistant` and
+// `user` events, emitting one line per text block, tool call (`> Name(arg)`), and
+// tool result; it skips the terminal `result` event (already shown by the
+// preceding assistant event) and any unrecognized event, so schema drift degrades
+// to a quieter transcript rather than a panic.
 //
-// The renderer decodes the envelope events that --output-format stream-json
-// emits without --include-partial-messages: an `assistant` event whose
-// message.content carries text and tool_use blocks, and a `user` event whose
-// content carries tool_result blocks. It emits one transcript line per assistant
-// text block, per tool call (`> Name(arg)`), and per tool result. It ignores the
-// `system` init event, the terminal `result` event (its text is already shown by
-// the preceding assistant event, so rendering it would duplicate the final
-// answer), and any event type or content block it does not recognize — so
-// event-schema drift degrades to a quieter transcript rather than a panic.
-//
-// Render buffers across Write calls: stdout arrives in arbitrary chunks that may
-// split a JSON line mid-event, so bytes are accumulated and only complete,
-// newline-terminated lines are decoded. A trailing line with no final newline is
-// left unrendered — in a well-formed stream that is only the result event, which
-// the renderer skips anyway — so no Close is needed.
+// It buffers across Write calls: stdout arrives in arbitrary chunks that may split
+// a JSON line, so only complete newline-terminated lines are decoded. A trailing
+// unterminated line is left unrendered (in a well-formed stream only the result
+// event, skipped anyway), so no Close is needed.
 func NewRenderer(out io.Writer) io.Writer {
 	return &renderer{out: out}
 }
@@ -39,9 +28,8 @@ type renderer struct {
 }
 
 // Write accumulates stdout and renders every complete line it now holds. It
-// always reports len(p) bytes consumed so it satisfies io.MultiWriter even when
-// a chunk decodes to nothing; a write error from out is returned but the byte
-// count is never short.
+// always reports len(p) consumed so it satisfies io.MultiWriter even when a chunk
+// decodes to nothing; a write error is returned but the byte count is never short.
 func (r *renderer) Write(p []byte) (int, error) {
 	r.buf = append(r.buf, p...)
 	for {
@@ -58,10 +46,9 @@ func (r *renderer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// streamEvent is the subset of a stream-json envelope the renderer reads. One
-// struct covers both `assistant` and `user` events; each content block populates
-// only the fields its own type defines (Text for text blocks, Name/Input for
-// tool_use, ToolResult/IsError for tool_result) and json leaves the rest zero.
+// streamEvent is the subset of a stream-json envelope the renderer reads; one
+// struct covers both `assistant` and `user` events, each block populating only
+// the fields its own type defines.
 type streamEvent struct {
 	Type    string    `json:"type"`
 	Message streamMsg `json:"message"`
@@ -86,9 +73,8 @@ func (r *renderer) renderLine(line []byte) error {
 	}
 	var e streamEvent
 	if json.Unmarshal(line, &e) != nil {
-		// Verbose diagnostics, a partial line, or a shape we don't model: skip it
-		// rather than fail the display. The result line is well-formed JSON but is
-		// intentionally not rendered here.
+		// Verbose diagnostics, a partial line, or an unmodeled shape; skip rather
+		// than fail the display. The result line is well-formed but not rendered here.
 		return nil
 	}
 	switch e.Type {
@@ -105,8 +91,8 @@ func (r *renderer) renderLine(line []byte) error {
 func (r *renderer) emitBlock(b streamBlock) error {
 	switch b.Type {
 	case "text":
-		// Assistant prose is shown verbatim (multi-line preserved); only the
-		// trailing newline is dropped so line() owns line termination.
+		// Assistant prose shown verbatim; only the trailing newline is dropped so
+		// line() owns line termination.
 		if s := strings.TrimRight(b.Text, "\n"); strings.TrimSpace(s) != "" {
 			return r.line(s)
 		}
@@ -130,10 +116,9 @@ func (r *renderer) line(s string) error {
 	return err
 }
 
-// toolSummary renders a tool_use input as a single readable argument. It prefers
-// the one field that best identifies the call (a shell command, a file path, a
-// search pattern) and falls back to the compact JSON of the whole input for
-// tools it has no salient key for, so an unfamiliar tool still shows something.
+// toolSummary renders a tool_use input as one readable argument, preferring the
+// field that best identifies the call and falling back to the compact JSON of the
+// whole input.
 func toolSummary(input json.RawMessage) string {
 	if len(input) == 0 {
 		return ""
@@ -153,10 +138,9 @@ func toolSummary(input json.RawMessage) string {
 	return oneLine(string(input))
 }
 
-// resultText pulls a one-line summary out of a tool_result's content. The
-// content is usually a plain string, but the Messages API also allows an array
-// of content blocks, so a string is handled first and then text blocks. It
-// reports ok=false when there is nothing worth showing.
+// resultText pulls a one-line summary from a tool_result's content. Content is
+// usually a string but the Messages API also allows an array of blocks, so a
+// string is handled first, then text blocks; ok=false when nothing is worth showing.
 func resultText(raw json.RawMessage) (string, bool) {
 	if len(raw) == 0 {
 		return "", false
@@ -179,10 +163,9 @@ func resultText(raw json.RawMessage) (string, bool) {
 	return "", false
 }
 
-// oneLine collapses a value to its first non-empty line and caps its length, so
-// a noisy tool argument or result (a multi-line file, a long command output)
-// contributes a single bounded transcript line. Truncation falls on a rune
-// boundary so a multi-byte character is never split.
+// oneLine collapses a value to its first non-empty line and caps its length, so a
+// noisy argument or result contributes one bounded line. Truncation falls on a
+// rune boundary so a multi-byte character is never split.
 func oneLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {

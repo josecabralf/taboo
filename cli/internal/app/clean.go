@@ -14,9 +14,7 @@ import (
 	"github.com/josecabralf/taboo"
 )
 
-// cleanOptions are the parsed flags for the clean subcommand: which lifecycle
-// artifacts to tear down (worktrees by default, workshops, branches) and the
-// safety rails (force, dry-run, yes).
+// cleanOptions are the parsed flags for the clean subcommand.
 type cleanOptions struct {
 	workshops     bool
 	all           bool
@@ -24,15 +22,12 @@ type cleanOptions struct {
 	force         bool
 	dryRun        bool
 	yes           bool
-	// asJSON emits the --dry-run teardown plan as a JSON object instead of the
-	// human preview; it requires dryRun (the mutating path has no single result
-	// document to emit).
+	// asJSON requires dryRun: the mutating path has no single result document to emit.
 	asJSON bool
 }
 
 // cleanPlan is the resolved set of taboo-managed artifacts clean will tear down,
-// discovered by probing the host before any mutation so a dry-run or confirmation
-// can describe exactly what would change.
+// discovered by probing the host before any mutation.
 type cleanPlan struct {
 	worktrees  []jsonWorktree
 	workshops  []string
@@ -43,10 +38,7 @@ type cleanPlan struct {
 	projectDir string
 }
 
-// newCleanCmd builds the `clean` subcommand: it tears down the taboo-managed
-// lifecycle artifacts of the current project. By default it removes only the
-// project's worktrees; --workshops or --all extend that to the workshops, and
-// --prune-branches deletes the run branches under the configured branch-prefix.
+// newCleanCmd builds the `clean` subcommand.
 func newCleanCmd(env Env) *cobra.Command {
 	opts := cleanOptions{}
 	cmd := &cobra.Command{
@@ -73,13 +65,10 @@ func newCleanCmd(env Env) *cobra.Command {
 }
 
 // runClean discovers the project config, gathers the taboo-managed artifacts in
-// scope into a plan, and executes the teardown. The default scope is worktrees;
-// --workshops or --all widen it.
+// scope into a plan, and executes the teardown.
 func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
-	// The machine view exists only for the dry-run plan: the mutating path
-	// streams per-artifact progress to stderr and has no single result document
-	// to emit. Refuse up front — before any config load or host probe — rather
-	// than silently ignore the flag.
+	// --json exists only for the dry-run plan; refuse it up front rather than
+	// silently ignore it.
 	if opts.asJSON && !opts.dryRun {
 		return errors.New("--json requires --dry-run")
 	}
@@ -94,14 +83,13 @@ func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
 		return err
 	}
 
-	// A dry run only describes the plan, so it short-circuits before the refusal
-	// gate: it never errors and never mutates anything.
+	// A dry run only describes the plan, so it short-circuits before the refusal gate.
 	if opts.dryRun {
 		return emitCleanPlan(env, plan, opts.asJSON)
 	}
 
-	// Refuse the whole command before any mutation when an unmerged branch would
-	// be pruned without --force, so a refused prune mutates nothing.
+	// Refuse before any mutation when an unmerged branch would be pruned without
+	// --force, so a refused prune mutates nothing.
 	if opts.pruneBranches && !opts.force && len(plan.unmerged) > 0 {
 		return fmt.Errorf("refusing to prune %d unmerged branch(es) without --force: %s",
 			len(plan.unmerged), strings.Join(plan.unmerged, ", "))
@@ -112,7 +100,6 @@ func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
 		return nil
 	}
 
-	// At a TTY, confirm before mutating; --yes skips the prompt.
 	if isInteractive(env) && !opts.yes && !confirmClean(env, plan) {
 		_, _ = fmt.Fprintln(env.Stderr, "Aborted.")
 		return nil
@@ -122,10 +109,9 @@ func runClean(ctx context.Context, env Env, opts *cleanOptions) error {
 }
 
 // resolveCleanScope loads the project config and resolves the context a clean
-// operates on: the parsed config, its directory, the absolute repo path, and
-// the run-branch prefix. An empty branch-prefix makes every branch a match, so
-// pruning would delete the user's own branches — refuse --prune-branches
-// rather than guess which are taboo's.
+// operates on: the parsed config, its directory, the absolute repo path, and the
+// run-branch prefix. An empty branch-prefix makes every branch a match, so
+// --prune-branches is refused rather than deleting the user's own branches.
 func resolveCleanScope(env Env, opts *cleanOptions) (cfg *taboo.ProjectConfig, projectDir, repo, prefix string, err error) {
 	configPath, cfg, err := loadProjectConfig(env)
 	if err != nil {
@@ -144,7 +130,7 @@ func resolveCleanScope(env Env, opts *cleanOptions) (cfg *taboo.ProjectConfig, p
 }
 
 // emitCleanPlan writes the dry-run teardown plan: the machine document under
-// --json, the human preview otherwise. The plan itself is identical either way.
+// --json, the human preview otherwise.
 func emitCleanPlan(env Env, plan cleanPlan, asJSON bool) error {
 	if asJSON {
 		return writeIndentedJSON(env.Stdout, cleanPlanToJSON(plan))
@@ -162,15 +148,15 @@ func branchPrefix(cfg *taboo.ProjectConfig) string {
 	return ""
 }
 
-// planEmpty reports whether a plan would tear nothing down — the signal to print
-// "Nothing to clean." rather than confirm and execute an empty teardown.
+// planEmpty reports whether a plan would tear nothing down, the signal to print
+// `Nothing to clean.` rather than execute an empty teardown.
 func planEmpty(plan cleanPlan) bool {
 	return len(plan.worktrees) == 0 && len(plan.workshops) == 0 && len(plan.branches) == 0 && len(plan.sdkLinks) == 0
 }
 
 // discoverSDKLinks returns the in-project-SDK quarantine symlinks taboo created
 // under <projectDir>/.workshop/. Safety invariant: it lists only entries it
-// confirms are symlinks via os.Lstat — never the seeded agent SDK (a real dir) —
+// confirms are symlinks via os.Lstat, never the seeded agent SDK (a real dir),
 // so the caller's os.Remove deletes a link, never a link's target.
 func discoverSDKLinks(projectDir string) []string {
 	dir := filepath.Join(projectDir, ".workshop")
@@ -190,10 +176,9 @@ func discoverSDKLinks(projectDir string) []string {
 	return links
 }
 
-// buildCleanPlan discovers the taboo-managed artifacts in scope by probing the
-// host before any mutation: worktrees by default, workshops under --workshops or
-// --all, and the prefix branches (partitioned by merge state) under
-// --prune-branches. Every probe is read-only.
+// buildCleanPlan discovers the taboo-managed artifacts in scope with read-only
+// host probes: worktrees by default, workshops under --workshops or --all, and
+// the prefix branches (partitioned by merge state) under --prune-branches.
 func buildCleanPlan(ctx context.Context, env Env, cfg *taboo.ProjectConfig, projectDir, repo, prefix string, opts *cleanOptions) (cleanPlan, error) {
 	plan := cleanPlan{repo: repo, projectDir: projectDir}
 	doWorktrees := opts.all || !opts.workshops
@@ -220,9 +205,8 @@ func buildCleanPlan(ctx context.Context, env Env, cfg *taboo.ProjectConfig, proj
 	return plan, nil
 }
 
-// provisionedWorkshops returns the names of the project's derived workshops that
-// actually exist on the host, skipping any not provisioned (there is nothing to
-// tear down for those).
+// provisionedWorkshops returns the project's derived workshops that exist on the
+// host, skipping any `not provisioned`.
 func provisionedWorkshops(ctx context.Context, env Env, projectDir string, cfg *taboo.ProjectConfig) []string {
 	var names []string
 	for _, w := range gatherWorkshops(ctx, env, projectDir, cfg) {
@@ -235,8 +219,8 @@ func provisionedWorkshops(ctx context.Context, env Env, projectDir string, cfg *
 }
 
 // planBranches lists the prefix run branches and partitions them by merge state:
-// a branch is queued for deletion when it is already merged or force is set,
-// otherwise it is returned as unmerged so the caller can refuse it.
+// merged (or force) branches are queued for deletion, the rest returned as
+// unmerged so the caller can refuse them.
 func planBranches(ctx context.Context, env Env, repo, prefix string, force bool) (toDelete, unmerged []string, err error) {
 	branches, err := gatherBranches(ctx, env, repo, prefix)
 	if err != nil {
@@ -256,14 +240,10 @@ func planBranches(ctx context.Context, env Env, repo, prefix string, force bool)
 	return toDelete, unmerged, nil
 }
 
-// jsonCleanPlan is the --dry-run --json machine shape: printCleanPlan's
-// sections as one flat object, so a script or CI teardown can inspect what a
-// real clean would remove — including which unmerged branches it would refuse —
-// without parsing the human preview. The worktrees key reuses the jsonWorktree
-// shape ({"branch","path"}), byte-compatible with list --json's worktrees
-// section. The unmergedBranches key is always present, unlike the human
-// plan's conditional section; every slice marshals as [] (never null), the
-// jsonListResult convention.
+// jsonCleanPlan is the --dry-run --json machine shape: printCleanPlan's sections
+// as one flat object. The worktrees key reuses jsonWorktree, byte-compatible with
+// list --json; unmergedBranches is always present (unlike the human plan's
+// conditional section), and every slice marshals as [] never null.
 type jsonCleanPlan struct {
 	Repo             string         `json:"repo"`
 	ProjectDir       string         `json:"projectDir"`
@@ -275,11 +255,8 @@ type jsonCleanPlan struct {
 }
 
 // cleanPlanToJSON projects a resolved teardown plan into the jsonCleanPlan
-// machine shape. It is pure (no Env, no I/O) — the dry-run branch owns the
-// encoding. The buildCleanPlan helpers can leave sections nil (out-of-scope
-// artifact kinds, or empty discovery like provisionedWorkshops and
-// discoverSDKLinks); normalization to empty slices lives here, not in
-// discovery, so each key marshals as [].
+// machine shape. Normalization of nil sections to empty slices lives here so each
+// key marshals as [].
 func cleanPlanToJSON(plan cleanPlan) jsonCleanPlan {
 	return jsonCleanPlan{
 		Repo:             plan.repo,
@@ -292,8 +269,7 @@ func cleanPlanToJSON(plan cleanPlan) jsonCleanPlan {
 	}
 }
 
-// printCleanPlan writes the --dry-run teardown preview: one section per artifact
-// kind, plus the branches skipped for being unmerged.
+// printCleanPlan writes the --dry-run teardown preview.
 func printCleanPlan(w io.Writer, plan cleanPlan) {
 	_, _ = fmt.Fprintln(w, "taboo clean (dry run) — would:")
 	renderSection(w, "remove worktrees:", worktreeLines(plan.worktrees))
@@ -305,9 +281,8 @@ func printCleanPlan(w io.Writer, plan cleanPlan) {
 	}
 }
 
-// confirmClean prints the teardown summary to stderr and reads a yes/no answer from
-// stdin. It returns true only for an affirmative "y"/"yes"; any read error other than
-// a clean EOF is treated as a decline.
+// confirmClean prints the teardown summary to stderr and reads a y/N answer,
+// returning true only on an affirmative reply.
 func confirmClean(env Env, plan cleanPlan) bool {
 	var parts []string
 	if n := len(plan.worktrees); n > 0 {
@@ -328,8 +303,8 @@ func confirmClean(env Env, plan cleanPlan) bool {
 }
 
 // mergedBranches probes `git -C <repo> branch --merged` and returns the set of
-// branch names already merged into the current HEAD. The leading "* "/"+ "/"  "
-// markers git prints are trimmed off each line.
+// branch names already merged into HEAD. The leading `* `/`+ `/`  ` markers git
+// prints are trimmed off each line.
 func mergedBranches(ctx context.Context, env Env, repo string) (map[string]bool, error) {
 	out, err := probe(ctx, env, "git", "-C", repo, "branch", "--merged")
 	if err != nil {
@@ -346,9 +321,9 @@ func mergedBranches(ctx context.Context, env Env, repo string) (map[string]bool,
 	return merged, nil
 }
 
-// executeClean tears the planned artifacts down through the host seam, best-effort:
-// a failure on one artifact warns to stderr and continues to the next, and every
-// failure is joined into the returned error so the command still exits non-zero.
+// executeClean tears the planned artifacts down through the host seam,
+// best-effort: a failure on one warns to stderr and continues, and every failure
+// is joined into the returned error so the command still exits non-zero.
 func executeClean(ctx context.Context, env Env, plan cleanPlan) error {
 	var errs []error
 	for _, wt := range plan.worktrees {
@@ -387,7 +362,7 @@ func executeClean(ctx context.Context, env Env, plan cleanPlan) error {
 }
 
 // hostRun runs one mutating host command through the Commander seam, routing both
-// streams to stderr so the command's progress and any tool output stay off stdout.
+// streams to stderr so tool output stays off stdout.
 func hostRun(ctx context.Context, env Env, name string, args ...string) error {
 	return env.Cmd.Run(ctx, taboo.Cmd{Name: name, Args: args, Stdout: env.Stderr, Stderr: env.Stderr})
 }

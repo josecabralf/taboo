@@ -10,33 +10,28 @@ import (
 
 // ErrForkLoop is returned by Orchestrator.Run when a forked run is given more
 // than one iteration. The loop re-execs the unchanged RunRequest, so Fork would
-// re-fork the source session on every iteration instead of continuing the fork —
-// and taboo cannot yet capture the new session id to resume it across iterations
-// (session-id capture is out of scope; see
-// docs/adr/0003-session-resume-fork-command-contract.md). A single-iteration
-// fork, or a multi-iteration plain resume, is allowed.
+// re-fork the source session every iteration instead of continuing the fork, and
+// taboo cannot yet capture the new session id to resume it across iterations. See
+// docs/adr/0003-session-resume-fork-command-contract.md.
 var ErrForkLoop = errors.New("taboo: fork cannot be combined with multiple iterations")
 
 // StopReason explains why an orchestrated run's iteration loop ended.
 type StopReason string
 
 const (
-	// StopMaxIterations means the loop exhausted OrchestratedRequest.MaxIterations
-	// without seeing the completion signal.
+	// StopMaxIterations means the loop exhausted MaxIterations without the signal.
 	StopMaxIterations StopReason = "max-iterations"
-	// StopSignal means the agent emitted the completion signal and the loop
-	// stopped early.
+	// StopSignal means the agent emitted the completion signal.
 	StopSignal StopReason = "signal"
-	// StopNoChange means stop-on-no-change was enabled and an iteration ended
-	// with the branch tip unmoved. This is a commit-based heuristic: it compares
-	// branch tips, so uncommitted or untracked worktree changes do not count as
+	// StopNoChange means an iteration ended with the branch tip unmoved. It
+	// compares branch tips, so uncommitted or untracked changes do not count as
 	// progress.
 	StopNoChange StopReason = "no-change"
 )
 
 // OrchestratedRequest describes a looped run: a single-run RunRequest plus the
-// loop's own knobs. These knobs live here rather than on RunRequest so the
-// single-run primitive (Runner.Run) keeps a clean contract.
+// loop's own knobs. The knobs live here rather than on RunRequest so the
+// single-run primitive keeps a clean contract.
 type OrchestratedRequest struct {
 	RunRequest
 	// MaxIterations bounds how many times the agent is re-run in the worktree
@@ -46,38 +41,29 @@ type OrchestratedRequest struct {
 	// the loop early (empty = no early stop).
 	CompletionSignal string
 	// StopOnNoChange stops the loop early when an iteration produces no new
-	// commit (the branch tip after Exec equals the tip before it). Off by
-	// default: a loop whose work product is output rather than commits would
-	// otherwise stop after one iteration.
+	// commit. Off by default: a loop whose work product is output rather than
+	// commits would otherwise stop after one iteration.
 	StopOnNoChange bool
 	// ResultExtractor, if set, parses a typed result from the final iteration's
-	// output once the loop ends (nil = skip; OrchestratedResult.Result stays nil).
+	// output once the loop ends (nil = skip).
 	ResultExtractor result.ResultExtractor
 }
 
-// OrchestratedResult reports the outcome of a looped run: the final iteration's
-// RunResult plus the loop's own bookkeeping. Because every iteration shares one
-// workspace and the agent commits in place, the final Commit is the branch HEAD
-// after the last iteration.
+// OrchestratedResult reports the outcome of a looped run.
 type OrchestratedResult struct {
 	RunResult
 	// Iterations is how many times the agent was run.
 	Iterations int
 	// StopReason explains why the loop ended. It is only meaningful when Run
-	// returns a nil error; on a Setup/Exec failure Run returns early and leaves
-	// StopReason at its zero value.
+	// returns a nil error; a Setup/Exec failure leaves it at its zero value.
 	StopReason StopReason
 	// Result is the value decoded by req.ResultExtractor from the final output,
 	// or nil if no extractor was configured. Callers type-assert it to their
-	// result type (e.g. res.Result.(MyResult)).
+	// result type.
 	Result any
 }
 
-// Orchestrator composes a Runner into an iteration loop. It prepares the
-// workspace once via Runner.Setup, then re-runs the agent with Runner.Exec up to
-// MaxIterations, stopping early once the completion signal appears in the
-// agent's stdout or — when StopOnNoChange is set — once an iteration leaves the
-// branch tip unmoved.
+// Orchestrator composes a Runner into an iteration loop.
 type Orchestrator struct {
 	runner *Runner
 }
@@ -88,19 +74,16 @@ func NewOrchestrator(runner *Runner) *Orchestrator {
 }
 
 // Run prepares the workspace once, then re-execs the agent up to
-// req.MaxIterations times in that same workspace, stopping early once the
-// completion signal appears in the agent's stdout or, with req.StopOnNoChange
-// set, once an iteration produces no new commit. On a Setup or Exec failure it
-// returns the populated result so far alongside the error, with StopReason left
-// at its zero value; StopReason is only meaningful when the returned error is nil.
+// req.MaxIterations times in it, stopping early on the completion signal or,
+// with req.StopOnNoChange, on an iteration that produces no new commit. On a
+// Setup or Exec failure it returns the result so far alongside the error.
 func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (OrchestratedResult, error) {
 	maxIter := req.MaxIterations
 	if maxIter < 1 {
 		maxIter = 1
 	}
-	// A looped fork would re-fork the source session each iteration (every Exec
-	// rebuilds CommandOptions from the same req), not continue the fork, so reject
-	// it up front before the expensive Setup. See ErrForkLoop.
+	// A looped fork would re-fork the source session each iteration, not continue
+	// it, so reject it before the expensive Setup. See ErrForkLoop.
 	if req.Fork && maxIter > 1 {
 		return OrchestratedResult{}, ErrForkLoop
 	}
@@ -126,10 +109,7 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 			return o.extract(req, res)
 		}
 		// The signal check keeps priority: an iteration that both prints the
-		// sentinel and lands no commit reports StopSignal. Like the signal check,
-		// this runs after every Exec including the last — the reason names why
-		// the loop ended, and the budget running out at the same moment doesn't
-		// change that the tip stopped moving.
+		// sentinel and lands no commit reports StopSignal.
 		if req.StopOnNoChange && rr.Commit == prev {
 			res.StopReason = StopNoChange
 			return o.extract(req, res)
@@ -141,11 +121,10 @@ func (o *Orchestrator) Run(ctx context.Context, req OrchestratedRequest) (Orches
 	return o.extract(req, res)
 }
 
-// extract runs req.ResultExtractor once over the final iteration's output and
-// records the typed value on res.Result. It is the single post-loop step shared
-// by all three stop paths. On extraction failure res stays fully populated (the
-// agent's commit is never discarded) and the wrapped sentinel error is
-// returned alongside it.
+// extract runs req.ResultExtractor once over the final output and records the
+// typed value on res.Result, the single post-loop step shared by all stop paths.
+// On extraction failure res stays fully populated (the commit is never discarded)
+// and the error is returned alongside it.
 func (o *Orchestrator) extract(req OrchestratedRequest, res OrchestratedResult) (OrchestratedResult, error) {
 	if req.ResultExtractor == nil {
 		return res, nil

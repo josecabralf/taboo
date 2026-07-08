@@ -19,14 +19,12 @@ import (
 //go:embed sdk
 var sdkFS embed.FS
 
-// Materialize regenerates the .taboo artifacts a workshop launch depends on:
-// the seeded agent SDK, the derived definition, and the project-SDK symlinks. It
-// runs at the start of every Setup, before ensureWorkshop, so the artifacts exist
-// before any launch and self-heal each run (single source of truth; see ADR 0009).
-// The source is read ONCE here. The definition is written BEFORE reconcile so a
-// malformed source fails without touching symlinks. It returns the fingerprint
-// (the digest the live workshop is provisioned against) for the caller to compare
-// against the persisted record.
+// Materialize regenerates the .taboo artifacts a workshop launch depends on: the
+// seeded agent SDK, the derived definition, and the project-SDK symlinks. It runs
+// at the start of every Setup so the artifacts self-heal each run (see ADR 0009).
+// The definition is written BEFORE reconcile so a malformed source fails without
+// touching symlinks. It returns the fingerprint for the caller to compare against
+// the persisted record.
 func Materialize(cfg Config) (fingerprint string, err error) {
 	srcPath, err := sourceDefinitionPath(cfg)
 	if err != nil {
@@ -51,27 +49,23 @@ func Materialize(cfg Config) (fingerprint string, err error) {
 	return fingerprint, nil
 }
 
-// sourceDefinitionPath is the project's own workshop definition that taboo
-// derives the agent's workshop from. It lives under the repo root (RepoPath),
-// the file the project's human developers already use — never under ProjectDir.
-// Resolution (single-def auto / named selection) is delegated to
-// resolveSourceDefinition, keyed by the recorded SourceDefinition selection.
+// sourceDefinitionPath is the project's own workshop definition that taboo derives
+// the agent's workshop from. It lives under the repo root (RepoPath), never under
+// ProjectDir. Resolution is delegated to resolveSourceDefinition.
 func sourceDefinitionPath(cfg Config) (string, error) {
 	return resolveSourceDefinition(cfg.RepoPath, cfg.SourceDefinition)
 }
 
-// definitionPath is where taboo writes the derived workshop definition. Workshop
-// resolves a launch from the project dir's root workshop.yaml, and taboo launches
-// with --project <ProjectDir>, so the derived definition lives at
-// <ProjectDir>/workshop.yaml.
+// definitionPath is where taboo writes the derived workshop definition. Taboo
+// launches with --project <ProjectDir> and workshop resolves the launch from the
+// project dir's root workshop.yaml, so it lives at <ProjectDir>/workshop.yaml.
 func definitionPath(cfg Config) string {
 	return filepath.Join(cfg.ProjectDir, "workshop.yaml")
 }
 
-// writeDefinition derives the agent's workshop definition from source (the
-// project's own workshop.yaml bytes), writes it to definitionPath, and returns
-// its fingerprint (the digest the live workshop is provisioned against) plus the
-// source's in-project SDK names (for the caller to reconcile into symlinks).
+// writeDefinition derives the agent's workshop definition from source, writes it
+// to definitionPath, and returns its fingerprint plus the source's in-project SDK
+// names (for the caller to reconcile into symlinks).
 func writeDefinition(cfg Config, source []byte) (fingerprint string, projectNames []string, err error) {
 	out, projectNames, err := deriveDefinition(cfg, source)
 	if err != nil {
@@ -89,30 +83,25 @@ func writeDefinition(cfg Config, source []byte) (fingerprint string, projectName
 	return fingerprintOf(out), projectNames, nil
 }
 
-// fingerprintOf returns a stable hex digest of a derived workshop definition. It
-// is the cheap drift key: equal digests mean the live workshop was last
-// provisioned with this exact def, so it can be reused without a refresh.
+// fingerprintOf returns a stable hex digest of a derived workshop definition, the
+// drift key: equal digests mean the live workshop was last provisioned with this
+// exact def and can be reused without a refresh.
 func fingerprintOf(def string) string {
 	sum := sha256.Sum256([]byte(def))
 	return hex.EncodeToString(sum[:])
 }
 
-// seedSDK writes the configured agent's embedded SDK into the project's
-// .workshop directory (e.g. .workshop/opencode/sdk.yaml + hooks/...), so the
-// rendered definition's "project-<agent>" reference resolves.
+// seedSDK writes the configured agent's embedded SDK into the project's .workshop
+// directory, so the rendered definition's "project-<agent>" reference resolves.
 func seedSDK(cfg Config) error {
 	const sdkRoot = "sdk"
-	// Walk only the configured agent's subtree, stripping just the leading
-	// "sdk/" so the agent-name segment survives. The destination layout stays
-	// .workshop/<agent>/..., which is what "project-<agent>" resolves against.
+	// Walk only the configured agent's subtree, stripping just the leading "sdk/"
+	// so the agent-name segment survives and the destination stays .workshop/<agent>/.
 	root := path.Join(sdkRoot, string(cfg.Agent.Name()))
 	return fs.WalkDir(sdkFS, root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		// Every walked entry is rooted at sdk/<agent>, so trimming the literal
-		// "sdk/" keeps the <agent>/... layout; the root entry itself becomes
-		// "<agent>", a real dir that MkdirAll handles.
 		rel := strings.TrimPrefix(p, sdkRoot+"/")
 		dst := filepath.Join(cfg.ProjectDir, ".workshop", rel)
 		if d.IsDir() {
@@ -134,10 +123,10 @@ func seedSDK(cfg Config) error {
 }
 
 // reconcileProjectSDKs makes <projectDir>/.workshop/<name> a symlink to
-// <repoPath>/.workshop/<name> for each wanted name, and prunes stale symlinks
-// (links whose name is no longer wanted). Safety invariant: it only ever creates
-// or os.Removes entries it confirms are symlinks via os.Lstat — never a real dir
-// (such as the seeded agent SDK) and never a link's target.
+// <repoPath>/.workshop/<name> for each wanted name, and prunes stale symlinks.
+// Safety invariant: it only ever creates or os.Removes entries it confirms are
+// symlinks via os.Lstat, never a real dir (such as the seeded agent SDK) or a
+// link's target.
 func reconcileProjectSDKs(projectDir, repoPath string, names []string) error {
 	dir := filepath.Join(projectDir, ".workshop")
 	if err := os.MkdirAll(dir, 0o750); err != nil {

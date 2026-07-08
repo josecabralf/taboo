@@ -1,15 +1,11 @@
-// Package config parses taboo.yaml — the single source of truth read by both the
-// CLI and Go callers that drive runs through pkg — and resolves it, together with
-// a named workflow and per-call overrides, into a runnable *run.Plan.
+// Package config parses taboo.yaml, the single source of truth read by the CLI
+// and by Go callers driving runs through pkg, and resolves it plus a workflow and
+// overrides into a *run.Plan.
 //
-// It sits at the top of the internal DAG: it imports agent (profile resolution),
-// prompt (variable substitution), workshop (workshop naming + the runner Config),
-// and run (the Plan/PlanOverrides types and the Plan it produces). The edge to
-// run is forced by a Go mechanic: (*ProjectConfig).Plan is a method, and Go
-// forbids defining methods on a non-local (aliased) type, so the resolver method
-// must live here where ProjectConfig is defined; its return type *run.Plan and
-// param run.PlanOverrides therefore pull in run. run does NOT import config, so
-// the DAG stays acyclic.
+// The edge to run is forced by a Go mechanic: (*ProjectConfig).Plan is a method
+// and Go forbids methods on a non-local type, so the resolver must live here; its
+// *run.Plan return and run.PlanOverrides param pull in run. run does not import
+// config, so the DAG stays acyclic.
 package config
 
 import (
@@ -30,11 +26,10 @@ import (
 )
 
 // Duration is a config-friendly time.Duration that (un)marshals Go duration
-// strings such as "30m" or "1h30m" in YAML.
+// strings like "30m" in YAML.
 type Duration time.Duration
 
-// UnmarshalYAML parses a Go duration string via time.ParseDuration; an empty
-// value yields zero.
+// UnmarshalYAML parses a Go duration string; an empty value yields zero.
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	var s string
 	if err := value.Decode(&s); err != nil {
@@ -57,8 +52,7 @@ func (d Duration) MarshalYAML() (any, error) {
 	return time.Duration(d).String(), nil
 }
 
-// ProjectConfig is the parsed taboo.yaml: the single source of truth read by
-// both the CLI and Go callers that drive runs through pkg.
+// ProjectConfig is the parsed taboo.yaml.
 type ProjectConfig struct {
 	// Workshop is the workshop name taboo provisions runs in.
 	Workshop string `yaml:"workshop"`
@@ -70,13 +64,12 @@ type ProjectConfig struct {
 	Agent agent.AgentName `yaml:"agent"`
 	// Model is the default model passed to the resolved agent.
 	Model string `yaml:"model"`
-	// Strategy is the workspace seam, a closed set: it defaults to "worktree" (a
-	// per-run linked worktree, collision-safe), while "branch" operates in place
-	// on the checkout. Any other value is rejected at load.
+	// Strategy is the workspace seam, a closed set: "worktree" (default, a per-run
+	// linked worktree) or "branch" (in place on the checkout). Any other value is
+	// rejected at load.
 	Strategy workshop.BranchingStrategy `yaml:"strategy,omitempty"`
-	// SourceDefinition names the workshop definition to derive from when the repo
-	// carries several named .workshop/*.yaml definitions; empty selects the sole
-	// definition.
+	// SourceDefinition names the workshop definition to derive from when several
+	// exist; empty selects the sole definition.
 	SourceDefinition string `yaml:"source-definition,omitempty"`
 	// Defaults holds the scalar run settings applied when a workflow or flag does
 	// not override them; nil when the block is omitted.
@@ -85,15 +78,14 @@ type ProjectConfig struct {
 	Workflows map[string]Workflow `yaml:"workflows,omitempty"`
 	// DefaultWorkflow names the workflow run when the CLI selects none.
 	DefaultWorkflow string `yaml:"default-workflow,omitempty"`
-	// Profile is the resolved top-level profile (agent+model); nil when no agent
-	// is set. Not serialized.
+	// Profile is the resolved top-level profile; nil when no agent is set. Not
+	// serialized.
 	Profile agent.AgentProfile `yaml:"-"`
 }
 
-// RunDefaults are scalar-only run settings applied when a workflow or flag does
-// not override them. Both prompt (inline) and prompt-file exist here and at the
-// workflow level to mirror the CLI's --prompt / --prompt-file flags; the run
-// command resolves their precedence later.
+// RunDefaults are scalar run settings applied when a workflow or flag does not
+// override them. Both prompt and prompt-file exist here and at the workflow level
+// to mirror the CLI's --prompt / --prompt-file flags.
 type RunDefaults struct {
 	// BranchPrefix is the prefix for branches taboo creates for a run.
 	BranchPrefix string `yaml:"branch-prefix,omitempty"`
@@ -108,14 +100,12 @@ type RunDefaults struct {
 	// CompletionSignal is the string whose appearance in agent output ends the
 	// run early.
 	CompletionSignal string `yaml:"completion-signal,omitempty"`
-	// StopOnNoChange stops a looped run early when an iteration produces no
-	// new commit. Enable-only: any layer can turn it on, none can turn it off.
+	// StopOnNoChange stops a looped run when an iteration produces no new commit.
+	// Enable-only: any layer can turn it on, none can turn it off.
 	StopOnNoChange bool `yaml:"stop-on-no-change,omitempty"`
 }
 
-// Workflow is a named, reusable task type that overrides scalar run params. Like
-// RunDefaults it carries both prompt (inline) and prompt-file to mirror the
-// CLI's --prompt / --prompt-file flags; the run command resolves precedence.
+// Workflow is a named, reusable task type that overrides scalar run params.
 type Workflow struct {
 	// Prompt is the inline instruction for this workflow.
 	Prompt string `yaml:"prompt,omitempty"`
@@ -131,12 +121,11 @@ type Workflow struct {
 	Timeout Duration `yaml:"timeout,omitempty"`
 	// CompletionSignal overrides the default loop-stop sentinel for this workflow.
 	CompletionSignal string `yaml:"completion-signal,omitempty"`
-	// StopOnNoChange stops a looped run of this workflow early when an iteration
-	// produces no new commit. Enable-only: it can turn the knob on for the
-	// workflow, but cannot turn off a defaults-level enable.
+	// StopOnNoChange stops a looped run of this workflow when an iteration produces
+	// no new commit. Enable-only: it cannot turn off a defaults-level enable.
 	StopOnNoChange bool `yaml:"stop-on-no-change,omitempty"`
-	// Profile is the resolved effective profile (workflow agent/model, falling
-	// back to the top level). Not serialized.
+	// Profile is the resolved effective profile (workflow agent/model, falling back
+	// to the top level). Not serialized.
 	Profile agent.AgentProfile `yaml:"-"`
 }
 
@@ -148,20 +137,15 @@ var ErrConfigRead = errors.New("taboo: cannot read config")
 // or otherwise invalid config document.
 var ErrConfigParse = errors.New("taboo: invalid config")
 
-// defaultStrategy is applied when the config omits one. It is the worktree
-// strategy: the collision-safe path (each run gets its own branch + worktree, so
-// it never mutates the checkout in place), and it matches what Setup does for an
-// unset strategy. CI and other disposable checkouts opt into "branch" explicitly;
-// the strategy is a closed set ("worktree" or "branch") and any other value is
-// rejected at load.
+// defaultStrategy applies when the config omits one: the worktree strategy, the
+// collision-safe path (each run gets its own branch + worktree) matching what
+// Setup does for an unset strategy.
 const defaultStrategy = workshop.StrategyWorktree
 
-// LoadConfig reads and parses a taboo.yaml at path, resolves the agent/model of
-// the top level and of every workflow to an AgentProfile, and returns the
-// config.
+// LoadConfig reads and parses taboo.yaml at path, resolves every agent/model to
+// an AgentProfile, and returns the config.
 func LoadConfig(path string) (*ProjectConfig, error) {
-	// Reading the caller-supplied config path is this function's entire purpose;
-	// the path originates from a trusted CLI invocation, not from end-user input.
+	// The config path comes from a trusted CLI invocation, not end-user input.
 	data, err := os.ReadFile(path) // #nosec G304
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrConfigRead, err)
@@ -173,8 +157,8 @@ func LoadConfig(path string) (*ProjectConfig, error) {
 	if cfg.Strategy == "" {
 		cfg.Strategy = defaultStrategy
 	}
-	// The strategy is a closed set: reject any unknown value here so taboo
-	// validate / doctor catch a typo at load instead of at run time.
+	// The strategy is a closed set: reject an unknown value at load so validate /
+	// doctor catch a typo before run time.
 	if err := cfg.Strategy.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrConfigParse, path, err)
 	}
@@ -184,21 +168,20 @@ func LoadConfig(path string) (*ProjectConfig, error) {
 	return &cfg, nil
 }
 
-// decodeStrict parses data as a single strict taboo.yaml document at path: it
-// rejects unknown keys and any trailing document, wrapping every failure as
-// ErrConfigParse named with path. An empty document decodes to the zero config.
+// decodeStrict parses data as a single strict taboo.yaml at path: unknown keys
+// and a trailing document are rejected, each failure wrapped as ErrConfigParse.
+// An empty document decodes to the zero config.
 func decodeStrict(path string, data []byte) (ProjectConfig, error) {
 	var cfg ProjectConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true) // schema is scalars and file paths only — reject any unknown key
+	dec.KnownFields(true) // Reject any unknown key.
 	decErr := dec.Decode(&cfg)
 	if decErr != nil && !errors.Is(decErr, io.EOF) {
 		return cfg, fmt.Errorf("%w: %s: %v", ErrConfigParse, path, decErr)
 	}
-	// taboo.yaml must be a single document. Without this probe a stray "---"
-	// would silently drop everything after the first document — the opposite of
-	// the strict decode above. So we read once more and reject any trailing
-	// document. (An empty file already hit io.EOF, gated out by decErr == nil.)
+	// taboo.yaml must be a single document: without this probe a stray "---" would
+	// silently drop everything after the first. Read once more and reject any
+	// trailing document. (An empty file already hit io.EOF, gated by decErr == nil.)
 	if decErr == nil {
 		if trailing := dec.Decode(&struct{}{}); !errors.Is(trailing, io.EOF) {
 			return cfg, fmt.Errorf("%w: %s: multiple YAML documents not supported", ErrConfigParse, path)
@@ -207,11 +190,10 @@ func decodeStrict(path string, data []byte) (ProjectConfig, error) {
 	return cfg, nil
 }
 
-// resolveProfiles fills the top-level Profile and every workflow's Profile from
-// the configured agent/model. A profile is resolved only where an agent is set;
-// an empty agent leaves Profile nil without error — enforcing the required field
-// is a later validate command's job, not the loader's. Workflows are visited in
-// sorted key order so an unknown-agent error is deterministic.
+// resolveProfiles fills the top-level and every workflow's Profile from the
+// configured agent/model. An empty agent leaves Profile nil without error;
+// requiring the field is validate's job. Workflows are visited in sorted key
+// order so an unknown-agent error is deterministic.
 func (c *ProjectConfig) resolveProfiles() error {
 	if c.Agent != "" {
 		p, err := agent.NewProfile(c.Agent, c.Model)

@@ -10,10 +10,9 @@ import (
 	"github.com/josecabralf/taboo"
 )
 
-// findConfig ascends from start looking for a taboo.yaml: either start itself is
-// a .taboo dir holding taboo.yaml, or an ancestor holds .taboo/taboo.yaml. It
-// returns the config path and true on the first hit, or "" and false at the
-// filesystem root. The statFile callback lets tests stub the existence probe.
+// findConfig ascends from start looking for a taboo.yaml (in the dir itself or a
+// .taboo subdir), returning the path and true on the first hit, or "" and false
+// at the filesystem root. The statFile callback lets tests stub the probe.
 func findConfig(start string, statFile func(string) bool) (string, bool) {
 	dir := filepath.Clean(start)
 	for {
@@ -32,10 +31,9 @@ func findConfig(start string, statFile func(string) bool) (string, bool) {
 }
 
 // configChecks runs the config-aware checks when a taboo.yaml is discoverable
-// from env.Getwd(). It returns no checks (not an error) when no config is found,
-// which is the normal out-of-project case. The statFile and loadConfig callbacks
-// are injected so discovery and load are testable without the real
-// filesystem/loader.
+// from env.Getwd(). It returns no checks (not an error) when none is found, the
+// normal out-of-project case. The statFile and loadConfig callbacks are injected
+// so discovery and load are testable.
 func configChecks(
 	ctx context.Context,
 	env Env,
@@ -62,13 +60,11 @@ func configChecks(
 }
 
 // workshopProjectChecks reports whether the configured repo is a workshop
-// project, naming the single hardcoded <repo>/workshop.yaml source path it builds
-// (filepath.Join — there is no selection or disambiguation here). It flags a repo
-// with no workshop.yaml as a hard error. The check is presence-only: it does NOT
-// derive the workshop.yaml (that is validate's source-definition/derive job).
+// project, flagging a repo with no <repo>/workshop.yaml as a hard error. It is
+// presence-only: deriving the workshop.yaml is validate's job.
 func workshopProjectChecks(statFile func(string) bool, cfg *taboo.ProjectConfig) []check {
 	if cfg.Repo == "" {
-		return nil // mirror repoChecks: nothing to check without a configured repo.
+		return nil
 	}
 	src := filepath.Join(cfg.Repo, "workshop.yaml")
 	if !statFile(src) {
@@ -82,8 +78,7 @@ func workshopProjectChecks(statFile func(string) bool, cfg *taboo.ProjectConfig)
 }
 
 // configLoadMessage turns a LoadConfig error into a user-facing message,
-// distinguishing a parse failure from an unreadable file via the library
-// sentinels.
+// distinguishing parse from read failure via the library sentinels.
 func configLoadMessage(err error) string {
 	switch {
 	case errors.Is(err, taboo.ErrConfigParse):
@@ -96,9 +91,8 @@ func configLoadMessage(err error) string {
 }
 
 // credentialChecks emits one WARN per distinct referenced agent that has none of
-// its credential env keys set. Agents are collected from the top-level profile
-// and every workflow profile, deduped by Name(), and visited in a stable sorted
-// order so output is deterministic.
+// its credential env keys set. Agents are visited in sorted order for
+// deterministic output.
 func credentialChecks(env Env, cfg *taboo.ProjectConfig) []check {
 	profiles := distinctProfiles(cfg)
 	checks := make([]check, 0, len(profiles))
@@ -116,9 +110,8 @@ func credentialChecks(env Env, cfg *taboo.ProjectConfig) []check {
 	return checks
 }
 
-// distinctProfiles returns the config's referenced agent profiles deduped by
-// Name() in sorted name order: the top-level profile plus every workflow
-// profile that is non-nil.
+// distinctProfiles returns the config's referenced agent profiles (top-level plus
+// each non-nil workflow profile) deduped by Name() in sorted order.
 func distinctProfiles(cfg *taboo.ProjectConfig) []taboo.AgentProfile {
 	seen := map[taboo.AgentName]taboo.AgentProfile{}
 	if cfg.Profile != nil {
@@ -139,8 +132,7 @@ func distinctProfiles(cfg *taboo.ProjectConfig) []taboo.AgentProfile {
 	return out
 }
 
-// anyEnvSet reports whether at least one of keys resolves to a non-empty value
-// through env.LookupEnv.
+// anyEnvSet reports whether at least one of keys resolves to a non-empty value.
 func anyEnvSet(env Env, keys []string) bool {
 	for _, k := range keys {
 		if v, ok := env.LookupEnv(k); ok && v != "" {
@@ -150,8 +142,8 @@ func anyEnvSet(env Env, keys []string) bool {
 	return false
 }
 
-// repoChecks validates the configured repo path when one is set: it must not
-// live under a tmpfs path (/tmp or /run), and it must be a git work tree.
+// repoChecks validates the configured repo path when set: not under a tmpfs path
+// (/tmp or /run), and a git work tree.
 func repoChecks(ctx context.Context, env Env, cfg *taboo.ProjectConfig) []check {
 	if cfg.Repo == "" {
 		return nil
@@ -162,7 +154,7 @@ func repoChecks(ctx context.Context, env Env, cfg *taboo.ProjectConfig) []check 
 }
 
 // repoLocationCheck errors when the repo path sits under /tmp or /run, whose
-// tmpfs mounts vanish on reboot and are not safe for a persistent worktree.
+// tmpfs mounts vanish on reboot.
 func repoLocationCheck(repo string) check {
 	const name = "repo-path"
 	clean := filepath.Clean(repo)
@@ -176,8 +168,7 @@ func repoLocationCheck(repo string) check {
 	return ok(name, "configured repo path is on persistent storage")
 }
 
-// repoGitCheck errors when the configured repo is not a git work tree, probed
-// via `git -C <repo> rev-parse --is-inside-work-tree`.
+// repoGitCheck errors when the configured repo is not a git work tree.
 func repoGitCheck(ctx context.Context, env Env, repo string) check {
 	const name = "repo-git"
 	if _, err := probe(ctx, env, "git", "-C", repo, "rev-parse", "--is-inside-work-tree"); err != nil {
@@ -187,10 +178,7 @@ func repoGitCheck(ctx context.Context, env Env, repo string) check {
 	return ok(name, "configured repo is a git repository")
 }
 
-// workshopName derives the per-agent workshop name from a base name and an agent
-// name: taboo provisions one workshop per distinct agent (reused across runs)
-// rather than one per run. It mirrors the library's internal naming so the CLI's
-// validate/list views report the same workshop the run path launches. The library
-// keeps the canonical implementation internal (see internal/workshop.WorkshopName);
-// this tiny local helper is the CLI's copy of the same one-line rule.
+// workshopName derives the per-agent workshop name. It mirrors the library's
+// internal naming (internal/workshop.WorkshopName, which the CLI cannot import) so
+// validate/list report the same workshop the run path launches.
 func workshopName(base, agent string) string { return base + "-" + agent }

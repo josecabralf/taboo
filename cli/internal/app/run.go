@@ -18,63 +18,40 @@ import (
 	"github.com/josecabralf/taboo"
 )
 
-// errRunFailed is the sentinel run returns when its preflight finds an error
-// (workshop unreachable, or the config fails validate). The preflight report is
-// printed to stderr first; executeRoot maps the sentinel to a non-zero exit and
-// adds its one trailing "Error:" line to stderr. It mirrors doctor's
-// errChecksFailed but is run-specific so a caller can distinguish a preflight
-// refusal from a failure inside the run itself.
+// errRunFailed is the sentinel run returns when its preflight finds an error. It
+// is run-specific (unlike doctor's errChecksFailed) so a caller can distinguish a
+// preflight refusal from a failure inside the run itself.
 var errRunFailed = errors.New("run: preflight failed")
 
 // runOptions are the parsed flags for the run subcommand: the highest-precedence
 // layer of run-param resolution (top-level config -> workflow -> these flags).
 type runOptions struct {
-	// prompt overrides the run instruction inline.
 	prompt string
-	// promptFile overrides the run instruction from a file (relative to the .taboo
-	// dir, or absolute), taking effect only when prompt is empty.
+	// promptFile takes effect only when prompt is empty.
 	promptFile string
-	// agent overrides the resolved agent.
-	agent string
-	// model overrides the resolved agent's model.
-	model string
-	// timeout overrides the per-exec timeout (zero leaves it unset).
+	agent      string
+	model      string
+	// timeout of zero leaves the config layers in charge.
 	timeout time.Duration
-	// iterations overrides the iteration cap (zero or less leaves it unset).
+	// iterations of zero or less leaves the config layers in charge.
 	iterations int
-	// signal overrides the completion signal that ends the iteration loop early.
-	signal string
-	// stopOnNoChange enables the commit-based early stop: the loop ends when an
-	// iteration produces no new commit. Enable-only (false leaves the config
-	// layers in charge; it cannot disable a config-level enable).
+	signal     string
+	// stopOnNoChange is enable-only: false leaves the config layers in charge and
+	// cannot disable a config-level enable.
 	stopOnNoChange bool
-	// branch overrides the auto-generated per-run branch verbatim.
-	branch string
-	// from selects the workshop definition to derive the agent workshop from,
-	// overriding taboo.yaml's source-definition.
-	from string
-	// dryRun resolves the plan and prints it without touching the host.
-	dryRun bool
-	// yes skips the interactive pre-run confirmation (for non-interactive callers).
-	yes bool
-	// asJSON emits the machine result as a JSON object instead of the plain form:
-	// the run result, or the resolved plan under dryRun.
-	asJSON bool
+	branch         string
+	from           string
+	dryRun         bool
+	yes            bool
+	asJSON         bool
 	// varsFile is a JSON file of {"VAR":"value"} pairs substituted literally into
-	// {{VAR}} placeholders in the resolved prompt (no shell expansion of the values).
+	// {{VAR}} placeholders (no shell expansion of the values).
 	varsFile string
-	// vars are repeatable KEY=VALUE template variables substituted literally into
-	// {{KEY}} placeholders; they override matching --vars-file keys.
+	// vars are repeatable KEY=VALUE variables that override matching --vars-file keys.
 	vars []string
 }
 
-// newRunCmd builds the `run` subcommand: it selects what to run (a named
-// workflow positionally, an ad-hoc `--prompt` off the top-level defaults, or a
-// bare run's default-workflow), resolves the run params from taboo.yaml and the
-// flags into an execution plan via the precedence chain (top-level -> workflow ->
-// flags), runs a host preflight, and drives the plan end-to-end through
-// pkg/taboo's Orchestrator on a fresh per-run branch. Live agent output streams to
-// stderr so the machine result stays clean on stdout.
+// newRunCmd builds the `run` subcommand.
 func newRunCmd(env Env) *cobra.Command {
 	opts := runOptions{}
 	cmd := &cobra.Command{
@@ -110,15 +87,9 @@ func newRunCmd(env Env) *cobra.Command {
 	return cmd
 }
 
-// runRun is the run command's select-resolve-preflight-execute flow. It discovers
-// and loads the config, selects what to run (named workflow, ad-hoc, or default),
-// resolves that into a plan via the pkg/taboo config→run bridge, and then either
-// emits the resolved plan (--dry-run: the human form, or the jsonPlan document
-// under --json) or runs a host preflight and executes it. The dry-run branch
-// returns before warnPromptVars and the preflight, so it stays host-free and
-// warning-free on stderr — the JSON document carries the vars state itself. Each
-// stage's failure is surfaced before the next, so a misconfigured project never
-// reaches the workshop.
+// runRun is the run command's select-resolve-preflight-execute flow. The dry-run
+// branch returns before warnPromptVars and the preflight, so it stays host-free
+// and warning-free on stderr; its JSON document carries the vars state itself.
 func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error {
 	configPath, cfg, err := loadProjectConfig(env)
 	if err != nil {
@@ -161,12 +132,9 @@ func runRun(ctx context.Context, env Env, opts *runOptions, args []string) error
 	return executeRun(ctx, env, opts.asJSON, plan)
 }
 
-// mapPlanError translates the bridge's library-owned sentinels into the CLI's
-// existing user-facing wording. The bridge owns resolution and returns neutral,
-// errors.Is-matchable sentinels; the CLI re-adds the run-command phrasing — the
-// selection-scoped no-prompt and no-agent hints and the fuzzy unknown-agent
-// suggestion — that the neutral sentinels drop. Non-sentinel errors pass through
-// verbatim.
+// mapPlanError translates the bridge's neutral sentinels into the CLI's
+// user-facing wording (the selection-scoped no-prompt/no-agent hints and the
+// fuzzy unknown-agent suggestion). Non-sentinel errors pass through verbatim.
 func mapPlanError(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions, err error) error {
 	switch {
 	case errors.Is(err, taboo.ErrNoPrompt):
@@ -182,9 +150,8 @@ func mapPlanError(cfg *taboo.ProjectConfig, sel runSelection, opts *runOptions, 
 	}
 }
 
-// planOverrides packs the CLI flags into the bridge's PlanOverrides. The agent's
-// live output streams to stderr (both sinks point at env.Stderr) so the machine
-// result on stdout stays clean.
+// planOverrides packs the CLI flags into the bridge's PlanOverrides. Both output
+// sinks point at env.Stderr so the machine result on stdout stays clean.
 func planOverrides(env Env, opts *runOptions) taboo.PlanOverrides {
 	return taboo.PlanOverrides{
 		Agent: taboo.AgentName(opts.agent), Model: opts.model,
@@ -196,23 +163,19 @@ func planOverrides(env Env, opts *runOptions) taboo.PlanOverrides {
 	}
 }
 
-// confirmRun gates a real run behind an interactive confirmation: at a TTY
-// (without --yes) it prints a one-line summary and reads a y/N answer, proceeding
-// only on an explicit yes — so a user is never surprised by the multi-minute
-// workshop launch. A non-interactive caller (a pipe, CI) or --yes proceeds
-// without prompting, keeping scripts and automation unblocked; --dry-run never
-// reaches here.
+// confirmRun gates a real run behind an interactive confirmation so a user is
+// never surprised by the multi-minute workshop launch. A non-interactive caller
+// or --yes proceeds without prompting.
 func confirmRun(env Env, opts *runOptions, plan *taboo.Plan) (bool, error) {
-	// Confirm only at a TTY without --yes; a pipe/CI caller or --yes proceeds unprompted.
 	if !isInteractive(env) || opts.yes {
 		return true, nil
 	}
 	return promptConfirm(env, plan)
 }
 
-// promptConfirm prints a one-line run summary to stderr and reads a y/N answer
-// from stdin, returning true only on an explicit yes. A blank line (the default),
-// EOF, or anything else declines, so an accidental Enter never launches a run.
+// promptConfirm prints a one-line run summary to stderr and reads a y/N answer,
+// returning true only on an explicit yes so an accidental Enter never launches a
+// run.
 func promptConfirm(env Env, plan *taboo.Plan) (bool, error) {
 	target := fmt.Sprintf("workflow %q", plan.Workflow)
 	if plan.Workflow == "" {
@@ -223,9 +186,9 @@ func promptConfirm(env Env, plan *taboo.Plan) (bool, error) {
 	return promptYesNo(env, msg)
 }
 
-// promptYesNo prints message to stderr and reads a y/N answer from stdin,
-// returning true only on an explicit "y"/"yes". A blank line, EOF, or anything
-// else declines. A non-EOF read error is returned so the caller can decide.
+// promptYesNo prints message to stderr and reads a y/N answer, returning true only
+// on an explicit `y`/`yes`. A non-EOF read error is returned so the caller can
+// decide.
 func promptYesNo(env Env, message string) (bool, error) {
 	_, _ = fmt.Fprint(env.Stderr, message)
 	line, err := bufio.NewReader(env.Stdin).ReadString('\n')
@@ -240,15 +203,12 @@ func promptYesNo(env Env, message string) (bool, error) {
 	}
 }
 
-// adhocLabel slugs an ad-hoc run (one with no named workflow) in its branch name
-// and the dry-run plan.
+// adhocLabel slugs an ad-hoc run in its branch name and the dry-run plan.
 const adhocLabel = "adhoc"
 
-// runSelection is the outcome of choosing what a run targets: a named workflow
-// (positional or the configured default-workflow) or an ad-hoc run off the
-// top-level defaults. The label slugs the branch and names the run in the plan
-// and errors; wf is the selected workflow block (the zero Workflow for an ad-hoc
-// run, whose params come entirely from the top level and the flags).
+// runSelection is the outcome of choosing what a run targets: a named workflow or
+// an ad-hoc run off the top-level defaults; wf is the zero Workflow for an ad-hoc
+// run, whose params come entirely from the top level and the flags.
 type runSelection struct {
 	label string
 	wf    taboo.Workflow
@@ -256,7 +216,7 @@ type runSelection struct {
 }
 
 // describe names the selection for an error message: a quoted workflow name, or a
-// plain "ad-hoc run" (which has no name to quote).
+// plain `ad-hoc run`.
 func (s runSelection) describe() string {
 	if s.adhoc {
 		return "ad-hoc run"
@@ -273,12 +233,10 @@ func (s runSelection) workflowName() string {
 	return s.label
 }
 
-// selectRun decides what a run invocation targets, applying the selection
-// precedence: an explicit positional workflow, else an ad-hoc run when a prompt
-// flag is set (gated on an agent being resolvable from --agent or top-level
-// config), else the configured default-workflow, else an error listing what the
-// user could have picked. It never guesses — a bare run with no default-workflow
-// refuses rather than run an arbitrary workflow.
+// selectRun decides what a run invocation targets by precedence: a positional
+// workflow, else an ad-hoc run when a prompt flag is set (gated on a resolvable
+// agent), else the configured default-workflow, else an error. It never guesses:
+// a bare run with no default-workflow refuses rather than pick a workflow.
 func selectRun(cfg *taboo.ProjectConfig, args []string, opts *runOptions) (runSelection, error) {
 	if len(args) == 1 {
 		name := args[0]
@@ -290,7 +248,7 @@ func selectRun(cfg *taboo.ProjectConfig, args []string, opts *runOptions) (runSe
 	}
 	if opts.prompt != "" || opts.promptFile != "" {
 		// An ad-hoc run has no workflow, so its effective agent is the flag over the
-		// top level (the zero Workflow contributes nothing).
+		// top level.
 		if effectiveAgent(cfg, taboo.Workflow{}, opts) == "" {
 			return runSelection{}, errors.New("an ad-hoc run (--prompt/--prompt-file with no workflow) needs a top-level agent: in " +
 				"taboo.yaml — set one (or pass --agent), or name a workflow")
@@ -309,7 +267,7 @@ func selectRun(cfg *taboo.ProjectConfig, args []string, opts *runOptions) (runSe
 }
 
 // unknownWorkflowError reports a positional workflow the config does not define,
-// naming the configured workflows (or that none exist).
+// naming the configured workflows.
 func unknownWorkflowError(cfg *taboo.ProjectConfig, name string) error {
 	if len(cfg.Workflows) == 0 {
 		return fmt.Errorf("unknown workflow %q — no workflows are configured in taboo.yaml", name)
@@ -317,9 +275,8 @@ func unknownWorkflowError(cfg *taboo.ProjectConfig, name string) error {
 	return fmt.Errorf("unknown workflow %q (configured workflows: %s)", name, availableWorkflows(cfg))
 }
 
-// noSelectionError reports a bare `taboo run` with nothing to select: no
-// positional workflow, no prompt flag, and no default-workflow. It lists the
-// available workflows (or that none exist) so the user knows what to name.
+// noSelectionError reports a bare `taboo run` with nothing to select, listing the
+// available workflows so the user knows what to name.
 func noSelectionError(cfg *taboo.ProjectConfig) error {
 	if len(cfg.Workflows) == 0 {
 		return errors.New("no workflow given and none configured — add a workflows: block, or pass --prompt for an ad-hoc run")
@@ -328,10 +285,9 @@ func noSelectionError(cfg *taboo.ProjectConfig) error {
 		"name one, set default-workflow, or pass --prompt", availableWorkflows(cfg))
 }
 
-// loadProjectConfig discovers the project's taboo.yaml from the working
-// directory and loads it. A missing config is a clear, actionable error (run
-// init) rather than an opaque not-found, because run is the first command an
-// agent reaches for and the remedy is always the same.
+// loadProjectConfig discovers the project's taboo.yaml from the working directory
+// and loads it. A missing config is an actionable `run init` error rather than an
+// opaque not-found.
 func loadProjectConfig(env Env) (string, *taboo.ProjectConfig, error) {
 	wd, err := env.Getwd()
 	if err != nil {
@@ -348,12 +304,9 @@ func loadProjectConfig(env Env) (string, *taboo.ProjectConfig, error) {
 	return path, cfg, nil
 }
 
-// effectiveAgent applies the agent precedence chain (top-level config -> workflow
-// -> --agent flag) to one workflow block. The ad-hoc gate in selectRun passes the
-// zero Workflow (an ad-hoc run has none), so it reduces to flag-then-top-level
-// there, while mapPlanError passes the selected block to name the agent the
-// bridge rejected. Sharing it keeps the ad-hoc gate and that message aligned with
-// the bridge's own agent precedence.
+// effectiveAgent applies the agent precedence chain (--agent flag -> workflow ->
+// top-level config) to one workflow block. Sharing it keeps the ad-hoc gate and
+// mapPlanError's message aligned with the bridge's own agent precedence.
 func effectiveAgent(cfg *taboo.ProjectConfig, wf taboo.Workflow, opts *runOptions) string {
 	if opts.agent != "" {
 		return opts.agent
@@ -365,10 +318,8 @@ func effectiveAgent(cfg *taboo.ProjectConfig, wf taboo.Workflow, opts *runOption
 }
 
 // unknownAgentError turns NewProfile's wrapped ErrUnknownAgent into a CLI message
-// with a fuzzy "did you mean" suggestion when a registered agent is close enough,
-// reusing unknownAgentMessage (the same builder validate uses). When nothing is
-// close, the original wrapped error (which already names the bad agent) is
-// returned unchanged so callers can still errors.Is it.
+// with a fuzzy suggestion when a registered agent is close enough. When nothing is
+// close, the original wrapped error is returned so callers can still errors.Is it.
 func unknownAgentError(name string, err error) error {
 	if msg, ok := unknownAgentMessage(name, taboo.AgentNames()); ok {
 		return errors.New(msg)
@@ -376,11 +327,10 @@ func unknownAgentError(name string, err error) error {
 	return err
 }
 
-// unknownAgentMessage builds the "unknown agent X" report and reports whether a
-// candidate was close enough to append a fuzzy "did you mean Y?" hint. It is the
-// single source of that message, shared by validate's agentChecks (which always
-// uses the text) and run's unknownAgentError (which only overrides its wrapped
-// sentinel when a suggestion exists), so the two surface an identical message.
+// unknownAgentMessage builds the `unknown agent X` report and reports whether a
+// candidate was close enough to append a `did you mean Y?` hint. It is the single
+// source of that message, shared by validate's agentChecks and run's
+// unknownAgentError so the two surface an identical message.
 func unknownAgentMessage(name string, candidates []string) (string, bool) {
 	msg := fmt.Sprintf("unknown agent %q", name)
 	suggestion, ok := suggestAgent(name, candidates)
@@ -390,8 +340,7 @@ func unknownAgentMessage(name string, candidates []string) (string, bool) {
 	return msg, ok
 }
 
-// availableWorkflows lists the config's workflow names, sorted, for the
-// unknown-workflow error so the user sees exactly what they can pick.
+// availableWorkflows lists the config's workflow names, sorted.
 func availableWorkflows(cfg *taboo.ProjectConfig) string {
 	names := make([]string, 0, len(cfg.Workflows))
 	for name := range cfg.Workflows {
@@ -401,11 +350,10 @@ func availableWorkflows(cfg *taboo.ProjectConfig) string {
 	return strings.Join(names, ", ")
 }
 
-// resolveVars gathers the run's caller-supplied template variables, layering the
-// repeatable --var KEY=VALUE flags on top of the --vars-file JSON object so a --var
-// overrides a matching file key. The vars-file path is relative to the config dir
-// (like --prompt-file); a missing file or malformed JSON fails fast with a clear
-// error so a half-formed injection never reaches the agent.
+// resolveVars gathers the run's template variables, layering the --var KEY=VALUE
+// flags over the --vars-file JSON so a --var overrides a matching file key. A
+// missing file or malformed JSON fails fast so a half-formed injection never
+// reaches the agent.
 func resolveVars(opts *runOptions, base string) (map[string]string, error) {
 	vars := map[string]string{}
 	if opts.varsFile != "" {
@@ -428,10 +376,9 @@ func resolveVars(opts *runOptions, base string) (map[string]string, error) {
 	return vars, nil
 }
 
-// resolvePromptFilePath resolves a config-relative file path: absolute paths are
-// used verbatim, relative ones resolve against base (the config file's
-// directory). Run's resolveVars (for --vars-file) and validate (promptFileChecks)
-// share this so a relative path resolves identically in both.
+// resolvePromptFilePath resolves a config-relative file path: absolute paths
+// verbatim, relative ones against base; run and validate share it so a relative
+// path resolves identically in both.
 func resolvePromptFilePath(path, base string) string {
 	if filepath.IsAbs(path) {
 		return path
@@ -439,14 +386,10 @@ func resolvePromptFilePath(path, base string) string {
 	return filepath.Join(base, path)
 }
 
-// runPreflight gathers the lightweight host probe (is workshop callable) plus
-// the run-scoped config-correctness checks and refuses the run when any errors.
-// The checks are run-scoped (runConfigChecks, not the full validateChecks): they
-// skip prompt-file existence, which cfg.Plan already proved for the one file
-// this run consumes. The report goes to stderr (not stdout) so a refusal does not
-// pollute the machine result stream a successful run writes there. It returns
-// errRunFailed so the process exits non-zero; executeRoot prints the sentinel as
-// the report's one trailing "Error:" line.
+// runPreflight gathers the workshop probe plus the run-scoped config-correctness
+// checks (runConfigChecks, which skip prompt-file existence cfg.Plan already
+// proved) and refuses the run when any errors. The report goes to stderr so a
+// refusal does not pollute the machine result stream on stdout.
 func runPreflight(ctx context.Context, env Env) error {
 	checks := []check{checkWorkshop(ctx, env)}
 	checks = append(checks, runConfigChecks(ctx, env, statFileExists)...)
@@ -457,12 +400,10 @@ func runPreflight(ctx context.Context, env Env) error {
 	return nil
 }
 
-// executeRun drives a resolved *taboo.Plan end-to-end via the bridge's Run. Live
-// agent output (the Plan already routes both streams to env.Stderr via the
-// overrides) keeps the machine result clean on env.Stdout; a brief start line goes
-// to stderr too so an interactive caller sees the run begin. On success the
-// machine result is written to stdout; a failure inside the run is returned and
-// printed once by executeRoot (exit 1).
+// executeRun drives a resolved *taboo.Plan end-to-end via the bridge's Run. The
+// Plan routes agent output to env.Stderr, keeping the machine result clean on
+// env.Stdout. On success the result is written to stdout; a run failure is
+// returned and printed once by executeRoot.
 func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) error {
 	target := fmt.Sprintf("workflow %q", plan.Workflow)
 	if plan.Workflow == "" {
@@ -476,11 +417,10 @@ func executeRun(ctx context.Context, env Env, asJSON bool, plan *taboo.Plan) err
 	return writeRunResult(env, asJSON, res)
 }
 
-// jsonRunResult is the --json machine result shape. It is a deliberately flat
-// projection of OrchestratedResult: the fields a caller scripts against, with the
-// StopReason flattened to a string. The first five keys are frozen (#134) and
-// stay byte-identical; baseCommit and changed are additive (#141), appended
-// after them so existing consumers keep parsing unchanged.
+// jsonRunResult is the --json machine result shape, a flat projection of
+// OrchestratedResult. The first five keys are frozen (#134); baseCommit and
+// changed are additive (#141), appended after them so existing consumers keep
+// parsing unchanged.
 type jsonRunResult struct {
 	Branch     string `json:"branch"`
 	Commit     string `json:"commit"`
@@ -491,19 +431,13 @@ type jsonRunResult struct {
 	Changed    bool   `json:"changed"`
 }
 
-// writeRunResult writes the run's machine result to stdout in the requested
-// format. The plain form is just branch + commit — the two values a caller
-// usually wants — and deliberately omits the captured agent output: that output
-// already streamed live to stderr during the run, and echoing the captured copy
-// back onto stdout would defeat the clean-stdout contract (a caller parsing
-// stdout must not have to skip past arbitrary agent chatter). The JSON form keeps
-// `output` so a structured consumer can still read it.
+// writeRunResult writes the run's machine result to stdout. The plain form is just
+// branch + commit; it omits the captured agent output, which already streamed to
+// stderr, to keep the clean-stdout contract. The JSON form keeps `output`.
 //
-// A run that produced no new commits (the branch tip never moved off its base)
-// gets an advisory note on the plain path — on stderr, following the
-// warnPromptVars pattern, so the two-line branch/commit machine contract on
-// stdout stays byte-identical. The JSON path prints no note: its consumers
-// read the `changed` field instead.
+// A run that produced no new commits gets an advisory note on stderr (the plain
+// path only), so the two-line branch/commit contract on stdout stays
+// byte-identical. JSON consumers read the `changed` field instead.
 func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 	if asJSON {
 		return writeIndentedJSON(env.Stdout, jsonRunResult{
@@ -524,27 +458,20 @@ func writeRunResult(env Env, asJSON bool, res taboo.OrchestratedResult) error {
 	return nil
 }
 
-// jsonPlanVars is the dry-run plan's vars object: a structured mirror of
-// varsSummary's three states. The supplied key is the sorted caller-supplied
-// keys ([] when none), unused the sorted supplied keys matching no {{VAR}}
-// placeholder (the keys Substitute silently ignores), and unfilled is true exactly when
-// placeholders exist and no vars were supplied — the documented case where they
-// reach the agent literally. Plan already fails fast on a partial fill, so
-// these three states are exhaustive for a rendered plan.
+// jsonPlanVars is the dry-run plan's vars object, a structured mirror of
+// varsSummary's three states: supplied (sorted keys), unused (supplied keys
+// matching no {{VAR}} placeholder), and unfilled (placeholders exist but no vars
+// were supplied, so they reach the agent literally).
 type jsonPlanVars struct {
 	Supplied []string `json:"supplied"`
 	Unused   []string `json:"unused"`
 	Unfilled bool     `json:"unfilled"`
 }
 
-// jsonPlan is the --dry-run --json machine shape: printPlan's fields as one
-// flat object, so a script or agent can inspect what a real run would do
-// without parsing the aligned human plan. The prompt key carries the same one-line
-// promptSummary preview the human plan and list show, never the full resolved
-// prompt; sourceDefinition is "" when unset (the human plan omits the line, the
-// JSON key is always present); timeout is the Go duration string printPlan
-// renders; placeholders marshals as [] (never null) for a placeholder-free
-// prompt, the jsonWorkflow.Placeholders convention.
+// jsonPlan is the --dry-run --json machine shape: printPlan's fields as one flat
+// object. The prompt key carries the one-line promptSummary preview, never the
+// full prompt; sourceDefinition is "" when unset (the JSON key is always present,
+// unlike the human plan's omitted line); placeholders marshals as [] never null.
 type jsonPlan struct {
 	Workflow         string       `json:"workflow"`
 	Adhoc            bool         `json:"adhoc"`
@@ -564,9 +491,8 @@ type jsonPlan struct {
 }
 
 // planToJSON projects a resolved plan and the caller-supplied vars into the
-// jsonPlan machine shape. It is pure (no Env, no I/O) — the dry-run branch owns
-// the encoding. The adhoc field mirrors printPlan's label switch: true exactly
-// when the human plan would print "run: ad-hoc (--prompt)" instead of a workflow name.
+// jsonPlan machine shape. The adhoc field mirrors printPlan's label switch: true
+// exactly when the human plan prints `run: ad-hoc (--prompt)`.
 func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
 	supplied := make([]string, 0, len(vars))
 	for key := range vars {
@@ -596,13 +522,9 @@ func planToJSON(plan *taboo.Plan, vars map[string]string) jsonPlan {
 	}
 }
 
-// printPlan renders the resolved plan to stdout for --dry-run: the workflow,
-// branch, agent, and the scalar run params, so a user can confirm what a real run
-// would do without any host side effects. Every label is padded to one width so
-// the values line up in a single column; the longest label
-// ("completion-signal:") sets that width. The vars argument holds the
-// caller-supplied template variables, rendered against the plan's placeholder
-// set on the vars: line.
+// printPlan renders the resolved plan to stdout for --dry-run. Every label is
+// padded to one width so the values line up; the longest label
+// (`completion-signal:`) sets that width.
 func printPlan(env Env, plan *taboo.Plan, vars map[string]string) {
 	_, _ = fmt.Fprintln(env.Stdout, "taboo run (dry run) — resolved plan:")
 	planLabel, planTarget := "workflow:", plan.Workflow
@@ -627,12 +549,10 @@ func printPlan(env Env, plan *taboo.Plan, vars map[string]string) {
 }
 
 // warnPromptVars surfaces the two silent vars footguns on stderr before a real
-// run: supplied keys that match no {{VAR}} placeholder (Substitute only checks
-// the reverse direction, so they vanish without a trace), and a no-vars run
-// whose prompt carries placeholders (the documented pass-through sends them to
-// the agent literally). Warnings only — the run proceeds identically, and they
-// go to stderr (never stdout, the clean-stdout contract) before the confirmRun
-// y/N prompt so an interactive user can still abort.
+// run: supplied keys that match no {{VAR}} placeholder, and a no-vars run whose
+// prompt carries placeholders (the pass-through sends them to the agent
+// literally). Warnings only, on stderr before the confirmRun prompt so an
+// interactive user can still abort.
 func warnPromptVars(env Env, plan *taboo.Plan, vars map[string]string) {
 	if unused := unusedVarKeys(plan.Placeholders, vars); len(unused) > 0 {
 		_, _ = fmt.Fprintf(env.Stderr, "warning: supplied var(s) match no {{VAR}} placeholder in the prompt: %s\n",
@@ -644,14 +564,11 @@ func warnPromptVars(env Env, plan *taboo.Plan, vars map[string]string) {
 	}
 }
 
-// varsSummary renders the dry-run plan's vars: value from the prompt's
-// placeholder set and the caller-supplied variables. Plan already fails fast
-// when supplied vars leave a placeholder unfilled, so a rendered plan has
-// three base states: no placeholders at all; placeholders present and vars
-// supplied (all filled, by construction); placeholders present and no vars
-// supplied, which pass through to the agent literally (the documented no-vars
-// rule). In the first two, any supplied-but-unused keys are appended — a
-// placeholder-free prompt with vars supplied renders "(none) — unused: <keys>".
+// varsSummary renders the dry-run plan's vars: line from the prompt's placeholder
+// set and the supplied variables. A rendered plan has three base states: no
+// placeholders; placeholders with vars supplied (all filled by construction); and
+// placeholders with no vars, which pass through literally. Any supplied-but-unused
+// keys are appended.
 func varsSummary(placeholders []string, vars map[string]string) string {
 	unused := unusedVarKeys(placeholders, vars)
 	unusedSuffix := ""
@@ -669,8 +586,8 @@ func varsSummary(placeholders []string, vars map[string]string) string {
 }
 
 // unusedVarKeys returns the sorted supplied variable keys that match no
-// placeholder in the prompt — the keys Substitute silently ignores (it only
-// checks the reverse direction), which would otherwise vanish without a trace.
+// placeholder, the keys Substitute silently ignores, which would otherwise vanish
+// without a trace.
 func unusedVarKeys(placeholders []string, vars map[string]string) []string {
 	var out []string
 	for key := range vars {
@@ -682,11 +599,9 @@ func unusedVarKeys(placeholders []string, vars map[string]string) []string {
 	return out
 }
 
-// promptSummary renders a prompt on one line so a multi-line (often
-// prompt-file-backed) prompt cannot shatter printPlan's aligned column. It shows
-// the first line, truncated to 60 runes with a trailing ellipsis when longer,
-// and appends a line count whenever the prompt spans multiple lines or was
-// truncated so the reader knows the displayed text is only a preview.
+// promptSummary renders a prompt on one line so a multi-line prompt cannot
+// shatter printPlan's aligned column. It shows the first line, truncated to 60
+// runes, and appends a line count when the prompt is multi-line or truncated.
 func promptSummary(prompt string) string {
 	first := prompt
 	multiline := false

@@ -12,25 +12,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// deriveDefinition derives the agent's workshop definition from the project's
-// own workshop.yaml (source). It parses source as an opaque yaml.Node tree and
-// touches only the keys taboo models: it overwrites `name:` with cfg.Workshop
-// and appends the agent SDK to `sdks:`. Everything else — `base:`, the source
-// SDKs and their unmodeled fields, `actions:`, custom plugs — has its values and
-// subtrees carried through, never decoded into a typed struct and re-marshaled,
-// so taboo cannot silently drop fields it does not understand (issue #68). The
-// round-trip is through yaml.Marshal, so original comments and whitespace are
-// not preserved byte-for-byte — only the field values survive.
+// deriveDefinition derives the agent's workshop definition from the project's own
+// workshop.yaml (source). It parses source as an opaque yaml.Node tree and touches
+// only the keys taboo models: it overwrites `name:` with cfg.Workshop and appends
+// the agent SDK to `sdks:`. Everything else is carried through, never decoded into
+// a typed struct, so taboo cannot silently drop fields it does not understand
+// (issue #68). The yaml.Marshal round-trip does not preserve comments or
+// whitespace byte-for-byte; only field values survive.
 //
 // It also returns projectNames: the bare names of the source's in-project SDKs
-// (those referenced as "project-<x>", prefix stripped). Store SDKs (e.g. "go")
-// and non-project entries are excluded, and the injected agent SDK is excluded
-// too because names are read before it is appended. The caller reconciles these
-// into the managed project's .workshop/ symlinks (see reconcileProjectSDKs).
+// (referenced as "project-<x>", prefix stripped). Store SDKs and non-project
+// entries are excluded, as is the injected agent SDK (names are read before it is
+// appended). The caller reconciles these into .workshop/ symlinks.
 func deriveDefinition(cfg Config, source []byte) (out string, projectNames []string, err error) {
 	// A multi-document source (`---` separators) decodes into a single Node only
-	// for the FIRST document — the rest are silently dropped. That would derive
-	// from a partial definition, so reject it before the single-Node parse below.
+	// for the FIRST document, silently dropping the rest, which would derive from a
+	// partial definition. Reject it before the single-Node parse below.
 	if err := requireSingleDocument(source); err != nil {
 		return "", nil, err
 	}
@@ -38,21 +35,18 @@ func deriveDefinition(cfg Config, source []byte) (out string, projectNames []str
 	if err := yaml.Unmarshal(source, &doc); err != nil {
 		return "", nil, err
 	}
-	// A non-mapping or empty document (an empty file, a bare scalar, a top-level
-	// list) carries no name/sdks: fail fast with a clear taboo error instead of
-	// panicking on Content[0] or silently emitting a malformed definition that
-	// only breaks later, opaquely, inside `workshop launch`.
+	// A non-mapping or empty document carries no name/sdks: fail fast rather than
+	// panicking on Content[0] or emitting a malformed definition that only breaks
+	// later inside `workshop launch`.
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return "", nil, fmt.Errorf("project workshop.yaml is empty or its root is not a mapping")
 	}
 	root := doc.Content[0] // document node wraps the root mapping
 
-	// The key walk (mappingValue/setMappingValue) touches only the first match for
-	// a key and does not resolve merge keys, so two exotic shapes would mis-derive
-	// silently: a duplicate top-level key makes the overwrite/append ambiguous, and
-	// a YAML merge key (`<<:`) hides the real name/sdks behind an unresolved alias.
-	// Reject both up front (root mapping, plus the sdks elements' mappings for
-	// merge keys) rather than emitting a wrong definition.
+	// The key walk touches only the first match for a key and does not resolve
+	// merge keys, so two shapes would mis-derive silently: a duplicate top-level key
+	// makes the overwrite/append ambiguous, and a merge key (`<<:`) hides the real
+	// name/sdks behind an unresolved alias. Reject both up front.
 	if err := rejectDuplicateKeys(root); err != nil {
 		return "", nil, err
 	}
@@ -60,7 +54,7 @@ func deriveDefinition(cfg Config, source []byte) (out string, projectNames []str
 		return "", nil, err
 	}
 
-	// Overwrite name; leave base untouched (inherited from source).
+	// Overwrite name; leave base inherited from source.
 	if err := setMappingValue(root, "name", cfg.Workshop); err != nil {
 		return "", nil, err
 	}
@@ -75,8 +69,7 @@ func deriveDefinition(cfg Config, source []byte) (out string, projectNames []str
 	if err != nil {
 		return "", nil, err
 	}
-	// Read the in-project SDK names before appending the agent so the injected
-	// agent SDK is excluded.
+	// Read the in-project SDK names before appending the agent so it is excluded.
 	projectNames = projectSDKNamesFromSeq(sdks)
 	sdks.Content = append(sdks.Content, &agentNode)
 
@@ -87,11 +80,10 @@ func deriveDefinition(cfg Config, source []byte) (out string, projectNames []str
 	return string(marshaled), projectNames, nil
 }
 
-// ensureSDKSequence returns root's `sdks` node as a sequence, normalizing the
-// two acceptable non-sequence shapes in place: an absent key (a fresh empty
-// sequence is appended to root) and a bare `sdks:` line that decodes to a null
-// scalar (converted to an empty sequence). Any other shape — a mapping, a
-// non-empty scalar, an alias — is a real authoring mistake and is rejected.
+// ensureSDKSequence returns root's `sdks` node as a sequence, normalizing the two
+// acceptable non-sequence shapes in place: an absent key (a fresh empty sequence
+// is appended) and a bare `sdks:` line that decodes to a null scalar. Any other
+// shape is rejected as an authoring mistake.
 func ensureSDKSequence(root *yaml.Node) (*yaml.Node, error) {
 	sdks := mappingValue(root, "sdks")
 	switch {
@@ -114,20 +106,18 @@ func ensureSDKSequence(root *yaml.Node) (*yaml.Node, error) {
 	return sdks, nil
 }
 
-// DryRunDerive validates that taboo could derive the agent's workshop from
-// source without launching anything or writing to the host filesystem. It runs
-// the full derivation and discards the rendered definition, returning only the
-// in-project SDK names and any error, so a caller can fail fast on a malformed
-// source. (It does stat the embedded SDK FS below — a read-only probe of the
-// compiled-in tree, not a host write.)
+// DryRunDerive validates that taboo could derive the agent's workshop from source
+// without launching anything or writing to the host filesystem. It runs the full
+// derivation and discards the rendered definition, returning the in-project SDK
+// names and any error so a caller can fail fast on a malformed source.
 func DryRunDerive(cfg Config, source []byte) (projectNames []string, err error) {
 	_, projectNames, err = deriveDefinition(cfg, source)
 	if err != nil {
 		return projectNames, err
 	}
 	// The agent's SDK must be embedded for seedSDK to seed it. A registered agent
-	// missing its sdk/<name>/ tree (registry/embed drift) would otherwise fail
-	// only at seed time, burning a workshop; catch it here without writing.
+	// missing its sdk/<name>/ tree would otherwise fail only at seed time, burning a
+	// workshop; catch it here without writing.
 	if _, err := fs.Stat(sdkFS, path.Join("sdk", string(cfg.Agent.Name()))); err != nil {
 		return projectNames, fmt.Errorf("agent %q has no embedded SDK to seed; "+
 			"this is a taboo build defect (registry/embed drift), please report this", cfg.Agent.Name())
@@ -135,11 +125,10 @@ func DryRunDerive(cfg Config, source []byte) (projectNames []string, err error) 
 	return projectNames, nil
 }
 
-// requireSingleDocument rejects a multi-document source (`---` separators). The
-// single-Node parse in deriveDefinition keeps only the first document and
-// silently drops the rest, so a stream of more than one document would derive
-// from a partial definition. It decodes documents off the stream until EOF; more
-// than one is an error. A normal single-document file decodes once and stops.
+// requireSingleDocument rejects a multi-document source (`---` separators),
+// because the single-Node parse in deriveDefinition keeps only the first document
+// and would derive from a partial definition. It decodes documents off the stream
+// until EOF; more than one is an error.
 func requireSingleDocument(source []byte) error {
 	dec := yaml.NewDecoder(bytes.NewReader(source))
 	count := 0
@@ -150,8 +139,8 @@ func requireSingleDocument(source []byte) error {
 			break
 		}
 		if err != nil {
-			// A genuine parse error surfaces from the single-Node parse with a
-			// fuller message; here just stop probing and let that path report it.
+			// A genuine parse error surfaces from the single-Node parse with a fuller
+			// message; here just stop probing and let that path report it.
 			return nil
 		}
 		count++
@@ -162,9 +151,8 @@ func requireSingleDocument(source []byte) error {
 	return nil
 }
 
-// rejectDuplicateKeys rejects a root mapping that repeats a top-level key (e.g.
-// two `name:` or two `sdks:`). The key walk only ever touches the first match,
-// so a duplicate makes derivation ambiguous; name the offending key.
+// rejectDuplicateKeys rejects a root mapping that repeats a top-level key. The key
+// walk only touches the first match, so a duplicate makes derivation ambiguous.
 func rejectDuplicateKeys(m *yaml.Node) error {
 	seen := make(map[string]struct{}, len(m.Content)/2)
 	for i := 0; i+1 < len(m.Content); i += 2 {
@@ -178,10 +166,9 @@ func rejectDuplicateKeys(m *yaml.Node) error {
 }
 
 // rejectMergeKeys rejects a YAML merge key (`<<:`) in the root mapping or in any
-// of the sdks sequence elements' mappings. The plain key walk does not
-// resolve merge keys, so they would hide the real name/sdks behind an unresolved
-// alias and mis-derive. Detecting at these levels is sufficient; the walk does
-// not recurse deeper.
+// sdks sequence element's mapping. The plain key walk does not resolve merge keys,
+// so they would hide the real name/sdks behind an unresolved alias. Detecting at
+// these levels is sufficient; the walk does not recurse deeper.
 func rejectMergeKeys(root *yaml.Node) error {
 	if mappingHasMergeKey(root) {
 		return errMergeKeyUnsupported()
@@ -208,14 +195,13 @@ func mappingHasMergeKey(m *yaml.Node) bool {
 	return false
 }
 
-// errMergeKeyUnsupported is the shared merge-key rejection, kept consistent
-// across the root and sdks-element checks.
+// errMergeKeyUnsupported is the shared merge-key rejection.
 func errMergeKeyUnsupported() error {
 	return fmt.Errorf("project workshop.yaml uses YAML merge keys (<<), which taboo does not support")
 }
 
-// nodeDescription returns a short human description of a yaml node kind, for the
-// `sdks:` must-be-a-list error.
+// nodeDescription returns a short description of a yaml node kind, for the `sdks:`
+// must-be-a-list error.
 func nodeDescription(kind yaml.Kind) string {
 	switch kind {
 	case yaml.MappingNode:
@@ -229,10 +215,9 @@ func nodeDescription(kind yaml.Kind) string {
 	}
 }
 
-// projectSDKNamesFromSeq returns the bare names of the in-project SDKs (those
-// referenced as "project-<x>") in an sdks sequence node, with the "project-"
-// prefix stripped. Store SDKs (e.g. "go") and any non-project entries are
-// excluded.
+// projectSDKNamesFromSeq returns the bare names of the in-project SDKs (referenced
+// as "project-<x>") in an sdks sequence node, with the "project-" prefix stripped.
+// Store SDKs and non-project entries are excluded.
 func projectSDKNamesFromSeq(sdks *yaml.Node) []string {
 	var names []string
 	for _, sdk := range sdks.Content { // each element is a mapping node
@@ -244,17 +229,14 @@ func projectSDKNamesFromSeq(sdks *yaml.Node) []string {
 }
 
 // agentPlugs returns the mount plugs for the injected agent SDK. The workspace
-// plug is always present, plus sessions for a session-capable agent. The
-// gitcommon and worktrees plugs are declared only for the worktree strategy; the
-// branch strategy operates in place on a self-contained checkout and omits them.
-// See CONTEXT.md for the mount-strategy rationale.
+// plug is always present, plus sessions for a session-capable agent, plus the
+// worktree strategy's gitcommon and worktrees plugs. See CONTEXT.md.
 func agentPlugs(cfg Config) map[string]plug {
 	plugs := map[string]plug{
 		"workspace": {Interface: "mount", WorkshopTarget: WorkspaceTarget},
 	}
-	// The strategy's extra git mounts (single source of truth in
-	// StrategyGitMounts): each plug's workshop-target IS the mount's identical-path
-	// target. The branch strategy returns none.
+	// Each plug's workshop-target IS the mount's identical-path target. The branch
+	// strategy returns none.
 	for _, m := range StrategyGitMounts(cfg) {
 		plugs[m.Plug] = plug{Interface: "mount", WorkshopTarget: m.Target}
 	}
@@ -264,8 +246,8 @@ func agentPlugs(cfg Config) map[string]plug {
 	return plugs
 }
 
-// mappingValue returns the value node for key in mapping m, or nil if absent.
-// A YAML mapping node stores keys and values as alternating Content entries.
+// mappingValue returns the value node for key in mapping m, or nil if absent. A
+// YAML mapping node stores keys and values as alternating Content entries.
 func mappingValue(m *yaml.Node, key string) *yaml.Node {
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == key {
