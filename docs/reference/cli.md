@@ -48,7 +48,7 @@ Positional arguments: none (`cobra.NoArgs`).
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--agent` | `""` | Agent to scaffold for (`opencode`, `claude-code`, `github-copilot`). Required non-interactively. |
+| `--agent` | `""` | Agent to scaffold for (`opencode`, `claude-code`, `github-copilot`, `codex`). Required non-interactively. |
 | `--model` | `""` | Model passed to the chosen agent. Required non-interactively. |
 | `--base` | `ubuntu@24.04` | Workshop base image (`defaultBase` in `cli/internal/app/init.go`). |
 | `--repo` | current directory | Host repository path to scaffold into; resolved to an absolute path. |
@@ -71,7 +71,7 @@ files` (`ensureWritable`). `--force` regenerates only the files `init` itself
 writes and leaves any other files under `.taboo/` untouched. If the path exists
 but is not a directory, `init` fails with `<dir> exists but is not a directory;
 remove it and re-run init`. An unknown agent is reported with the valid set:
-`unknown agent "X"; valid agents: claude-code, github-copilot, opencode`
+`unknown agent "X"; valid agents: claude-code, codex, github-copilot, opencode`
 (`resolveProfile`, sorted from `taboo.AgentNames()`). A multi-definition repo
 with no `--source-definition` selected is rejected non-interactively:
 `multiple workshop definitions (...): pass --source-definition to pick one`.

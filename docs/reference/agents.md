@@ -1,11 +1,11 @@
 # Agents reference
 
-taboo supports three agents: `opencode`, `claude-code`, and `github-copilot`. Each is
-one `AgentProfile` implementation (`internal/agent/agent.go`); construct one
-through the public `NewProfile(name, model)`. The profiles live in
-`internal/agent/agent_opencode.go`, `agent_claudecode.go`, and
-`agent_githubcopilot.go`; the declarative roster that ties names to constructors is in
-`internal/agent/registry.go`.
+taboo supports four agents: `opencode`, `claude-code`, `github-copilot`, and
+`codex`. Each is one `AgentProfile` implementation (`internal/agent/agent.go`);
+construct one through the public `NewProfile(name, model)`. The profiles live in
+`internal/agent/agent_opencode.go`, `agent_claudecode.go`,
+`agent_githubcopilot.go`, and `agent_codex.go`; the declarative roster that ties
+names to constructors is in `internal/agent/registry.go`.
 
 The generated godoc is the rendered source of truth:
 <https://pkg.go.dev/github.com/josecabralf/taboo>.
@@ -17,12 +17,14 @@ The generated godoc is the rendered source of truth:
 | OpenCode | `opencode` | `NewProfile(taboo.OpenCode, model)` | `OPENROUTER_API_KEY` | argv | `XDG_DATA_HOME` / `opencode` | `<provider>/<model>, e.g. openrouter/qwen/qwen3-coder-plus` | native (`--fork`) |
 | Claude Code | `claude-code` | `NewProfile(taboo.ClaudeCode, model)` | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | stdin | `CLAUDE_CONFIG_DIR` / `projects` | `a Claude model id or family alias, e.g. claude-sonnet-4-6 or sonnet` | native (`--fork-session`) |
 | GitHub Copilot | `github-copilot` | `NewProfile(taboo.GitHubCopilot, model)` | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | argv (value of `-p`) | `COPILOT_HOME` / `session-state` | none (never warns) | ignored |
+| Codex | `codex` | `NewProfile(taboo.Codex, model)` | `OPENAI_API_KEY` | stdin | `CODEX_HOME` / `sessions` | `an OpenAI model id, e.g. gpt-5-codex or o4-mini` | ignored |
 
 No agent can push from inside the workshop: `claude-code` and `github-copilot`
-deny `git push` at the command level, while `opencode` carries no command-level
-deny and relies on the workshop container as its only boundary. Credential env
-keys reach the agent via `workshop exec --env NAME`, which silently drops any key
-that is unset on the host, so a user forwards only the credential they hold.
+deny `git push` at the command level, while `opencode` and `codex` carry no
+command-level deny and rely on the workshop container as their only boundary.
+Credential env keys reach the agent via `workshop exec --env NAME`, which silently
+drops any key that is unset on the host, so a user forwards only the credential
+they hold.
 
 !!! warning "Session capture assumes env-based auth"
     `Sessions()` relocates an agent's whole config/home directory onto the host
@@ -131,6 +133,49 @@ Push deny: yes, via `--deny-tool=shell(git push)`. Denial rules take precedence
 over `--allow-all`, and Copilot approves shell commands on a first-level
 subcommand basis, so this one pattern blocks every `git push` form.
 
+## Codex
+
+Source: `internal/agent/agent_codex.go`.
+
+`Name()` returns `codex`. Construct it with `NewProfile(taboo.Codex, model)`.
+
+Credential env keys (`CredentialEnvKeys()`): `OPENAI_API_KEY`. Codex authenticates
+from this key in the environment. ChatGPT-subscription auth is the interactive
+`codex login` flow (which writes `auth.json` under `CODEX_HOME`) and is unusable
+headless, so it is excluded.
+
+Prompt delivery: stdin. `BuildCommand` renders
+`codex exec --dangerously-bypass-approvals-and-sandbox --model <model> -` and sets
+`AgentCommand.Stdin` to the prompt; the trailing `-` is Codex's stdin sentinel, so
+the prompt never rides in argv. The `-` is kept even for an empty prompt so a
+resume never drops into the interactive TUI. `codex exec` streams progress to
+stderr and prints only the final agent message to stdout as plain text, so the
+`<result>` block reaches stdout literally with no `--json` and no output parser. A
+resume id maps to the `exec resume <id>` subcommand; `--model` and the bypass flag
+are global args, so they stay valid after the subcommand.
+
+`--dangerously-bypass-approvals-and-sandbox` runs fully autonomous: there is no
+human approver headless, and Codex's `workspace-write` sandbox would block the
+commit, whose objects land in the shared store in the parent-repo mount, outside
+the agent's cwd. The ephemeral workshop is the security boundary.
+
+Sessions (`Sessions()`): `DirEnv` is `CODEX_HOME`, `Subdir` is `sessions`, and the
+second return value is `true`. `CODEX_HOME` (default `~/.codex`) is the env var
+Codex exposes to relocate its home; it captures the whole home. Session JSONL
+lands under `sessions/YYYY/MM/DD/`.
+
+Model-hint `expected`: `an OpenAI model id, e.g. gpt-5-codex or o4-mini`. The hint
+pattern is `(?i)gpt|codex|^o[0-9]`, so a gpt-*/codex-* id or an o-series id
+matches; a foreign id (a Claude id or an OpenCode provider slug) warns.
+
+Fork: ignored. Codex has no native headless fork (its fork is TUI-only), so
+`CommandOptions.Fork` is not consulted in `BuildCommand`. Setting `Fork` has no
+effect; isolation degrades to the fresh branch/worktree taboo already allocates.
+
+Push deny: no command-level deny. Codex exposes no per-command deny flag, so —
+unlike `claude-code` and `github-copilot` — its `git push` deny degrades to the
+workshop container as its only boundary. taboo commits in place and never pushes.
+
 ## Why push is denied
 
 A linked worktree shares the host repo's object store and refs, so a push from
@@ -150,15 +195,17 @@ func MatchModelFormat(agentName AgentName, model string) (ok bool, expected stri
 ```
 
 The roster in `registry.go` is a slice of registrations, one line per supported
-agent (internal constructor names `NewOpenCode`, `NewClaudeCode`, `NewGitHubCopilot`).
-The public constants live in `internal/agent` and are re-exported from the
-facade as `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`:
+agent (internal constructor names `NewOpenCode`, `NewClaudeCode`,
+`NewGitHubCopilot`, `NewCodex`). The public constants live in `internal/agent` and
+are re-exported from the facade as `taboo.OpenCode`, `taboo.ClaudeCode`,
+`taboo.GitHubCopilot`, and `taboo.Codex`:
 
 ```go
 var agents = []registration{
     {New: NewOpenCode, Hint: openCodeHint},
     {New: NewClaudeCode, Hint: claudeCodeHint},
     {New: NewGitHubCopilot, Hint: copilotHint},
+    {New: NewCodex, Hint: codexHint},
 }
 ```
 
@@ -168,10 +215,10 @@ equals `name` and returns `New(model)`. An unmatched name returns a wrapped
 `NewProfile` validates the name only, not the model.
 
 `AgentNames()` returns the registered names as a sorted `[]string`: `claude-code`,
-`github-copilot`, `opencode`. It feeds the CLI's fuzzy-suggestion path on an
-unknown name; the matching itself lives in the CLI, not here. To name an agent in
-code, use the `taboo.OpenCode`, `taboo.ClaudeCode`, and `taboo.GitHubCopilot`
-constants (`AgentName`) with `NewProfile` or `Workflow.Agent`.
+`codex`, `github-copilot`, `opencode`. It feeds the CLI's fuzzy-suggestion path on
+an unknown name; the matching itself lives in the CLI, not here. To name an agent
+in code, use the `taboo.OpenCode`, `taboo.ClaudeCode`, `taboo.GitHubCopilot`, and
+`taboo.Codex` constants (`AgentName`) with `NewProfile` or `Workflow.Agent`.
 
 `MatchModelFormat(agentName AgentName, model)` reads the registration's `Hint` and reports
 whether `model` looks well-formed, plus the `expected` format string. It is
@@ -183,10 +230,10 @@ workflow's, to an `AgentProfile` through `NewProfile`, storing them on
 
 ## Unsupported agents
 
-`codex` and `pi` are not supported. They exist only as SDK stub directories under
-`internal/workshop/sdk/`. They have no Go profile in `agent_*.go` and no registration in
-`registry.go`, so `NewProfile(taboo.AgentName("codex"), ...)` and `NewProfile(taboo.AgentName("pi"), ...)` return
-`ErrUnknownAgent`, and `AgentNames()` does not list them.
+`pi` is not supported. It exists only as an SDK stub directory under
+`internal/workshop/sdk/`. It has no Go profile in `agent_*.go` and no registration
+in `registry.go`, so `NewProfile(taboo.AgentName("pi"), ...)` returns
+`ErrUnknownAgent`, and `AgentNames()` does not list it.
 
 ## See also
 
