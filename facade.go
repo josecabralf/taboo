@@ -113,6 +113,7 @@ const (
 	OpenCode      = agent.OpenCode
 	ClaudeCode    = agent.ClaudeCode
 	GitHubCopilot = agent.GitHubCopilot
+	Codex         = agent.Codex
 )
 
 // NewProfile resolves a canonical agent name to its AgentProfile, constructed for

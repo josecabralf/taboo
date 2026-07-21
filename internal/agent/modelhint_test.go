@@ -80,6 +80,36 @@ func TestMatchModelFormat_Copilot(t *testing.T) {
 	}
 }
 
+// Codex expects an OpenAI-family model id. The heuristic accepts gpt-* and
+// codex-* ids and the o-series (o1/o3/o4-…, case-insensitively), and warns on a
+// Claude id or an OpenCode provider slug.
+func TestMatchModelFormat_Codex(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		wantOK bool
+	}{
+		{name: "gpt codex id ok", model: codexModel, wantOK: true},
+		{name: "o-series ok", model: "o4-mini", wantOK: true},
+		{name: "codex-prefixed ok", model: "codex-mini-latest", wantOK: true},
+		{name: "surrounding space tolerated", model: "  gpt-5-codex  ", wantOK: true},
+		{name: "claude id warns", model: "claude-sonnet-4-6", wantOK: false},
+		{name: "opencode slug warns", model: "openrouter/qwen/qwen3-coder-plus", wantOK: false},
+		{name: "empty warns", model: "", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok, expected := MatchModelFormat(Codex, tt.model)
+			if ok != tt.wantOK {
+				t.Errorf("MatchModelFormat(codex, %q) ok = %v, want %v", tt.model, ok, tt.wantOK)
+			}
+			if expected == "" {
+				t.Errorf("MatchModelFormat(codex, %q) expected = empty, want a non-empty format hint", tt.model)
+			}
+		})
+	}
+}
+
 // An unknown agent is not the model heuristic's concern — the agent check fails
 // it separately. MatchModelFormat returns ok=true with no expected format so it
 // never layers a spurious model warning on top of the unknown-agent failure.
